@@ -47,6 +47,15 @@ app.get('/api/health', (_req, res) => {
 // Static file serving for uploads
 app.use('/uploads', express.static(uploadsBase));
 
+// In production, serve the client build
+const clientBuildPath = path.join(__dirname, '..', 'public');
+if (fs.existsSync(clientBuildPath)) {
+  app.use(express.static(clientBuildPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(clientBuildPath, 'index.html'));
+  });
+}
+
 // Global error handler — must be registered after all routes
 app.use(globalErrorHandler);
 
