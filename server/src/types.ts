@@ -1,0 +1,64 @@
+export interface Trip {
+  id: string;
+  title: string;
+  description?: string;
+  coverImageId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MediaItem {
+  id: string;
+  tripId: string;
+  filePath: string;
+  thumbnailPath?: string;
+  mediaType: 'image' | 'video' | 'unknown';
+  mimeType: string;
+  originalFilename: string;
+  fileSize: number;
+  width?: number;
+  height?: number;
+  perceptualHash?: string;
+  qualityScore?: number;
+  sharpnessScore?: number;
+  duplicateGroupId?: string;
+  createdAt: string;
+}
+
+export interface DuplicateGroup {
+  id: string;
+  tripId: string;
+  defaultImageId: string;
+  imageCount: number;
+  createdAt: string;
+}
+
+export interface TripSummary {
+  id: string;
+  title: string;
+  descriptionExcerpt?: string;
+  coverImageUrl: string;
+  mediaCount: number;
+  createdAt: string;
+}
+
+export interface GalleryData {
+  trip: Trip;
+  images: GalleryImage[];
+  videos: MediaItem[];
+}
+
+export interface GalleryImage {
+  item: MediaItem;
+  isDefault: boolean;
+  duplicateGroup?: DuplicateGroup;
+  thumbnailUrl: string;
+  originalUrl: string;
+}
+
+export interface QualityScore {
+  resolution: number;
+  fileSize: number;
+  sharpness: number;
+  overall: number;
+}

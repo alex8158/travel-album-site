@@ -1,0 +1,124 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import { getDb, closeDb } from '../database';
+import tripsRouter from './trips';
+import processRouter from './process';
+
+const app = express();
+app.use(express.json());
+app.use('/api/trips', tripsRouter);
+app.use('/api/trips', processRouter);
+
+// Mock deduplicate to avoid needing real image files
+vi.mock('../services/dedupEngine', () => ({
+  deduplicate: vi.fn().mockResolvedValue([]),
+}));
+
+import { deduplicate } from '../services/dedupEngine';
+const mockDeduplicate = vi.mocked(deduplicate);
+
+describe('POST /api/trips/:id/process', () => {
+  beforeEach(() => {
+    const db = getDb();
+    db.exec('DELETE FROM media_items');
+    db.exec('DELETE FROM duplicate_groups');
+    db.exec('DELETE FROM trips');
+    mockDeduplicate.mockReset();
+    mockDeduplicate.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    closeDb();
+  });
+
+  it('should return 404 for non-existent trip', async () => {
+    const res = await request(app).post('/api/trips/non-existent/process');
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('should return empty summary when trip has no images', async () => {
+    const trip = await request(app)
+      .post('/api/trips')
+      .send({ title: 'Empty Trip' });
+
+    const res = await request(app).post(`/api/trips/${trip.body.id}/process`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      tripId: trip.body.id,
+      totalImages: 0,
+      duplicateGroups: [],
+      totalGroups: 0,
+      coverImageId: null,
+    });
+  });
+
+  it('should return summary with duplicate groups', async () => {
+    // Create trip
+    const trip = await request(app)
+      .post('/api/trips')
+      .send({ title: 'Photo Trip' });
+    const tripId = trip.body.id;
+
+    // Insert image media_items directly into DB
+    const db = getDb();
+    const now = new Date().toISOString();
+    const insertMedia = db.prepare(
+      `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    insertMedia.run('img-1', tripId, `uploads/${tripId}/originals/a.jpg`, 'image', 'image/jpeg', 'a.jpg', 1000, now);
+    insertMedia.run('img-2', tripId, `uploads/${tripId}/originals/b.jpg`, 'image', 'image/jpeg', 'b.jpg', 2000, now);
+    insertMedia.run('img-3', tripId, `uploads/${tripId}/originals/c.jpg`, 'image', 'image/jpeg', 'c.jpg', 3000, now);
+    // Also insert a video — should NOT be included
+    insertMedia.run('vid-1', tripId, `uploads/${tripId}/originals/v.mp4`, 'video', 'video/mp4', 'v.mp4', 5000, now);
+
+    // Mock deduplicate to return groups
+    mockDeduplicate.mockResolvedValue([
+      { id: 'group-1', tripId, defaultImageId: 'img-1', imageCount: 2, createdAt: now },
+    ]);
+
+    const res = await request(app).post(`/api/trips/${tripId}/process`);
+    expect(res.status).toBe(200);
+    expect(res.body.tripId).toBe(tripId);
+    expect(res.body.totalImages).toBe(3);
+    expect(res.body.totalGroups).toBe(1);
+    expect(res.body.duplicateGroups).toEqual([
+      { groupId: 'group-1', imageCount: 2 },
+    ]);
+
+    // Verify deduplicate was called with only image items (not video)
+    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
+    const calledItems = mockDeduplicate.mock.calls[0][0];
+    expect(calledItems).toHaveLength(3);
+    expect(calledItems.every((item: any) => item.mediaType === 'image')).toBe(true);
+  });
+
+  it('should resolve file paths to absolute paths for deduplicate', async () => {
+    const trip = await request(app)
+      .post('/api/trips')
+      .send({ title: 'Path Trip' });
+    const tripId = trip.body.id;
+
+    const db = getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run('img-a', tripId, `uploads/${tripId}/originals/photo.jpg`, 'image', 'image/jpeg', 'photo.jpg', 1000, now);
+
+    mockDeduplicate.mockResolvedValue([]);
+
+    await request(app).post(`/api/trips/${tripId}/process`);
+
+    const calledItems = mockDeduplicate.mock.calls[0][0];
+    expect(calledItems).toHaveLength(1);
+    // filePath should be absolute, not the relative DB path
+    expect(calledItems[0].filePath).not.toBe(`uploads/${tripId}/originals/photo.jpg`);
+    expect(calledItems[0].filePath).toContain(`uploads`);
+    expect(calledItems[0].filePath).toContain('photo.jpg');
+    // Should be an absolute path
+    expect(calledItems[0].filePath.startsWith('/')).toBe(true);
+  });
+});
