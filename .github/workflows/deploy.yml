@@ -1,0 +1,82 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install and test server
+        run: |
+          cd server
+          npm ci
+          npm test
+
+      - name: Install and test client
+        run: |
+          cd client
+          npm ci
+          npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Build client
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      - name: Build server
+        run: |
+          cd server
+          npm ci
+          npx tsc
+          cp -r ../client/dist public
+
+      - name: Package deployment
+        run: |
+          tar czf deploy.tar.gz \
+            server/dist \
+            server/public \
+            server/package.json \
+            server/package-lock.json
+
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$EC2_KEY" > /tmp/key.pem
+          chmod 400 /tmp/key.pem
+
+          scp -i /tmp/key.pem -o StrictHostKeyChecking=no \
+            deploy.tar.gz ec2-user@$EC2_HOST:/home/ec2-user/
+
+          ssh -i /tmp/key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
+            cd /home/ec2-user/travel-album-site/server
+            rm -rf dist public
+            cd /home/ec2-user
+            tar xzf deploy.tar.gz -C /home/ec2-user/travel-album-site
+            cd /home/ec2-user/travel-album-site/server
+            npm install --omit=dev
+            pm2 restart travel-album || pm2 start dist/index.js --name travel-album
+            rm /home/ec2-user/deploy.tar.gz
+          EOF
+
+          rm /tmp/key.pem
