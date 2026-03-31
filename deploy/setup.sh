@@ -31,6 +31,9 @@ cd /home/ec2-user
 git clone https://github.com/alex8158/travel-album-site.git
 cd travel-album-site
 
+# Set permissions
+chown -R ec2-user:ec2-user /home/ec2-user/travel-album-site
+
 # Build client
 cd client
 npm install
@@ -40,14 +43,12 @@ cd ..
 # Build server and copy client build
 cd server
 npm install
-npm run build
+npx tsc
 cp -r ../client/dist public
 cd ..
 
 # Create uploads directory
 mkdir -p server/uploads/frames
-
-# Set permissions
 chown -R ec2-user:ec2-user /home/ec2-user/travel-album-site
 
 # Start server with pm2

@@ -104,7 +104,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // POST /api/trips/:id/media — Upload a media file
 router.post('/:id/media', upload.single('file'), async (req: Request, res: Response) => {
-  const tripId = req.params.id;
+  const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists

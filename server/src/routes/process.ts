@@ -53,7 +53,7 @@ function rowToMediaItem(row: MediaItemRow): MediaItem {
 
 // POST /api/trips/:id/process — Trigger dedup processing and return summary
 router.post('/:id/process', async (req: Request, res: Response) => {
-  const tripId = req.params.id;
+  const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists
