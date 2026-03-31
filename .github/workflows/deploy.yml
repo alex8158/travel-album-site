@@ -1,7 +1,9 @@
-name: Deploy to EC2
+name: CI / CD
 
 on:
   push:
+    branches: [main, dev]
+  pull_request:
     branches: [main]
 
 jobs:
@@ -28,6 +30,7 @@ jobs:
 
   deploy:
     needs: test
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
