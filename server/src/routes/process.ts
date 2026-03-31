@@ -5,6 +5,7 @@ import { deduplicate } from '../services/dedupEngine';
 import { processTrip } from '../services/qualitySelector';
 import { generateThumbnailsForTrip } from '../services/thumbnailGenerator';
 import { selectCoverImage } from '../services/coverSelector';
+import { ProgressReporter } from '../services/progressReporter';
 import type { MediaItem } from '../types';
 
 const router = Router();
@@ -92,6 +93,80 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     totalGroups: groups.length,
     coverImageId,
   });
+});
+
+// GET /api/trips/:id/process/stream — SSE streaming processing with progress
+router.get('/:id/process/stream', async (req: Request, res: Response) => {
+  const tripId = req.params.id as string;
+  const db = getDb();
+
+  // Verify trip exists before establishing SSE connection
+  const trip = db.prepare('SELECT id FROM trips WHERE id = ?').get(tripId);
+  if (!trip) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Track client disconnect
+  let clientDisconnected = false;
+  req.on('close', () => {
+    clientDisconnected = true;
+  });
+
+  // Create ProgressReporter and initialize SSE
+  const reporter = new ProgressReporter(res);
+  reporter.initSSE();
+
+  try {
+    // Query all image media_items for this trip
+    const rows = db.prepare(
+      "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'image'"
+    ).all(tripId) as MediaItemRow[];
+    const imageItems = rows.map(rowToMediaItem);
+
+    // Step 1: Dedup
+    if (clientDisconnected) return;
+    reporter.sendStepStart('dedup');
+    const groups = await deduplicate(imageItems);
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('dedup');
+
+    // Step 2: Quality
+    if (clientDisconnected) return;
+    reporter.sendStepStart('quality');
+    await processTrip(tripId);
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('quality');
+
+    // Step 3: Thumbnail
+    if (clientDisconnected) return;
+    reporter.sendStepStart('thumbnail');
+    await generateThumbnailsForTrip(tripId);
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('thumbnail');
+
+    // Step 4: Cover
+    if (clientDisconnected) return;
+    reporter.sendStepStart('cover');
+    const coverImageId = await selectCoverImage(tripId);
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('cover');
+
+    // All steps complete
+    reporter.sendComplete({
+      tripId,
+      totalImages: imageItems.length,
+      duplicateGroups: groups.map((g) => ({
+        groupId: g.id,
+        imageCount: g.imageCount,
+      })),
+      totalGroups: groups.length,
+      coverImageId,
+    });
+  } catch (err: unknown) {
+    if (clientDisconnected) return;
+    const message = err instanceof Error ? err.message : String(err);
+    reporter.sendError({ message });
+  }
 });
 
 export default router;
