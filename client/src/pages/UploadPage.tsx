@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import TripCreateForm from '../components/TripCreateForm';
 import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
@@ -10,7 +10,6 @@ export default function UploadPage() {
   const [step, setStep] = useState<Step>('create');
   const [tripId, setTripId] = useState('');
   const [tripTitle, setTripTitle] = useState('');
-  const navigate = useNavigate();
 
   return (
     <div style={{ maxWidth: '700px', margin: '0 auto', padding: '16px' }}>

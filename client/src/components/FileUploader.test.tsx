@@ -7,6 +7,11 @@ import FileUploader, { isFormatSupported } from './FileUploader';
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
 
+// Helper to safely mock isAxiosError
+function mockIsAxiosError(returnValue: boolean) {
+  (mockedAxios.isAxiosError as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(returnValue);
+}
+
 function createFile(name: string, type: string, size = 1024): File {
   const buffer = new ArrayBuffer(size);
   return new File([buffer], name, { type });
@@ -79,7 +84,7 @@ describe('FileUploader', () => {
 
   it('uploads files one by one to POST /api/trips/:id/media', async () => {
     mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
-    mockedAxios.isAxiosError = vi.fn().mockReturnValue(false);
+    mockIsAxiosError(false);
 
     const user = userEvent.setup();
     render(<FileUploader tripId="trip-42" />);
@@ -105,7 +110,7 @@ describe('FileUploader', () => {
 
   it('shows failed status and retry button on upload error', async () => {
     mockedAxios.post.mockRejectedValueOnce(new Error('Network Error'));
-    mockedAxios.isAxiosError = vi.fn().mockReturnValue(false);
+    mockIsAxiosError(false);
 
     const user = userEvent.setup();
     render(<FileUploader tripId="trip-1" />);
@@ -126,7 +131,7 @@ describe('FileUploader', () => {
     mockedAxios.post
       .mockRejectedValueOnce(new Error('Network Error'))
       .mockResolvedValueOnce({ data: { id: 'media-1' } });
-    mockedAxios.isAxiosError = vi.fn().mockReturnValue(false);
+    mockIsAxiosError(false);
 
     const user = userEvent.setup();
     render(<FileUploader tripId="trip-1" />);
@@ -153,7 +158,7 @@ describe('FileUploader', () => {
     mockedAxios.post
       .mockResolvedValueOnce({ data: { id: 'media-1' } })
       .mockRejectedValueOnce(new Error('Network Error'));
-    mockedAxios.isAxiosError = vi.fn().mockReturnValue(false);
+    mockIsAxiosError(false);
 
     const user = userEvent.setup();
     render(<FileUploader tripId="trip-1" />);

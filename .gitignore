@@ -5,3 +5,4 @@ uploads/
 *.sqlite
 .env
 .DS_Store
+*.pem
