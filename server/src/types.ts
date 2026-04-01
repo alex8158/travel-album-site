@@ -25,6 +25,11 @@ export interface MediaItem {
   qualityScore?: number;
   sharpnessScore?: number;
   duplicateGroupId?: string;
+  status: 'active' | 'trashed' | 'deleted';
+  trashedReason?: string;
+  processingError?: string;
+  optimizedPath?: string;
+  compiledPath?: string;
   createdAt: string;
 }
 
@@ -65,4 +70,27 @@ export interface QualityScore {
   fileSize: number;
   sharpness: number;
   overall: number;
+}
+
+export interface ProcessResult {
+  tripId: string;
+  totalImages: number;
+  totalVideos: number;
+  duplicateGroups: { groupId: string; imageCount: number }[];
+  totalGroups: number;
+  blurryCount: number;
+  trashedDuplicateCount: number;
+  optimizedCount: number;
+  compiledCount: number;
+  failedCount: number;
+  coverImageId: string | null;
+}
+
+export interface ProcessOptions {
+  blurThreshold?: number;
+  outputConfig?: {
+    maxResolution?: number;
+    jpegQuality?: number;
+    videoResolution?: number;
+  };
 }

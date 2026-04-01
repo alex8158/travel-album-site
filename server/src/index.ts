@@ -9,6 +9,7 @@ import processRouter from './routes/process';
 import duplicateGroupsRouter from './routes/duplicateGroups';
 import mediaServingRouter from './routes/mediaServing';
 import galleryRouter from './routes/gallery';
+import trashRouter from './routes/trash';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -38,6 +39,7 @@ app.use('/api/trips', processRouter);
 app.use('/api/duplicate-groups', duplicateGroupsRouter);
 app.use('/api/media', mediaServingRouter);
 app.use('/api/trips', galleryRouter);
+app.use('/api', trashRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

@@ -42,6 +42,7 @@ describe('Database initialization', () => {
       'id', 'trip_id', 'file_path', 'thumbnail_path', 'media_type', 'mime_type',
       'original_filename', 'file_size', 'width', 'height', 'perceptual_hash',
       'quality_score', 'sharpness_score', 'duplicate_group_id', 'created_at',
+      'status', 'trashed_reason', 'processing_error', 'optimized_path', 'compiled_path',
     ]);
   });
 

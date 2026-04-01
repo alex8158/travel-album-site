@@ -23,6 +23,13 @@ export default function ProcessingLog({ uploadCount, result, onClose }: Processi
           <li>处理视频数量：{result.totalVideos}</li>
           <li>重复组数量：{result.totalGroups}</li>
           <li>最终保留图片数量：{keptImages}</li>
+          <li>模糊图片数量：{result.blurryCount}</li>
+          <li>重复淘汰数量：{result.trashedDuplicateCount}</li>
+          <li>优化成功数量：{result.optimizedCount}</li>
+          <li>成片数量：{result.compiledCount}</li>
+          {result.failedCount > 0 && (
+            <li>处理失败数量：{result.failedCount}</li>
+          )}
         </ul>
         <button onClick={onClose}>关闭</button>
       </div>

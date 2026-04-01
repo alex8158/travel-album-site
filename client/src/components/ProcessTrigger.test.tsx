@@ -66,6 +66,11 @@ const mockResult: ProcessResult = {
     { groupId: 'g2', imageCount: 2 },
   ],
   totalGroups: 2,
+  blurryCount: 0,
+  trashedDuplicateCount: 0,
+  optimizedCount: 0,
+  compiledCount: 0,
+  failedCount: 0,
   coverImageId: 'img-1',
 };
 
@@ -221,6 +226,11 @@ describe('ProcessTrigger', () => {
       totalVideos: 0,
       duplicateGroups: [],
       totalGroups: 0,
+      blurryCount: 0,
+      trashedDuplicateCount: 0,
+      optimizedCount: 0,
+      compiledCount: 0,
+      failedCount: 0,
     };
     const user = userEvent.setup();
     render(<ProcessTrigger tripId="trip-2" />);

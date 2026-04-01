@@ -33,8 +33,8 @@ describe('ProgressReporter', () => {
 
   describe('sendStepStart', () => {
     it('should send progress event with correct percent for each step', () => {
-      const steps: StepName[] = ['dedup', 'quality', 'thumbnail', 'cover'];
-      const expectedPercents = [0, 25, 50, 75];
+      const steps: StepName[] = ['dedup', 'quality', 'blurDetect', 'trashDuplicates', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+      const expectedPercents = [0, 11, 22, 33, 44, 56, 67, 78, 89];
 
       steps.forEach((step, i) => {
         const res = createMockResponse();
@@ -46,7 +46,7 @@ describe('ProgressReporter', () => {
         const data = JSON.parse(written.split('data: ')[1].split('\n')[0]);
         expect(data.step).toBe(step);
         expect(data.stepIndex).toBe(i + 1);
-        expect(data.totalSteps).toBe(4);
+        expect(data.totalSteps).toBe(9);
         expect(data.percent).toBe(expectedPercents[i]);
       });
     });
@@ -54,8 +54,8 @@ describe('ProgressReporter', () => {
 
   describe('sendStepComplete', () => {
     it('should send progress event with correct percent for each step', () => {
-      const steps: StepName[] = ['dedup', 'quality', 'thumbnail', 'cover'];
-      const expectedPercents = [25, 50, 75, 100];
+      const steps: StepName[] = ['dedup', 'quality', 'blurDetect', 'trashDuplicates', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+      const expectedPercents = [11, 22, 33, 44, 56, 67, 78, 89, 100];
 
       steps.forEach((step, i) => {
         const res = createMockResponse();
@@ -67,7 +67,7 @@ describe('ProgressReporter', () => {
         const data = JSON.parse(written.split('data: ')[1].split('\n')[0]);
         expect(data.step).toBe(step);
         expect(data.stepIndex).toBe(i + 1);
-        expect(data.totalSteps).toBe(4);
+        expect(data.totalSteps).toBe(9);
         expect(data.percent).toBe(expectedPercents[i]);
       });
     });

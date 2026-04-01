@@ -20,6 +20,11 @@ interface MediaItemRow {
   quality_score: number | null;
   sharpness_score: number | null;
   duplicate_group_id: string | null;
+  status: string;
+  trashed_reason: string | null;
+  processing_error: string | null;
+  optimized_path: string | null;
+  compiled_path: string | null;
   created_at: string;
 }
 
@@ -47,6 +52,11 @@ function rowToMediaItem(row: MediaItemRow): MediaItem {
     qualityScore: row.quality_score ?? undefined,
     sharpnessScore: row.sharpness_score ?? undefined,
     duplicateGroupId: row.duplicate_group_id ?? undefined,
+    status: row.status as MediaItem['status'],
+    trashedReason: row.trashed_reason ?? undefined,
+    processingError: row.processing_error ?? undefined,
+    optimizedPath: row.optimized_path ?? undefined,
+    compiledPath: row.compiled_path ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -88,7 +98,7 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
     if (!groupRow.default_image_id) continue;
 
     const defaultImageRow = db.prepare(
-      'SELECT * FROM media_items WHERE id = ? AND media_type = ?'
+      "SELECT * FROM media_items WHERE id = ? AND media_type = ? AND status = 'active'"
     ).get(groupRow.default_image_id, 'image') as MediaItemRow | undefined;
 
     if (defaultImageRow) {
@@ -104,7 +114,7 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
 
   // Get ungrouped images (images not in any duplicate group)
   const ungroupedRows = db.prepare(
-    'SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND duplicate_group_id IS NULL'
+    "SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND duplicate_group_id IS NULL AND status = 'active'"
   ).all(tripId, 'image') as MediaItemRow[];
 
   for (const row of ungroupedRows) {
@@ -118,7 +128,7 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
 
   // Get all videos
   const videoRows = db.prepare(
-    'SELECT * FROM media_items WHERE trip_id = ? AND media_type = ?'
+    "SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND status = 'active'"
   ).all(tripId, 'video') as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({

@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import sharp from 'sharp';
 import Database from 'better-sqlite3';
-import { computeQualityScore, selectBest, processTrip } from './qualitySelector';
+import { computeQualityScore, selectBest, processTrip, getTrashedDuplicateCount } from './qualitySelector';
 import type { MediaItem } from '../types';
 
 // Mock the database module
@@ -158,6 +158,11 @@ describe('selectBest', () => {
         quality_score REAL,
         sharpness_score REAL,
         duplicate_group_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        trashed_reason TEXT,
+        processing_error TEXT,
+        optimized_path TEXT,
+        compiled_path TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (trip_id) REFERENCES trips(id),
         FOREIGN KEY (duplicate_group_id) REFERENCES duplicate_groups(id)
@@ -233,6 +238,134 @@ describe('selectBest', () => {
     expect(row.quality_score).toBe(100 * 100); // resolution
     expect(row.sharpness_score).toBeGreaterThanOrEqual(0);
   });
+
+  it('should trash non-best images with reason duplicate', async () => {
+    const dir = makeTmpDir();
+    const small = await createTestImage(dir, 'small.jpg', { r: 100, g: 100, b: 100 }, 64, 64);
+    const large = await createTestImage(dir, 'large.jpg', { r: 100, g: 100, b: 100 }, 256, 256);
+
+    insertGroup('group-1', 'trip-1', 'img-small', 2);
+    insertMediaItem('img-small', 'trip-1', small, 'group-1');
+    insertMediaItem('img-large', 'trip-1', large, 'group-1');
+
+    await selectBest('group-1');
+
+    // Best image should remain active
+    const bestRow = testDb.prepare('SELECT status, trashed_reason FROM media_items WHERE id = ?').get('img-large') as any;
+    expect(bestRow.status).toBe('active');
+    expect(bestRow.trashed_reason).toBeNull();
+
+    // Non-best image should be trashed
+    const trashedRow = testDb.prepare('SELECT status, trashed_reason FROM media_items WHERE id = ?').get('img-small') as any;
+    expect(trashedRow.status).toBe('trashed');
+    expect(trashedRow.trashed_reason).toBe('duplicate');
+  });
+
+  it('should not trash the only image in a single-member group', async () => {
+    const dir = makeTmpDir();
+    const img = await createTestImage(dir, 'only.jpg', { r: 50, g: 50, b: 50 }, 100, 100);
+
+    insertGroup('group-1', 'trip-1', 'img-1', 1);
+    insertMediaItem('img-1', 'trip-1', img, 'group-1');
+
+    await selectBest('group-1');
+
+    const row = testDb.prepare('SELECT status, trashed_reason FROM media_items WHERE id = ?').get('img-1') as any;
+    expect(row.status).toBe('active');
+    expect(row.trashed_reason).toBeNull();
+  });
+});
+
+describe('getTrashedDuplicateCount', () => {
+  let testDb: Database.Database;
+
+  beforeEach(async () => {
+    testDb = new Database(':memory:');
+    testDb.pragma('foreign_keys = ON');
+    testDb.exec(`
+      CREATE TABLE trips (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        cover_image_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE duplicate_groups (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL,
+        default_image_id TEXT,
+        image_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (trip_id) REFERENCES trips(id)
+      );
+      CREATE TABLE media_items (
+        id TEXT PRIMARY KEY,
+        trip_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        thumbnail_path TEXT,
+        media_type TEXT NOT NULL DEFAULT 'unknown',
+        mime_type TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        width INTEGER,
+        height INTEGER,
+        perceptual_hash TEXT,
+        quality_score REAL,
+        sharpness_score REAL,
+        duplicate_group_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        trashed_reason TEXT,
+        processing_error TEXT,
+        optimized_path TEXT,
+        compiled_path TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (trip_id) REFERENCES trips(id),
+        FOREIGN KEY (duplicate_group_id) REFERENCES duplicate_groups(id)
+      );
+    `);
+
+    const now = new Date().toISOString();
+    testDb.prepare(
+      'INSERT INTO trips (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)'
+    ).run('trip-1', 'Test Trip', now, now);
+
+    const dbModule = await import('../database') as any;
+    dbModule.__setMockDb(testDb);
+  });
+
+  afterEach(() => {
+    testDb.close();
+  });
+
+  it('should return 0 when no trashed duplicates exist', () => {
+    const count = getTrashedDuplicateCount('trip-1');
+    expect(count).toBe(0);
+  });
+
+  it('should count only items with status trashed and reason duplicate', () => {
+    const now = new Date().toISOString();
+    // Insert items with various statuses
+    testDb.prepare(`
+      INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, status, trashed_reason, created_at)
+      VALUES (?, ?, ?, 'image', 'image/jpeg', ?, 1000, ?, ?, ?)
+    `).run('img-1', 'trip-1', '/fake/1.jpg', '1.jpg', 'active', null, now);
+    testDb.prepare(`
+      INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, status, trashed_reason, created_at)
+      VALUES (?, ?, ?, 'image', 'image/jpeg', ?, 1000, ?, ?, ?)
+    `).run('img-2', 'trip-1', '/fake/2.jpg', '2.jpg', 'trashed', 'duplicate', now);
+    testDb.prepare(`
+      INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, status, trashed_reason, created_at)
+      VALUES (?, ?, ?, 'image', 'image/jpeg', ?, 1000, ?, ?, ?)
+    `).run('img-3', 'trip-1', '/fake/3.jpg', '3.jpg', 'trashed', 'blur', now);
+    testDb.prepare(`
+      INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, status, trashed_reason, created_at)
+      VALUES (?, ?, ?, 'image', 'image/jpeg', ?, 1000, ?, ?, ?)
+    `).run('img-4', 'trip-1', '/fake/4.jpg', '4.jpg', 'trashed', 'duplicate', now);
+
+    const count = getTrashedDuplicateCount('trip-1');
+    expect(count).toBe(2);
+  });
 });
 
 describe('processTrip', () => {
@@ -273,6 +406,11 @@ describe('processTrip', () => {
         quality_score REAL,
         sharpness_score REAL,
         duplicate_group_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        trashed_reason TEXT,
+        processing_error TEXT,
+        optimized_path TEXT,
+        compiled_path TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (trip_id) REFERENCES trips(id),
         FOREIGN KEY (duplicate_group_id) REFERENCES duplicate_groups(id)

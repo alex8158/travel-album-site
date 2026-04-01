@@ -166,7 +166,23 @@ export async function selectBest(groupId: string): Promise<MediaItem> {
     'UPDATE duplicate_groups SET default_image_id = ? WHERE id = ?'
   ).run(bestItem.id, groupId);
 
+  // Trash all non-best images in the group
+  db.prepare(
+    "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE duplicate_group_id = ? AND id != ?"
+  ).run(groupId, bestItem.id);
+
   return bestItem;
+}
+
+/**
+ * Returns the count of items with status = 'trashed' AND trashed_reason = 'duplicate' for a given trip.
+ */
+export function getTrashedDuplicateCount(tripId: string): number {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT COUNT(*) as count FROM media_items WHERE trip_id = ? AND status = 'trashed' AND trashed_reason = 'duplicate'"
+  ).get(tripId) as { count: number };
+  return row.count;
 }
 
 /**

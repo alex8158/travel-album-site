@@ -70,6 +70,41 @@ function initTables(db: Database.Database): void {
   } catch {
     // Column already exists — ignore for idempotency
   }
+
+  // Migration: add status column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add trashed_reason column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN trashed_reason TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add processing_error column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN processing_error TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add optimized_path column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN optimized_path TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add compiled_path column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN compiled_path TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
 }
 
 export function closeDb(): void {

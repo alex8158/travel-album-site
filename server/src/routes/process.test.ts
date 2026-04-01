@@ -10,9 +10,25 @@ app.use(express.json());
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', processRouter);
 
-// Mock deduplicate to avoid needing real image files
+// Mock services to avoid needing real image/video files
 vi.mock('../services/dedupEngine', () => ({
   deduplicate: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('../services/blurDetector', () => ({
+  detectAndTrashBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, results: [] }),
+}));
+
+vi.mock('../services/imageOptimizer', () => ({
+  optimizeTrip: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('../services/videoAnalyzer', () => ({
+  analyzeVideo: vi.fn().mockResolvedValue({ mediaId: '', duration: 0, segments: [] }),
+}));
+
+vi.mock('../services/videoEditor', () => ({
+  editVideo: vi.fn().mockResolvedValue({ mediaId: '', compiledPath: null, selectedSegments: [] }),
 }));
 
 import { deduplicate } from '../services/dedupEngine';
@@ -48,8 +64,14 @@ describe('POST /api/trips/:id/process', () => {
     expect(res.body).toEqual({
       tripId: trip.body.id,
       totalImages: 0,
+      totalVideos: 0,
       duplicateGroups: [],
       totalGroups: 0,
+      blurryCount: 0,
+      trashedDuplicateCount: 0,
+      optimizedCount: 0,
+      compiledCount: 0,
+      failedCount: 0,
       coverImageId: null,
     });
   });

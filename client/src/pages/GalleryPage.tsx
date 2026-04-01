@@ -31,6 +31,9 @@ export interface GalleryImageItem {
   height?: number;
   qualityScore?: number;
   duplicateGroupId?: string;
+  status?: string;
+  trashedReason?: string;
+  processingError?: string;
 }
 
 export interface GalleryImage {
@@ -62,6 +65,24 @@ export interface GalleryData {
   images: GalleryImage[];
   videos: GalleryVideo[];
 }
+
+export interface TrashedItem {
+  id: string;
+  tripId: string;
+  filePath: string;
+  mediaType: 'image' | 'video' | 'unknown';
+  mimeType: string;
+  originalFilename: string;
+  fileSize: number;
+  thumbnailUrl: string;
+  trashedReason: string;
+}
+
+const TRASHED_REASON_MAP: Record<string, string> = {
+  blur: '模糊',
+  duplicate: '重复',
+  manual: '手动',
+};
 
 interface GroupMemberImage {
   id: string;
@@ -103,6 +124,9 @@ export default function GalleryPage() {
   const [defaultPickerImages, setDefaultPickerImages] = useState<GroupMemberImage[]>([]);
   const [defaultSaving, setDefaultSaving] = useState(false);
 
+  // Trash zone state
+  const [trashedItems, setTrashedItems] = useState<TrashedItem[]>([]);
+
   async function fetchGallery() {
     if (!id) return;
     try {
@@ -112,6 +136,16 @@ export default function GalleryPage() {
       setError('加载相册数据失败，请稍后重试');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchTrash() {
+    if (!id) return;
+    try {
+      const res = await axios.get<TrashedItem[]>(`/api/trips/${id}/trash`);
+      setTrashedItems(res.data);
+    } catch {
+      // silently fail - trash zone is supplementary
     }
   }
 
@@ -146,6 +180,7 @@ export default function GalleryPage() {
   const handleAppendProcessingLogClose = useCallback(async () => {
     setShowAppendProcessingLog(false);
     await fetchGallery();
+    await fetchTrash();
     setAppendMode('done');
     appendTimerRef.current = setTimeout(() => {
       setShowAppend(false);
@@ -165,7 +200,18 @@ export default function GalleryPage() {
         if (!cancelled) setLoading(false);
       }
     }
-    if (id) load();
+    async function loadTrash() {
+      try {
+        const res = await axios.get<TrashedItem[]>(`/api/trips/${id}/trash`);
+        if (!cancelled) setTrashedItems(res.data);
+      } catch {
+        // silently fail
+      }
+    }
+    if (id) {
+      load();
+      loadTrash();
+    }
     return () => { cancelled = true; };
   }, [id]);
 
@@ -237,6 +283,29 @@ export default function GalleryPage() {
       // user can retry
     } finally {
       setDefaultSaving(false);
+    }
+  }
+
+  // --- Trash zone handlers ---
+  async function handleRestore(mediaId: string) {
+    try {
+      await axios.put(`/api/media/${mediaId}/restore`);
+      await fetchGallery();
+      await fetchTrash();
+    } catch {
+      // user can retry
+    }
+  }
+
+  async function handleClearTrash() {
+    if (!id) return;
+    if (!window.confirm('确定要永久删除待删除区中的所有文件吗？此操作不可撤销。')) return;
+    try {
+      await axios.delete(`/api/trips/${id}/trash`);
+      await fetchGallery();
+      await fetchTrash();
+    } catch {
+      // user can retry
     }
   }
 
@@ -470,6 +539,77 @@ export default function GalleryPage() {
                   aria-hidden="true"
                 >
                   ▶
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Trash Zone */}
+      {trashedItems.length > 0 && (
+        <section aria-label="待删除区" data-testid="trash-zone" style={{ marginTop: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+            <h2>待删除区 ({trashedItems.length})</h2>
+            <button
+              onClick={handleClearTrash}
+              data-testid="trash-clear-btn"
+              style={{
+                background: '#e74c3c',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '4px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              🗑️ 清空待删除区
+            </button>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '12px',
+            }}
+          >
+            {trashedItems.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: '1px solid #f0c0c0',
+                  background: '#fff5f5',
+                }}
+              >
+                <img
+                  src={item.thumbnailUrl}
+                  alt={item.originalFilename}
+                  style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                />
+                <div style={{ padding: '8px' }}>
+                  <div style={{ fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.originalFilename}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#e74c3c', marginTop: '4px' }}>
+                    原因: {TRASHED_REASON_MAP[item.trashedReason] || item.trashedReason}
+                  </div>
+                  <button
+                    onClick={() => handleRestore(item.id)}
+                    data-testid={`trash-restore-${item.id}`}
+                    style={{
+                      marginTop: '8px',
+                      background: 'none',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '2px 12px',
+                      cursor: 'pointer',
+                      width: '100%',
+                    }}
+                  >
+                    恢复
+                  </button>
                 </div>
               </div>
             ))}

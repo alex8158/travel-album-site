@@ -8,6 +8,11 @@ export interface ProcessResult {
   totalVideos: number;
   duplicateGroups: { groupId: string; imageCount: number }[];
   totalGroups: number;
+  blurryCount: number;
+  trashedDuplicateCount: number;
+  optimizedCount: number;
+  compiledCount: number;
+  failedCount: number;
   coverImageId?: string;
 }
 
@@ -21,7 +26,7 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
   const [status, setStatus] = useState<ProgressStatus>('idle');
   const [currentStep, setCurrentStep] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
-  const [totalSteps, setTotalSteps] = useState(4);
+  const [totalSteps, setTotalSteps] = useState(9);
   const [percent, setPercent] = useState(0);
   const [processed, setProcessed] = useState<number | null>(null);
   const [total, setTotal] = useState<number | null>(null);

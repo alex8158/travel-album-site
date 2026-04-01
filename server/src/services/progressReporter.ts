@@ -1,9 +1,9 @@
 import { Response } from 'express';
 
-export type StepName = 'dedup' | 'quality' | 'thumbnail' | 'cover';
+export type StepName = 'dedup' | 'quality' | 'blurDetect' | 'trashDuplicates' | 'imageOptimize' | 'thumbnail' | 'videoAnalysis' | 'videoEdit' | 'cover';
 
-const STEPS: StepName[] = ['dedup', 'quality', 'thumbnail', 'cover'];
-const TOTAL_STEPS = 4;
+const STEPS: StepName[] = ['dedup', 'quality', 'blurDetect', 'trashDuplicates', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+const TOTAL_STEPS = 9;
 
 export interface ProgressEvent {
   step: StepName;
@@ -20,6 +20,11 @@ export interface CompleteEvent {
   totalVideos: number;
   duplicateGroups: { groupId: string; imageCount: number }[];
   totalGroups: number;
+  blurryCount?: number;
+  trashedDuplicateCount?: number;
+  optimizedCount?: number;
+  compiledCount?: number;
+  failedCount?: number;
   coverImageId: string | null;
 }
 
@@ -44,7 +49,7 @@ export class ProgressReporter {
 
   sendStepStart(step: StepName, counts?: { processed?: number; total?: number }): void {
     const stepIndex = STEPS.indexOf(step) + 1;
-    const percent = (stepIndex - 1) * 25;
+    const percent = Math.round(((stepIndex - 1) / TOTAL_STEPS) * 100);
     const data: ProgressEvent = { step, stepIndex, totalSteps: TOTAL_STEPS, percent };
     if (counts?.processed !== undefined) data.processed = counts.processed;
     if (counts?.total !== undefined) data.total = counts.total;
@@ -53,7 +58,7 @@ export class ProgressReporter {
 
   sendStepComplete(step: StepName, counts?: { processed?: number; total?: number }): void {
     const stepIndex = STEPS.indexOf(step) + 1;
-    const percent = stepIndex * 25;
+    const percent = Math.round((stepIndex / TOTAL_STEPS) * 100);
     const data: ProgressEvent = { step, stepIndex, totalSteps: TOTAL_STEPS, percent };
     if (counts?.processed !== undefined) data.processed = counts.processed;
     if (counts?.total !== undefined) data.total = counts.total;
