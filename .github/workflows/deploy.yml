@@ -50,6 +50,7 @@ jobs:
           cd server
           npm ci
           npx tsc
+          rm -rf public
           cp -r ../client/dist public
 
       - name: Package deployment
