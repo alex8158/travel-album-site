@@ -5,7 +5,7 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { classify } from '../services/fileClassifier';
-import type { MediaItem } from '../types';
+import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 
 const router = Router();
 
@@ -61,43 +61,7 @@ function getFileExtension(originalname: string, mimetype: string): string {
   return mimeToExt[mimetype] || origExt || '.bin';
 }
 
-interface MediaItemRow {
-  id: string;
-  trip_id: string;
-  file_path: string;
-  thumbnail_path: string | null;
-  media_type: string;
-  mime_type: string;
-  original_filename: string;
-  file_size: number;
-  width: number | null;
-  height: number | null;
-  perceptual_hash: string | null;
-  quality_score: number | null;
-  sharpness_score: number | null;
-  duplicate_group_id: string | null;
-  created_at: string;
-}
 
-function rowToMediaItem(row: MediaItemRow): MediaItem {
-  return {
-    id: row.id,
-    tripId: row.trip_id,
-    filePath: row.file_path,
-    thumbnailPath: row.thumbnail_path ?? undefined,
-    mediaType: row.media_type as MediaItem['mediaType'],
-    mimeType: row.mime_type,
-    originalFilename: row.original_filename,
-    fileSize: row.file_size,
-    width: row.width ?? undefined,
-    height: row.height ?? undefined,
-    perceptualHash: row.perceptual_hash ?? undefined,
-    qualityScore: row.quality_score ?? undefined,
-    sharpnessScore: row.sharpness_score ?? undefined,
-    duplicateGroupId: row.duplicate_group_id ?? undefined,
-    createdAt: row.created_at,
-  };
-}
 
 // Use multer memory storage so we can validate before writing to disk
 const upload = multer({ storage: multer.memoryStorage() });

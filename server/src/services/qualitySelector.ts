@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import fs from 'fs';
 import { getDb } from '../database';
 import type { MediaItem, QualityScore } from '../types';
+import { MediaItemRow, rowToMediaItem as baseRowToMediaItem } from '../helpers/mediaItemRow';
 
 /**
  * Laplacian convolution kernel for sharpness detection.
@@ -63,46 +64,13 @@ export async function computeQualityScore(imagePath: string): Promise<QualitySco
 }
 
 
-interface MediaItemRow {
-  id: string;
-  trip_id: string;
-  file_path: string;
-  thumbnail_path: string | null;
-  media_type: string;
-  mime_type: string;
-  original_filename: string;
-  file_size: number;
-  width: number | null;
-  height: number | null;
-  perceptual_hash: string | null;
-  quality_score: number | null;
-  sharpness_score: number | null;
-  duplicate_group_id: string | null;
-  created_at: string;
-}
-
 import path from 'path';
 
 const serverRoot = path.join(__dirname, '..', '..');
 
 function rowToMediaItem(row: MediaItemRow): MediaItem {
-  return {
-    id: row.id,
-    tripId: row.trip_id,
-    filePath: path.resolve(serverRoot, row.file_path),
-    thumbnailPath: row.thumbnail_path ?? undefined,
-    mediaType: row.media_type as MediaItem['mediaType'],
-    mimeType: row.mime_type,
-    originalFilename: row.original_filename,
-    fileSize: row.file_size,
-    width: row.width ?? undefined,
-    height: row.height ?? undefined,
-    perceptualHash: row.perceptual_hash ?? undefined,
-    qualityScore: row.quality_score ?? undefined,
-    sharpnessScore: row.sharpness_score ?? undefined,
-    duplicateGroupId: row.duplicate_group_id ?? undefined,
-    createdAt: row.created_at,
-  };
+  const item = baseRowToMediaItem(row);
+  return { ...item, filePath: path.resolve(serverRoot, row.file_path) };
 }
 
 /**
