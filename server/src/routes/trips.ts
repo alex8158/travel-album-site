@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
-import type { Trip, TripSummary } from '../types';
+import type { Trip, TripSummary, TripVisibility } from '../types';
 
 const router = Router();
 
@@ -10,6 +10,7 @@ interface TripRow {
   title: string;
   description: string | null;
   cover_image_id: string | null;
+  visibility: string;
   created_at: string;
   updated_at: string;
 }
@@ -20,6 +21,7 @@ function rowToTrip(row: TripRow): Trip {
     title: row.title,
     description: row.description ?? undefined,
     coverImageId: row.cover_image_id ?? undefined,
+    visibility: row.visibility as TripVisibility,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -38,8 +40,8 @@ router.post('/', (req: Request, res: Response) => {
   const now = new Date().toISOString();
 
   db.prepare(
-    'INSERT INTO trips (id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(id, title.trim(), description ?? null, now, now);
+    'INSERT INTO trips (id, title, description, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, title.trim(), description ?? null, 'public', now, now);
 
   const row = db.prepare('SELECT * FROM trips WHERE id = ?').get(id) as TripRow;
   return res.status(201).json(rowToTrip(row));
@@ -74,6 +76,7 @@ router.get('/', (_req: Request, res: Response) => {
       descriptionExcerpt: excerpt,
       coverImageUrl,
       mediaCount: row.media_count,
+      visibility: row.visibility as TripVisibility,
       createdAt: row.created_at,
     };
   });
@@ -115,6 +118,30 @@ router.put('/:id', (req: Request, res: Response) => {
   db.prepare(
     'UPDATE trips SET title = ?, description = ?, updated_at = ? WHERE id = ?'
   ).run(newTitle, newDescription, now, req.params.id);
+
+  const row = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as TripRow;
+  return res.json(rowToTrip(row));
+});
+
+// PUT /api/trips/:id/visibility — Update trip visibility
+router.put('/:id/visibility', (req: Request, res: Response) => {
+  const { visibility } = req.body;
+
+  if (visibility !== 'public' && visibility !== 'unlisted') {
+    return res.status(400).json({
+      error: { code: 'INVALID_VISIBILITY', message: '可见性状态无效，必须为 public 或 unlisted' }
+    });
+  }
+
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as TripRow | undefined;
+
+  if (!existing) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  const now = new Date().toISOString();
+  db.prepare('UPDATE trips SET visibility = ?, updated_at = ? WHERE id = ?').run(visibility, now, req.params.id);
 
   const row = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as TripRow;
   return res.json(rowToTrip(row));

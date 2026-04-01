@@ -29,6 +29,7 @@ function initTables(db: Database.Database): void {
       title TEXT NOT NULL,
       description TEXT,
       cover_image_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'public',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -62,6 +63,13 @@ function initTables(db: Database.Database): void {
       FOREIGN KEY (trip_id) REFERENCES trips(id)
     );
   `);
+
+  // Migration: add visibility column to existing trips table
+  try {
+    db.exec(`ALTER TABLE trips ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
 }
 
 export function closeDb(): void {

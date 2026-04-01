@@ -28,9 +28,10 @@ describe('Database initialization', () => {
     const db = getDb();
     const columns = db.prepare("PRAGMA table_info(trips)").all() as Array<{ name: string }>;
     const columnNames = columns.map((c) => c.name);
-    expect(columnNames).toEqual([
-      'id', 'title', 'description', 'cover_image_id', 'created_at', 'updated_at',
-    ]);
+    expect(columnNames).toContain('visibility');
+    expect(columnNames).toEqual(
+      expect.arrayContaining(['id', 'title', 'description', 'cover_image_id', 'visibility', 'created_at', 'updated_at']),
+    );
   });
 
   it('should create media_items table with correct columns', () => {

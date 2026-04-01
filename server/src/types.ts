@@ -1,8 +1,11 @@
+export type TripVisibility = 'public' | 'unlisted';
+
 export interface Trip {
   id: string;
   title: string;
   description?: string;
   coverImageId?: string;
+  visibility: TripVisibility;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +42,7 @@ export interface TripSummary {
   descriptionExcerpt?: string;
   coverImageUrl: string;
   mediaCount: number;
+  visibility: TripVisibility;
   createdAt: string;
 }
 

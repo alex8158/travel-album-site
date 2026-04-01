@@ -13,6 +13,9 @@ vi.mock('./pages/GalleryPage', () => ({
 vi.mock('./pages/UploadPage', () => ({
   default: () => <div data-testid="upload-page">UploadPage</div>,
 }));
+vi.mock('./pages/SettingsPage', () => ({
+  default: () => <div data-testid="settings-page">SettingsPage</div>,
+}));
 
 describe('App routing', () => {
   beforeEach(() => {
@@ -68,5 +71,20 @@ describe('App routing', () => {
     // Navigate away
     await user.click(screen.getByText('+ 新建旅行'));
     expect(screen.getByText('← 返回首页')).toBeDefined();
+  });
+
+  it('renders "设置" link in header pointing to /settings', () => {
+    render(<App />);
+    const settingsLink = screen.getByText('设置');
+    expect(settingsLink).toBeDefined();
+    expect(settingsLink.closest('a')).toHaveAttribute('href', '/settings');
+  });
+
+  it('navigates to SettingsPage when clicking "设置"', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByText('设置'));
+    expect(screen.getByTestId('settings-page')).toBeDefined();
   });
 });

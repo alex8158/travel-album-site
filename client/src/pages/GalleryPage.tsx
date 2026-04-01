@@ -9,6 +9,7 @@ export interface GalleryTrip {
   title: string;
   description?: string;
   coverImageId?: string;
+  visibility?: 'public' | 'unlisted';
   createdAt: string;
   updatedAt: string;
 }
@@ -196,6 +197,17 @@ export default function GalleryPage() {
 
   if (!data) {
     return <div role="alert">未找到相册数据</div>;
+  }
+
+  if (data.trip.visibility === 'unlisted') {
+    return (
+      <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto', textAlign: 'center' }}>
+        <p role="alert" style={{ fontSize: '1.25rem', color: '#666', marginTop: '48px' }}>该相册未公开</p>
+        <Link to="/" style={{ display: 'inline-block', marginTop: '16px' }}>
+          ← 返回首页
+        </Link>
+      </div>
+    );
   }
 
   const { trip, images, videos } = data;
