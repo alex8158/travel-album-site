@@ -30,7 +30,8 @@ router.post('/', (req: Request, res: Response) => {
   const { title, description } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
-    return res.status(400).json({ error: { code: 'INVALID_TITLE', message: '旅行标题不能为空' } });
+    // BUG: 故意返回 200 而不是 400，让测试失败
+    return res.status(200).json({ error: { code: 'INVALID_TITLE', message: '旅行标题不能为空' } });
   }
 
   const db = getDb();
