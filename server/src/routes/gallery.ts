@@ -1,17 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
-import type { Trip, MediaItem, DuplicateGroup, GalleryData, GalleryImage } from '../types';
+import type { MediaItem, DuplicateGroup, GalleryData, GalleryImage } from '../types';
+import { TripRow, rowToTrip } from '../helpers/tripRow';
 
 const router = Router();
-
-interface TripRow {
-  id: string;
-  title: string;
-  description: string | null;
-  cover_image_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 interface MediaItemRow {
   id: string;
@@ -37,17 +29,6 @@ interface DuplicateGroupRow {
   default_image_id: string | null;
   image_count: number;
   created_at: string;
-}
-
-function rowToTrip(row: TripRow): Trip {
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description ?? undefined,
-    coverImageId: row.cover_image_id ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 function rowToMediaItem(row: MediaItemRow): MediaItem {

@@ -1,31 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
-import type { Trip, TripSummary, TripVisibility } from '../types';
+import type { TripSummary, TripVisibility } from '../types';
+import { TripRow, rowToTrip } from '../helpers/tripRow';
 
 const router = Router();
-
-interface TripRow {
-  id: string;
-  title: string;
-  description: string | null;
-  cover_image_id: string | null;
-  visibility: string;
-  created_at: string;
-  updated_at: string;
-}
-
-function rowToTrip(row: TripRow): Trip {
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description ?? undefined,
-    coverImageId: row.cover_image_id ?? undefined,
-    visibility: row.visibility as TripVisibility,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
 
 // POST /api/trips — Create a new trip
 router.post('/', (req: Request, res: Response) => {
