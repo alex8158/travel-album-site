@@ -3,6 +3,7 @@ import axios from 'axios';
 
 export interface FileUploaderProps {
   tripId: string;
+  onAllUploaded?: () => void;
 }
 
 export type UploadStatus = 'pending' | 'uploading' | 'completed' | 'failed';
@@ -38,7 +39,7 @@ export function isFormatSupported(file: File): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
-export default function FileUploader({ tripId }: FileUploaderProps) {
+export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProps) {
   const [entries, setEntries] = useState<UploadFileEntry[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -103,7 +104,14 @@ export default function FileUploader({ tripId }: FileUploaderProps) {
       }
     }
     setUploading(false);
-  }, [entries, uploadFile]);
+    setEntries(prev => {
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
+      if (allDone && onAllUploaded) {
+        onAllUploaded();
+      }
+      return prev;
+    });
+  }, [entries, uploadFile, onAllUploaded]);
 
   const handleRetry = useCallback(async (index: number) => {
     setUploading(true);

@@ -1,8 +1,10 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import Lightbox from '../components/Lightbox';
 import VideoPlayer from '../components/VideoPlayer';
+import FileUploader from '../components/FileUploader';
+import ProcessTrigger from '../components/ProcessTrigger';
 
 export interface GalleryTrip {
   id: string;
@@ -64,6 +66,8 @@ interface GroupMemberImage {
   thumbnailUrl: string;
 }
 
+export type AppendMode = 'idle' | 'uploading' | 'uploaded' | 'processing' | 'done';
+
 export default function GalleryPage() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<GalleryData | null>(null);
@@ -71,6 +75,11 @@ export default function GalleryPage() {
   const [error, setError] = useState('');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+
+  // Append media state
+  const [appendMode, setAppendMode] = useState<AppendMode>('idle');
+  const [showAppend, setShowAppend] = useState(false);
+  const appendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Edit trip info state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -99,6 +108,37 @@ export default function GalleryPage() {
       setLoading(false);
     }
   }
+
+  // Cleanup append timer on unmount
+  useEffect(() => {
+    return () => {
+      if (appendTimerRef.current) clearTimeout(appendTimerRef.current);
+    };
+  }, []);
+
+  // --- Append media handlers ---
+  const handleAppendClick = useCallback(() => {
+    setShowAppend(true);
+    setAppendMode('uploading');
+  }, []);
+
+  const handleAppendCancel = useCallback(() => {
+    setShowAppend(false);
+    setAppendMode('idle');
+  }, []);
+
+  const handleAllUploaded = useCallback(() => {
+    setAppendMode('uploaded');
+  }, []);
+
+  const handleAppendProcessed = useCallback(async () => {
+    await fetchGallery();
+    setAppendMode('done');
+    appendTimerRef.current = setTimeout(() => {
+      setShowAppend(false);
+      setAppendMode('idle');
+    }, 2000);
+  }, [id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -229,6 +269,16 @@ export default function GalleryPage() {
           >
             ✏️ 编辑
           </button>
+          {(trip.visibility === 'public' || trip.visibility === undefined) && (
+            <button
+              onClick={handleAppendClick}
+              aria-label="追加素材"
+              data-testid="append-media-btn"
+              style={{ background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '4px 12px', cursor: 'pointer' }}
+            >
+              ➕ 追加素材
+            </button>
+          )}
         </div>
         {trip.description && <p style={{ color: '#666' }}>{trip.description}</p>}
         {images.length > 0 && (
@@ -242,6 +292,33 @@ export default function GalleryPage() {
           </button>
         )}
       </header>
+
+      {/* Append Media Area */}
+      {showAppend && (
+        <div data-testid="append-area" style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '16px', marginBottom: '16px', background: '#fafafa' }}>
+          {appendMode === 'uploading' && (
+            <>
+              <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} />
+              <button
+                onClick={handleAppendCancel}
+                data-testid="append-cancel-btn"
+                style={{ marginTop: '8px' }}
+              >
+                取消
+              </button>
+            </>
+          )}
+          {(appendMode === 'uploaded' || appendMode === 'processing') && (
+            <>
+              <p style={{ marginBottom: '8px' }}>开始处理</p>
+              <ProcessTrigger tripId={id!} onProcessed={handleAppendProcessed} />
+            </>
+          )}
+          {appendMode === 'done' && (
+            <p data-testid="append-done-msg" style={{ color: 'green', fontWeight: 'bold' }}>追加完成</p>
+          )}
+        </div>
+      )}
 
       {images.length > 0 && (
         <section aria-label="图片区域">
