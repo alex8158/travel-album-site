@@ -28,65 +28,67 @@ jobs:
           npm ci
           npm test
 
-  # deploy:
-  #   needs: test
-  #   if: github.ref == 'refs/heads/main'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 18
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
 
-  #     - name: Build client
-  #       run: |
-  #         cd client
-  #         npm ci
-  #         npm run build
+      - name: Build client
+        run: |
+          cd client
+          npm ci
+          npm run build
 
-  #     - name: Build server
-  #       run: |
-  #         cd server
-  #         npm ci
-  #         npx tsc
-  #         cp -r ../client/dist public
+      - name: Build server
+        run: |
+          cd server
+          npm ci
+          npx tsc
+          cp -r ../client/dist public
 
-  #     - name: Package deployment
-  #       run: |
-  #         tar czf deploy.tar.gz \
-  #           server/dist \
-  #           server/public \
-  #           server/package.json \
-  #           server/package-lock.json
+      - name: Package deployment
+        run: |
+          tar czf deploy.tar.gz \
+            server/dist \
+            server/public \
+            server/package.json \
+            server/package-lock.json
 
-  #     - name: Deploy to EC2
-  #       env:
-  #         EC2_HOST: ${{ secrets.EC2_HOST }}
-  #         EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
-  #       run: |
-  #         echo "$EC2_KEY" > /tmp/key.pem
-  #         chmod 400 /tmp/key.pem
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$EC2_KEY" > /tmp/key.pem
+          chmod 400 /tmp/key.pem
 
-  #         scp -i /tmp/key.pem -o StrictHostKeyChecking=no \
-  #           deploy.tar.gz ec2-user@$EC2_HOST:/home/ec2-user/
+          scp -i /tmp/key.pem -o StrictHostKeyChecking=no \
+            deploy.tar.gz ec2-user@$EC2_HOST:/home/ec2-user/
 
-  #         ssh -i /tmp/key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
-  #           cd /home/ec2-user/travel-album-site/server
-  #           rm -rf dist public
-  #           cd /home/ec2-user
-  #           tar xzf deploy.tar.gz -C /home/ec2-user/travel-album-site
-  #           cd /home/ec2-user/travel-album-site/server
-  #           npm install --omit=dev
-  #           pm2 restart travel-album || pm2 start dist/index.js --name travel-album
-  #           rm /home/ec2-user/deploy.tar.gz
-  #         EOF
+          ssh -i /tmp/key.pem -o StrictHostKeyChecking=no ec2-user@$EC2_HOST << 'EOF'
+            cd /home/ec2-user/travel-album-site/server
+            rm -rf dist public
+            cd /home/ec2-user
+            tar xzf deploy.tar.gz -C /home/ec2-user/travel-album-site
+            cd /home/ec2-user/travel-album-site/server
+            npm install --omit=dev
+            pm2 restart travel-album || pm2 start dist/index.js --name travel-album
+            rm /home/ec2-user/deploy.tar.gz
+          EOF
 
-  #         rm /tmp/key.pem
+          rm /tmp/key.pem
 
   notify-failure:
-    needs: [test]
-    if: always() && (needs.test.result == 'failure')
+    needs: [test, deploy]
+    if: |
+      always() && 
+      (needs.test.result == 'failure' || needs.deploy.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Notify DevOps Agent on failure
@@ -95,12 +97,19 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.DEVOPS_AGENT_WEBHOOK_SECRET }}
         run: |
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-          INCIDENT_ID="deploy-fail-${GITHUB_RUN_ID}"
+          INCIDENT_ID="cicd-fail-${GITHUB_RUN_ID}"
 
-          # Determine which job failed
-          FAILED_JOB="test"
+          # Determine which job failed and context
+          if [ "${{ needs.test.result }}" = "failure" ]; then
+            FAILED_JOB="test"
+          else
+            FAILED_JOB="deploy"
+          fi
 
-          PAYLOAD="{\"eventType\":\"incident\",\"incidentId\":\"$INCIDENT_ID\",\"action\":\"created\",\"priority\":\"HIGH\",\"title\":\"CI/CD failed: ${{ github.repository }} ($FAILED_JOB)\",\"description\":\"Branch ${{ github.ref_name }} commit ${{ github.sha }} $FAILED_JOB failed. Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",\"timestamp\":\"$TIMESTAMP\",\"service\":\"travel-album\"}"
+          # Determine trigger type (push or pull_request)
+          EVENT_NAME="${{ github.event_name }}"
+
+          PAYLOAD="{\"eventType\":\"incident\",\"incidentId\":\"$INCIDENT_ID\",\"action\":\"created\",\"priority\":\"HIGH\",\"title\":\"CI/CD failed: ${{ github.repository }} ($FAILED_JOB)\",\"description\":\"Event: $EVENT_NAME, Branch: ${{ github.ref_name }}, Commit: ${{ github.sha }}, Job: $FAILED_JOB failed. Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",\"timestamp\":\"$TIMESTAMP\",\"service\":\"travel-album\"}"
 
           SIGNATURE=$(echo -n "${TIMESTAMP}:${PAYLOAD}" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary | base64)
 
