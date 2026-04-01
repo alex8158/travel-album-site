@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
 import { getDb, closeDb } from '../database';
-import { generateThumbnail, generateThumbnailsForTrip } from './thumbnailGenerator';
+import { generateThumbnail, generateVideoThumbnail, generateThumbnailsForTrip } from './thumbnailGenerator';
 import { v4 as uuidv4 } from 'uuid';
 
 const uploadsBase = path.join(__dirname, '..', '..', 'uploads');
@@ -117,17 +117,17 @@ describe('ThumbnailGenerator', () => {
       }
     });
 
-    it('should skip non-image media items', async () => {
+    it('should skip non-image and non-video media items', async () => {
       const db = getDb();
-      const videoId = uuidv4();
+      const unknownId = uuidv4();
       db.prepare(
         `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
-         VALUES (?, ?, ?, 'video', 'video/mp4', ?, ?, ?)`
-      ).run(videoId, tripId, `uploads/${tripId}/originals/${videoId}.mp4`, 'video.mp4', 1000, new Date().toISOString());
+         VALUES (?, ?, ?, 'unknown', 'application/octet-stream', ?, ?, ?)`
+      ).run(unknownId, tripId, `uploads/${tripId}/originals/${unknownId}.bin`, 'file.bin', 1000, new Date().toISOString());
 
       await generateThumbnailsForTrip(tripId);
 
-      const row = db.prepare('SELECT thumbnail_path FROM media_items WHERE id = ?').get(videoId) as any;
+      const row = db.prepare('SELECT thumbnail_path FROM media_items WHERE id = ?').get(unknownId) as any;
       expect(row.thumbnail_path).toBeNull();
     });
   });

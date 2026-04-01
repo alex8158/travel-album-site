@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import TripCreateForm from '../components/TripCreateForm';
 import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
+import ProcessingLog from '../components/ProcessingLog';
+import type { ProcessResult } from '../components/ProcessTrigger';
 
 type Step = 'create' | 'upload' | 'process' | 'done';
 type Visibility = 'public' | 'unlisted';
@@ -13,6 +15,9 @@ export default function UploadPage() {
   const [tripTitle, setTripTitle] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [updating, setUpdating] = useState(false);
+  const [uploadCount, setUploadCount] = useState(0);
+  const [showProcessingLog, setShowProcessingLog] = useState(false);
+  const [processResult, setProcessResult] = useState<ProcessResult | null>(null);
 
   const handleVisibilityChange = async (value: Visibility) => {
     setVisibility(value);
@@ -48,10 +53,13 @@ export default function UploadPage() {
       {step === 'upload' && tripId && (
         <div>
           <h2>上传素材 - {tripTitle}</h2>
-          <FileUploader tripId={tripId} />
-          <div style={{ marginTop: '16px' }}>
-            <button onClick={() => setStep('process')}>上传完成，开始处理</button>
-          </div>
+          <FileUploader
+            tripId={tripId}
+            onAllUploaded={(count) => {
+              setUploadCount(count);
+              setStep('process');
+            }}
+          />
         </div>
       )}
 
@@ -60,9 +68,24 @@ export default function UploadPage() {
           <h2>处理素材 - {tripTitle}</h2>
           <ProcessTrigger
             tripId={tripId}
-            onProcessed={() => setStep('done')}
+            autoStart={true}
+            onProcessed={(result) => {
+              setProcessResult(result);
+              setShowProcessingLog(true);
+            }}
           />
         </div>
+      )}
+
+      {showProcessingLog && processResult && (
+        <ProcessingLog
+          uploadCount={uploadCount}
+          result={processResult}
+          onClose={() => {
+            setShowProcessingLog(false);
+            setStep('done');
+          }}
+        />
       )}
 
       {step === 'done' && (

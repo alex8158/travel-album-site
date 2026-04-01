@@ -7,7 +7,6 @@ import FileUploader, { isFormatSupported } from './FileUploader';
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
 
-// Helper to safely mock isAxiosError
 function mockIsAxiosError(returnValue: boolean) {
   (mockedAxios.isAxiosError as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(returnValue);
 }
@@ -50,130 +49,185 @@ describe('FileUploader', () => {
     vi.clearAllMocks();
   });
 
-  it('renders file input and label', () => {
+  it('renders file and folder selection buttons', () => {
     render(<FileUploader tripId="trip-1" />);
-    expect(screen.getByLabelText('选择文件')).toBeDefined();
+    expect(screen.getByRole('button', { name: '选择文件' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '选择文件夹' })).toBeDefined();
   });
 
-  it('shows unsupported format warnings and skips invalid files', () => {
+  it('has a hidden file input', () => {
     render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input') as HTMLInputElement;
+    expect(input.style.display).toBe('none');
+    expect(input.type).toBe('file');
+  });
 
-    const input = screen.getByLabelText('选择文件') as HTMLInputElement;
+  it('sets webkitdirectory attribute when folder button is clicked', () => {
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input') as HTMLInputElement;
+
+    // Click folder button - should set webkitdirectory
+    fireEvent.click(screen.getByRole('button', { name: '选择文件夹' }));
+    expect(input.hasAttribute('webkitdirectory')).toBe(true);
+  });
+
+  it('removes webkitdirectory attribute when file button is clicked', () => {
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input') as HTMLInputElement;
+
+    // First click folder to set it
+    fireEvent.click(screen.getByRole('button', { name: '选择文件夹' }));
+    expect(input.hasAttribute('webkitdirectory')).toBe(true);
+
+    // Then click file to remove it
+    fireEvent.click(screen.getByRole('button', { name: '选择文件' }));
+    expect(input.hasAttribute('webkitdirectory')).toBe(false);
+  });
+
+  it('shows skipped count warning when some files are unsupported', () => {
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
+
     const validFile = createFile('photo.jpg', 'image/jpeg');
-    const invalidFile = createFile('doc.pdf', 'application/pdf');
+    const invalidFile1 = createFile('doc.pdf', 'application/pdf');
+    const invalidFile2 = createFile('file.txt', 'text/plain');
 
-    // Simulate selecting files that bypass the accept attribute (e.g. drag-and-drop)
-    fireEvent.change(input, { target: { files: [validFile, invalidFile] } });
+    fireEvent.change(input, { target: { files: [validFile, invalidFile1, invalidFile2] } });
 
-    expect(screen.getByText(/doc\.pdf.+格式不支持/)).toBeDefined();
-    expect(screen.getByText('photo.jpg')).toBeDefined();
+    expect(screen.getByText('已跳过 2 个不支持格式的文件')).toBeDefined();
   });
 
-  it('shows pending status and progress for selected files', async () => {
-    const user = userEvent.setup();
+  it('shows "未找到支持格式的文件" when no files are supported', () => {
     render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
 
-    const input = screen.getByLabelText('选择文件');
-    await user.upload(input, [createFile('a.jpg', 'image/jpeg'), createFile('b.png', 'image/png')]);
+    const invalidFile = createFile('doc.pdf', 'application/pdf');
+    fireEvent.change(input, { target: { files: [invalidFile] } });
 
-    expect(screen.getByTestId('status-0')).toHaveTextContent('pending');
-    expect(screen.getByTestId('progress-0')).toHaveTextContent('0%');
-    expect(screen.getByTestId('status-1')).toHaveTextContent('pending');
-    expect(screen.getByTestId('progress-1')).toHaveTextContent('0%');
+    expect(screen.getByText('未找到支持格式的文件')).toBeDefined();
   });
 
-  it('uploads files one by one to POST /api/trips/:id/media', async () => {
+  it('auto-starts upload after file selection and shows aggregate progress', async () => {
     mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
     mockIsAxiosError(false);
 
-    const user = userEvent.setup();
     render(<FileUploader tripId="trip-42" />);
+    const input = screen.getByTestId('file-input');
 
-    const input = screen.getByLabelText('选择文件');
-    await user.upload(input, [createFile('a.jpg', 'image/jpeg')]);
+    fireEvent.change(input, {
+      target: { files: [createFile('a.jpg', 'image/jpeg'), createFile('b.png', 'image/png')] },
+    });
 
-    const uploadBtn = screen.getByRole('button', { name: /开始上传/ });
-    await user.click(uploadBtn);
+    // Should auto-upload without needing a manual button click
+    await waitFor(() => {
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-count')).toHaveTextContent('2/2');
+      expect(screen.getByTestId('upload-percent')).toHaveTextContent('100%');
+    });
+  });
+
+  it('does not render per-file upload list', async () => {
+    mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
+    mockIsAxiosError(false);
+
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('a.jpg', 'image/jpeg')] },
+    });
 
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledTimes(1);
-      const [url, data] = mockedAxios.post.mock.calls[0];
-      expect(url).toBe('/api/trips/trip-42/media');
-      expect(data).toBeInstanceOf(FormData);
     });
 
-    await waitFor(() => {
-      expect(screen.getByTestId('status-0')).toHaveTextContent('completed');
-      expect(screen.getByTestId('progress-0')).toHaveTextContent('100%');
-    });
+    // Should NOT have per-file upload list
+    expect(screen.queryByRole('list', { name: '上传列表' })).toBeNull();
   });
 
-  it('shows failed status and retry button on upload error', async () => {
-    mockedAxios.post.mockRejectedValueOnce(new Error('Network Error'));
-    mockIsAxiosError(false);
-
-    const user = userEvent.setup();
-    render(<FileUploader tripId="trip-1" />);
-
-    const input = screen.getByLabelText('选择文件');
-    await user.upload(input, [createFile('a.jpg', 'image/jpeg')]);
-
-    await user.click(screen.getByRole('button', { name: /开始上传/ }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('status-0')).toHaveTextContent('failed');
-    });
-
-    expect(screen.getByRole('button', { name: '重试' })).toBeDefined();
-  });
-
-  it('retries a failed upload when retry button is clicked', async () => {
-    mockedAxios.post
-      .mockRejectedValueOnce(new Error('Network Error'))
-      .mockResolvedValueOnce({ data: { id: 'media-1' } });
-    mockIsAxiosError(false);
-
-    const user = userEvent.setup();
-    render(<FileUploader tripId="trip-1" />);
-
-    const input = screen.getByLabelText('选择文件');
-    await user.upload(input, [createFile('a.jpg', 'image/jpeg')]);
-
-    await user.click(screen.getByRole('button', { name: /开始上传/ }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('status-0')).toHaveTextContent('failed');
-    });
-
-    await user.click(screen.getByRole('button', { name: '重试' }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('status-0')).toHaveTextContent('completed');
-    });
-
-    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
-  });
-
-  it('preserves completed files when some uploads fail', async () => {
+  it('shows failed files below progress bar with retry button', async () => {
     mockedAxios.post
       .mockResolvedValueOnce({ data: { id: 'media-1' } })
       .mockRejectedValueOnce(new Error('Network Error'));
     mockIsAxiosError(false);
 
-    const user = userEvent.setup();
     render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
 
-    const input = screen.getByLabelText('选择文件');
-    await user.upload(input, [
-      createFile('a.jpg', 'image/jpeg'),
-      createFile('b.png', 'image/png'),
-    ]);
-
-    await user.click(screen.getByRole('button', { name: /开始上传/ }));
+    fireEvent.change(input, {
+      target: { files: [createFile('a.jpg', 'image/jpeg'), createFile('b.png', 'image/png')] },
+    });
 
     await waitFor(() => {
-      expect(screen.getByTestId('status-0')).toHaveTextContent('completed');
-      expect(screen.getByTestId('status-1')).toHaveTextContent('failed');
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      // Progress should show 1/2
+      expect(screen.getByTestId('upload-count')).toHaveTextContent('1/2');
+    });
+
+    // Failed file should be shown with name and retry button
+    expect(screen.getByText('b.png')).toBeDefined();
+    expect(screen.getByRole('button', { name: '重试' })).toBeDefined();
+  });
+
+  it('retries a failed upload and calls onAllUploaded when all complete', async () => {
+    const onAllUploaded = vi.fn();
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: { id: 'media-1' } })
+      .mockRejectedValueOnce(new Error('Network Error'))
+      .mockResolvedValueOnce({ data: { id: 'media-2' } });
+    mockIsAxiosError(false);
+
+    render(<FileUploader tripId="trip-1" onAllUploaded={onAllUploaded} />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('a.jpg', 'image/jpeg'), createFile('b.png', 'image/png')] },
+    });
+
+    await waitFor(() => {
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '重试' })).toBeDefined();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '重试' }));
+
+    await waitFor(() => {
+      expect(mockedAxios.post).toHaveBeenCalledTimes(3);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-count')).toHaveTextContent('2/2');
+    });
+
+    await waitFor(() => {
+      expect(onAllUploaded).toHaveBeenCalledWith(2);
+    });
+  });
+
+  it('calls onAllUploaded when all files upload successfully', async () => {
+    const onAllUploaded = vi.fn();
+    mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
+    mockIsAxiosError(false);
+
+    render(<FileUploader tripId="trip-1" onAllUploaded={onAllUploaded} />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('a.jpg', 'image/jpeg')] },
+    });
+
+    await waitFor(() => {
+      expect(onAllUploaded).toHaveBeenCalledWith(1);
     });
   });
 });

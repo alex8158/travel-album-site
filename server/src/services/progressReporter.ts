@@ -10,11 +10,14 @@ export interface ProgressEvent {
   stepIndex: number;
   totalSteps: number;
   percent: number;
+  processed?: number;
+  total?: number;
 }
 
 export interface CompleteEvent {
   tripId: string;
   totalImages: number;
+  totalVideos: number;
   duplicateGroups: { groupId: string; imageCount: number }[];
   totalGroups: number;
   coverImageId: string | null;
@@ -39,17 +42,21 @@ export class ProgressReporter {
     this.res.flushHeaders();
   }
 
-  sendStepStart(step: StepName): void {
+  sendStepStart(step: StepName, counts?: { processed?: number; total?: number }): void {
     const stepIndex = STEPS.indexOf(step) + 1;
     const percent = (stepIndex - 1) * 25;
     const data: ProgressEvent = { step, stepIndex, totalSteps: TOTAL_STEPS, percent };
+    if (counts?.processed !== undefined) data.processed = counts.processed;
+    if (counts?.total !== undefined) data.total = counts.total;
     this.writeSSE('progress', data);
   }
 
-  sendStepComplete(step: StepName): void {
+  sendStepComplete(step: StepName, counts?: { processed?: number; total?: number }): void {
     const stepIndex = STEPS.indexOf(step) + 1;
     const percent = stepIndex * 25;
     const data: ProgressEvent = { step, stepIndex, totalSteps: TOTAL_STEPS, percent };
+    if (counts?.processed !== undefined) data.processed = counts.processed;
+    if (counts?.total !== undefined) data.total = counts.total;
     this.writeSSE('progress', data);
   }
 

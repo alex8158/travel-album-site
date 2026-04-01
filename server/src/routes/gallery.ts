@@ -121,7 +121,10 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
     'SELECT * FROM media_items WHERE trip_id = ? AND media_type = ?'
   ).all(tripId, 'video') as MediaItemRow[];
 
-  const videos = videoRows.map(rowToMediaItem);
+  const videos = videoRows.map((row) => ({
+    ...rowToMediaItem(row),
+    thumbnailUrl: row.thumbnail_path ? `/api/media/${row.id}/thumbnail` : '',
+  }));
 
   const galleryData: GalleryData = { trip, images, videos };
   return res.json(galleryData);

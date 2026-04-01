@@ -77,6 +77,7 @@ const sampleData: GalleryData = {
       mimeType: 'video/mp4',
       originalFilename: 'sunset.mp4',
       fileSize: 52428800,
+      thumbnailUrl: '/api/media/vid-1/thumbnail',
     },
   ],
 };
@@ -125,21 +126,28 @@ describe('GalleryPage', () => {
 
     const images = screen.getAllByRole('img');
     const thumbnails = images.filter(img => img.getAttribute('src')?.includes('/thumbnail'));
-    expect(thumbnails).toHaveLength(2);
+    expect(thumbnails).toHaveLength(3);
     expect(thumbnails[0]).toHaveAttribute('src', '/api/media/img-1/thumbnail');
     expect(thumbnails[1]).toHaveAttribute('src', '/api/media/img-2/thumbnail');
+    expect(thumbnails[2]).toHaveAttribute('src', '/api/media/vid-1/thumbnail');
   });
 
-  it('renders videos in a list layout', async () => {
+  it('renders videos in a grid layout', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId('video-list')).toBeDefined();
+      expect(screen.getByTestId('video-grid')).toBeDefined();
     });
 
-    expect(screen.getByText('sunset.mp4')).toBeDefined();
-    expect(screen.getByText('50.0 MB')).toBeDefined();
+    const grid = screen.getByTestId('video-grid');
+    expect(grid.style.display).toBe('grid');
+    expect(grid.style.gridTemplateColumns).toContain('repeat');
+
+    // Video thumbnail should be rendered
+    expect(screen.getByTestId('video-vid-1')).toBeDefined();
+    // Play icon overlay should be present
+    expect(screen.getByTestId('play-icon-vid-1')).toBeDefined();
   });
 
   it('shows error message when fetch fails', async () => {
@@ -195,7 +203,7 @@ describe('GalleryPage', () => {
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByText('sunset.mp4')).toBeDefined();
+      expect(screen.getByTestId('video-grid')).toBeDefined();
     });
     expect(screen.queryByLabelText('图片区域')).toBeNull();
   });

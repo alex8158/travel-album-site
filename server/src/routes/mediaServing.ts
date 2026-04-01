@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { getDb } from '../database';
-import { generateThumbnail } from '../services/thumbnailGenerator';
+import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 
 const router = Router();
 
@@ -41,11 +41,16 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
   if (!thumbAbsPath) {
     try {
       const originalAbs = path.resolve(serverRoot, row.file_path);
-      const thumbRelPath = await generateThumbnail(originalAbs, row.trip_id, row.id);
+      const thumbRelPath = row.media_type === 'video'
+        ? await generateVideoThumbnail(originalAbs, row.trip_id, row.id)
+        : await generateThumbnail(originalAbs, row.trip_id, row.id);
       db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
       thumbAbsPath = path.resolve(serverRoot, thumbRelPath);
     } catch (err) {
       console.error(`[MediaServing] On-the-fly thumbnail generation failed for ${row.id}:`, err);
+      if (row.media_type === 'video') {
+        return res.status(404).json({ error: { code: 'THUMBNAIL_FAILED', message: '视频缩略图生成失败' } });
+      }
       return res.status(500).json({ error: { code: 'THUMBNAIL_FAILED', message: '缩略图生成失败' } });
     }
   }

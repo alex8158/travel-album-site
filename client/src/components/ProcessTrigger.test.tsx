@@ -60,6 +60,7 @@ class MockEventSource {
 const mockResult: ProcessResult = {
   tripId: 'trip-1',
   totalImages: 10,
+  totalVideos: 2,
   duplicateGroups: [
     { groupId: 'g1', imageCount: 3 },
     { groupId: 'g2', imageCount: 2 },
@@ -217,6 +218,7 @@ describe('ProcessTrigger', () => {
     const noDupsResult: ProcessResult = {
       tripId: 'trip-2',
       totalImages: 5,
+      totalVideos: 0,
       duplicateGroups: [],
       totalGroups: 0,
     };

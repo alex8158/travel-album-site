@@ -123,38 +123,46 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     ).all(tripId) as MediaItemRow[];
     const imageItems = rows.map(rowToMediaItem);
 
+    // Query video count for CompleteEvent
+    const videoCountRow = db.prepare(
+      "SELECT COUNT(*) as count FROM media_items WHERE trip_id = ? AND media_type = 'video'"
+    ).get(tripId) as { count: number };
+    const totalVideos = videoCountRow.count;
+    const totalItems = imageItems.length + totalVideos;
+
     // Step 1: Dedup
     if (clientDisconnected) return;
-    reporter.sendStepStart('dedup');
+    reporter.sendStepStart('dedup', { processed: 0, total: imageItems.length });
     const groups = await deduplicate(imageItems);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('dedup');
+    reporter.sendStepComplete('dedup', { processed: imageItems.length, total: imageItems.length });
 
     // Step 2: Quality
     if (clientDisconnected) return;
-    reporter.sendStepStart('quality');
+    reporter.sendStepStart('quality', { processed: 0, total: imageItems.length });
     await processTrip(tripId);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('quality');
+    reporter.sendStepComplete('quality', { processed: imageItems.length, total: imageItems.length });
 
     // Step 3: Thumbnail
     if (clientDisconnected) return;
-    reporter.sendStepStart('thumbnail');
+    reporter.sendStepStart('thumbnail', { processed: 0, total: totalItems });
     await generateThumbnailsForTrip(tripId);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('thumbnail');
+    reporter.sendStepComplete('thumbnail', { processed: totalItems, total: totalItems });
 
     // Step 4: Cover
     if (clientDisconnected) return;
-    reporter.sendStepStart('cover');
+    reporter.sendStepStart('cover', { processed: 0, total: 1 });
     const coverImageId = await selectCoverImage(tripId);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('cover');
+    reporter.sendStepComplete('cover', { processed: 1, total: 1 });
 
     // All steps complete
     reporter.sendComplete({
       tripId,
       totalImages: imageItems.length,
+      totalVideos,
       duplicateGroups: groups.map((g) => ({
         groupId: g.id,
         imageCount: g.imageCount,

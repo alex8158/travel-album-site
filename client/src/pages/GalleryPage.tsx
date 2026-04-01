@@ -5,6 +5,8 @@ import Lightbox from '../components/Lightbox';
 import VideoPlayer from '../components/VideoPlayer';
 import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
+import type { ProcessResult } from '../components/ProcessTrigger';
+import ProcessingLog from '../components/ProcessingLog';
 
 export interface GalleryTrip {
   id: string;
@@ -52,6 +54,7 @@ export interface GalleryVideo {
   mimeType: string;
   originalFilename: string;
   fileSize: number;
+  thumbnailUrl: string;
 }
 
 export interface GalleryData {
@@ -66,7 +69,7 @@ interface GroupMemberImage {
   thumbnailUrl: string;
 }
 
-export type AppendMode = 'idle' | 'uploading' | 'uploaded' | 'processing' | 'done';
+export type AppendMode = 'idle' | 'uploading' | 'processing' | 'done';
 
 export default function GalleryPage() {
   const { id } = useParams<{ id: string }>();
@@ -80,6 +83,9 @@ export default function GalleryPage() {
   const [appendMode, setAppendMode] = useState<AppendMode>('idle');
   const [showAppend, setShowAppend] = useState(false);
   const appendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [appendUploadCount, setAppendUploadCount] = useState(0);
+  const [appendProcessResult, setAppendProcessResult] = useState<ProcessResult | null>(null);
+  const [showAppendProcessingLog, setShowAppendProcessingLog] = useState(false);
 
   // Edit trip info state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -127,11 +133,18 @@ export default function GalleryPage() {
     setAppendMode('idle');
   }, []);
 
-  const handleAllUploaded = useCallback(() => {
-    setAppendMode('uploaded');
+  const handleAllUploaded = useCallback((count: number) => {
+    setAppendUploadCount(count);
+    setAppendMode('processing');
   }, []);
 
-  const handleAppendProcessed = useCallback(async () => {
+  const handleAppendProcessed = useCallback(async (result: ProcessResult) => {
+    setAppendProcessResult(result);
+    setShowAppendProcessingLog(true);
+  }, []);
+
+  const handleAppendProcessingLogClose = useCallback(async () => {
+    setShowAppendProcessingLog(false);
     await fetchGallery();
     setAppendMode('done');
     appendTimerRef.current = setTimeout(() => {
@@ -308,16 +321,24 @@ export default function GalleryPage() {
               </button>
             </>
           )}
-          {(appendMode === 'uploaded' || appendMode === 'processing') && (
+          {appendMode === 'processing' && (
             <>
               <p style={{ marginBottom: '8px' }}>开始处理</p>
-              <ProcessTrigger tripId={id!} onProcessed={handleAppendProcessed} />
+              <ProcessTrigger tripId={id!} autoStart={true} onProcessed={handleAppendProcessed} />
             </>
           )}
           {appendMode === 'done' && (
             <p data-testid="append-done-msg" style={{ color: 'green', fontWeight: 'bold' }}>追加完成</p>
           )}
         </div>
+      )}
+
+      {showAppendProcessingLog && appendProcessResult && (
+        <ProcessingLog
+          uploadCount={appendUploadCount}
+          result={appendProcessResult}
+          onClose={handleAppendProcessingLogClose}
+        />
       )}
 
       {images.length > 0 && (
@@ -385,55 +406,98 @@ export default function GalleryPage() {
       {videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
-          <ul
-            data-testid="video-list"
-            style={{ listStyle: 'none', padding: 0, margin: 0 }}
+          <div
+            data-testid="video-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '12px',
+            }}
           >
             {videos.map((video) => (
-              <li
+              <div
                 key={video.id}
                 data-testid={`video-${video.id}`}
-                style={{ borderBottom: '1px solid #eee' }}
+                style={{
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: '1px solid #eee',
+                  position: 'relative',
+                  cursor: 'pointer',
+                }}
+                role="button"
+                tabIndex={0}
+                aria-label={`播放 ${video.originalFilename}`}
+                onClick={() => setSelectedVideoId(video.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') setSelectedVideoId(video.id);
+                }}
               >
-                <div
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`播放 ${video.originalFilename}`}
-                  onClick={() => setSelectedVideoId(selectedVideoId === video.id ? null : video.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      setSelectedVideoId(selectedVideoId === video.id ? null : video.id);
-                    }
-                  }}
-                  style={{
-                    padding: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span aria-label="视频图标" role="img">🎬</span>
-                  <div>
-                    <div>{video.originalFilename}</div>
-                    <div style={{ fontSize: '0.85rem', color: '#999' }}>
-                      {formatFileSize(video.fileSize)}
-                    </div>
-                  </div>
-                </div>
-                {selectedVideoId === video.id && (
-                  <div style={{ padding: '0 12px 12px' }}>
-                    <VideoPlayer
-                      videoUrl={`/api/media/${video.id}/original`}
-                      mimeType={video.mimeType}
-                      onClose={() => setSelectedVideoId(null)}
-                    />
+                {video.thumbnailUrl ? (
+                  <img
+                    src={video.thumbnailUrl}
+                    alt={video.originalFilename}
+                    style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                  />
+                ) : (
+                  <div
+                    data-testid={`video-placeholder-${video.id}`}
+                    style={{
+                      width: '100%',
+                      aspectRatio: '1',
+                      background: '#e0e0e0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '2rem',
+                    }}
+                  >
+                    <span role="img" aria-label="视频占位图">🎬</span>
                   </div>
                 )}
-              </li>
+                <div
+                  data-testid={`play-icon-${video.id}`}
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    fontSize: '2.5rem',
+                    color: 'rgba(255,255,255,0.9)',
+                    textShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                    pointerEvents: 'none',
+                  }}
+                  aria-hidden="true"
+                >
+                  ▶
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         </section>
+      )}
+
+      {/* Video Player Modal */}
+      {selectedVideoId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="视频播放"
+          data-testid="video-player-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedVideoId(null); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}
+        >
+          <div style={{ width: '90%', maxWidth: '900px' }}>
+            <VideoPlayer
+              videoUrl={`/api/media/${selectedVideoId}/original`}
+              mimeType={videos.find(v => v.id === selectedVideoId)?.mimeType || 'video/mp4'}
+              onClose={() => setSelectedVideoId(null)}
+            />
+          </div>
+        </div>
       )}
 
       {images.length === 0 && videos.length === 0 && (
@@ -588,8 +652,3 @@ export default function GalleryPage() {
   );
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

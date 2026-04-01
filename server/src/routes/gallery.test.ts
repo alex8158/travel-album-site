@@ -98,6 +98,8 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(res.body.videos).toHaveLength(2);
     for (const vid of res.body.videos) {
       expect(vid.mediaType).toBe('video');
+      // Videos without thumbnail_path should have empty thumbnailUrl
+      expect(vid.thumbnailUrl).toBe('');
     }
 
     // Verify specific IDs are present
@@ -160,5 +162,33 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(res.body.images).toHaveLength(1);
     expect(res.body.images[0].thumbnailUrl).toBe(`/api/media/${imgId}/thumbnail`);
     expect(res.body.images[0].originalUrl).toBe(`/api/media/${imgId}/original`);
+  });
+
+  it('should return thumbnailUrl for videos with thumbnail_path', async () => {
+    const trip = await request(app).post('/api/trips').send({ title: 'Video Thumb Trip' });
+    const tripId = trip.body.id;
+    const vidId = createMediaItem(tripId, 'video');
+
+    // Set thumbnail_path in DB
+    const db = getDb();
+    db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(
+      `uploads/${tripId}/thumbnails/${vidId}_thumb.webp`, vidId
+    );
+
+    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    expect(res.status).toBe(200);
+    expect(res.body.videos).toHaveLength(1);
+    expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
+  });
+
+  it('should return empty thumbnailUrl for videos without thumbnail_path', async () => {
+    const trip = await request(app).post('/api/trips').send({ title: 'No Thumb Trip' });
+    const tripId = trip.body.id;
+    const vidId = createMediaItem(tripId, 'video');
+
+    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    expect(res.status).toBe(200);
+    expect(res.body.videos).toHaveLength(1);
+    expect(res.body.videos[0].thumbnailUrl).toBe('');
   });
 });
