@@ -34,11 +34,17 @@ function collectFilePaths(db: ReturnType<typeof getDb>): string[] {
   return Array.from(paths);
 }
 
+/** Strip leading 'uploads/' prefix if present (legacy path compatibility) */
+function normalizePath(p: string): string {
+  return p.startsWith('uploads/') ? p.slice('uploads/'.length) : p;
+}
+
 /**
  * Migrate all files referenced in the database from one StorageProvider to another.
  *
  * Each file is migrated independently — a single failure is recorded but does
  * not stop the remaining files from being processed.
+ * Paths are normalized (uploads/ prefix stripped) for the target provider.
  */
 export async function migrateStorage(
   sourceProvider: StorageProvider,
@@ -53,10 +59,27 @@ export async function migrateStorage(
     failedFiles: [],
   };
 
+  // Also prepare to update DB paths to normalized form
+  const updateStmts = {
+    file_path: db.prepare('UPDATE media_items SET file_path = ? WHERE file_path = ?'),
+    thumbnail_path: db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE thumbnail_path = ?'),
+    optimized_path: db.prepare('UPDATE media_items SET optimized_path = ? WHERE optimized_path = ?'),
+    compiled_path: db.prepare('UPDATE media_items SET compiled_path = ? WHERE compiled_path = ?'),
+  };
+
   for (const filePath of filePaths) {
+    const normalizedPath = normalizePath(filePath);
     try {
       const data = await sourceProvider.read(filePath);
-      await targetProvider.save(filePath, data);
+      await targetProvider.save(normalizedPath, data);
+
+      // Update DB paths to normalized form if they changed
+      if (normalizedPath !== filePath) {
+        for (const stmt of Object.values(updateStmts)) {
+          stmt.run(normalizedPath, filePath);
+        }
+      }
+
       result.successCount++;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
