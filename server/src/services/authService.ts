@@ -1,8 +1,32 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import type { JwtPayload } from '../types';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'travel-album-secret-key';
+/**
+ * Get or generate JWT secret.
+ * Priority: env var > persisted file > auto-generate and persist.
+ */
+function getJwtSecret(): string {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+
+  const secretFile = path.join(__dirname, '..', '..', 'data', '.jwt-secret');
+  try {
+    const existing = fs.readFileSync(secretFile, 'utf-8').trim();
+    if (existing) return existing;
+  } catch { /* file doesn't exist yet */ }
+
+  const generated = crypto.randomBytes(32).toString('base64');
+  try {
+    fs.mkdirSync(path.dirname(secretFile), { recursive: true });
+    fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+  } catch { /* non-fatal, will regenerate next restart */ }
+  return generated;
+}
+
+const JWT_SECRET = getJwtSecret();
 const JWT_EXPIRES_IN = '7d';
 const BCRYPT_ROUNDS = 12;
 
