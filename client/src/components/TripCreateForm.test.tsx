@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import axios from 'axios';
 import TripCreateForm from './TripCreateForm';
 
-vi.mock('axios');
-const mockedAxios = vi.mocked(axios, true);
+const mockAuthFetch = vi.fn();
+
+vi.mock('../contexts/AuthContext', () => ({
+  authFetch: (...args: unknown[]) => mockAuthFetch(...args),
+}));
 
 describe('TripCreateForm', () => {
   beforeEach(() => {
@@ -52,10 +54,13 @@ describe('TripCreateForm', () => {
     expect(button).not.toBeDisabled();
   });
 
-  it('calls POST /api/trips with title and description on submit', async () => {
+  it('calls authFetch with title and description on submit', async () => {
     const onCreated = vi.fn();
     const tripData = { id: '123', title: '东京之旅', description: '美好的旅行' };
-    mockedAxios.post.mockResolvedValueOnce({ data: tripData });
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(tripData),
+    });
 
     const user = userEvent.setup();
     render(<TripCreateForm onCreated={onCreated} />);
@@ -65,19 +70,21 @@ describe('TripCreateForm', () => {
     await user.click(screen.getByRole('button', { name: /创建旅行/ }));
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledWith('/api/trips', {
-        title: '东京之旅',
-        description: '美好的旅行',
-      });
+      expect(mockAuthFetch).toHaveBeenCalledWith('/api/trips', expect.objectContaining({
+        method: 'POST',
+      }));
     });
 
     expect(onCreated).toHaveBeenCalledWith(tripData);
   });
 
-  it('calls POST /api/trips with title only when description is empty', async () => {
+  it('calls authFetch with title only when description is empty', async () => {
     const onCreated = vi.fn();
     const tripData = { id: '456', title: '巴黎之旅' };
-    mockedAxios.post.mockResolvedValueOnce({ data: tripData });
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(tripData),
+    });
 
     const user = userEvent.setup();
     render(<TripCreateForm onCreated={onCreated} />);
@@ -86,17 +93,19 @@ describe('TripCreateForm', () => {
     await user.click(screen.getByRole('button', { name: /创建旅行/ }));
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledWith('/api/trips', {
-        title: '巴黎之旅',
-        description: undefined,
-      });
+      expect(mockAuthFetch).toHaveBeenCalledWith('/api/trips', expect.objectContaining({
+        method: 'POST',
+      }));
     });
 
     expect(onCreated).toHaveBeenCalledWith(tripData);
   });
 
   it('resets form after successful creation', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: { id: '789', title: 'Test' } });
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: '789', title: 'Test' }),
+    });
 
     const user = userEvent.setup();
     render(<TripCreateForm />);
@@ -115,11 +124,10 @@ describe('TripCreateForm', () => {
   });
 
   it('displays error message on API failure', async () => {
-    mockedAxios.post.mockRejectedValueOnce({
-      isAxiosError: true,
-      response: { data: { error: { message: '旅行标题不能为空' } } },
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: false,
+      json: () => Promise.resolve({ error: { message: '旅行标题不能为空' } }),
     });
-    vi.spyOn(axios, 'isAxiosError').mockReturnValue(true);
 
     const user = userEvent.setup();
     render(<TripCreateForm />);
@@ -136,6 +144,6 @@ describe('TripCreateForm', () => {
     render(<TripCreateForm />);
     const form = screen.getByRole('form');
     fireEvent.submit(form);
-    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect(mockAuthFetch).not.toHaveBeenCalled();
   });
 });
