@@ -21,7 +21,8 @@ err() { echo -e "${RED}>> $1${NC}"; exit 1; }
 do_update() {
   log "拉取最新代码..."
   cd "$APP_DIR"
-  git pull origin main
+  git fetch origin main
+  git reset --hard origin/main
 
   log "安装服务端依赖..."
   cd "$APP_DIR/server"
@@ -66,7 +67,8 @@ APP_DIR="/home/ec2-user/travel-album-site"
 
 echo ">> 拉取最新代码..."
 cd "$APP_DIR"
-git pull origin main
+git fetch origin main
+git reset --hard origin/main
 
 echo ">> 安装服务端依赖..."
 cd "$APP_DIR/server"

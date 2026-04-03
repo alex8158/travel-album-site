@@ -162,13 +162,51 @@ docker run -d \
 
 ### 更新部署
 
-```bash
-# 远程更新（通过 SSH）
-./deploy/update.sh <ec2-ip>
+从本地通过 SSH 远程更新：
 
-# 或在服务器上直接运行
+```bash
+./deploy/update.sh <ec2-ip>
+```
+
+或 SSH 到服务器后本地执行：
+
+```bash
+cd /home/ec2-user/travel-album-site
 ./deploy/update.sh --local
 ```
+
+首次更新（服务器上还没有 update.sh 时），需要先手动拉取代码：
+
+```bash
+cd /home/ec2-user/travel-album-site
+git fetch origin main
+git reset --hard origin/main
+./deploy/update.sh --local
+```
+
+update.sh 会自动执行：git fetch + reset → npm install → 编译后端 → 构建前端 → 复制产物 → 重启 pm2。数据库迁移在服务启动时自动完成。
+
+### 配置对象存储
+
+存储配置通过服务器环境变量管理，管理后台可查看配置状态但不能修改凭证。
+
+以 AWS S3 为例，在服务器上设置环境变量后重启：
+
+```bash
+# 编辑 pm2 启动配置或 .bashrc
+export STORAGE_TYPE=local
+export S3_BUCKET=your-bucket-name
+export S3_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=your-key
+export AWS_SECRET_ACCESS_KEY=your-secret
+
+# 重启服务使环境变量生效
+pm2 restart travel-album
+```
+
+配置完成后，在管理后台的「存储管理」区域可以看到该存储显示为「已配置」，即可执行迁移操作。
+
+阿里 OSS 和腾讯 COS 同理，设置对应的环境变量即可（见上方环境变量表）。
 
 ## 项目结构
 
