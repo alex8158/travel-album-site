@@ -24,6 +24,13 @@ do_update() {
   git fetch origin main
   git reset --hard origin/main
 
+  # 首次部署时自动创建 .env 配置文件
+  if [ ! -f "$APP_DIR/server/.env" ]; then
+    log "创建默认配置文件 server/.env ..."
+    cp "$APP_DIR/server/.env.example" "$APP_DIR/server/.env"
+    warn "请编辑 server/.env 配置存储方式和云存储凭证（默认使用本地存储）"
+  fi
+
   log "安装服务端依赖..."
   cd "$APP_DIR/server"
   npm install
@@ -69,6 +76,13 @@ echo ">> 拉取最新代码..."
 cd "$APP_DIR"
 git fetch origin main
 git reset --hard origin/main
+
+# 首次部署时自动创建 .env 配置文件
+if [ ! -f "$APP_DIR/server/.env" ]; then
+  echo ">> 创建默认配置文件 server/.env ..."
+  cp "$APP_DIR/server/.env.example" "$APP_DIR/server/.env"
+  echo ">> 注意：请编辑 server/.env 配置存储方式和云存储凭证（默认使用本地存储）"
+fi
 
 echo ">> 安装服务端依赖..."
 cd "$APP_DIR/server"

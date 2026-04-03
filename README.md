@@ -186,27 +186,41 @@ git reset --hard origin/main
 
 update.sh 会自动执行：git fetch + reset → npm install → 编译后端 → 构建前端 → 复制产物 → 重启 pm2。数据库迁移在服务启动时自动完成。
 
-### 配置对象存储
+### 配置存储
 
-存储配置通过服务器环境变量管理，管理后台可查看配置状态但不能修改凭证。
+部署时会自动从 `.env.example` 创建 `server/.env` 配置文件。默认使用本地存储，无需修改。
 
-以 AWS S3 为例，在服务器上设置环境变量后重启：
+如需使用云存储，编辑 `server/.env`，取消对应存储的注释并填写凭证：
 
 ```bash
-# 编辑 pm2 启动配置或 .bashrc
-export STORAGE_TYPE=local
-export S3_BUCKET=your-bucket-name
-export S3_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
+# SSH 到服务器
+vi /home/ec2-user/travel-album-site/server/.env
 
-# 重启服务使环境变量生效
+# 例如启用 S3，修改以下行：
+STORAGE_TYPE=s3
+S3_BUCKET=your-bucket-name
+S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+
+# 保存后重启服务
 pm2 restart travel-album
 ```
 
-配置完成后，在管理后台的「存储管理」区域可以看到该存储显示为「已配置」，即可执行迁移操作。
+修改后在管理后台「存储管理」区域可以看到对应存储显示为「已配置」。
 
-阿里 OSS 和腾讯 COS 同理，设置对应的环境变量即可（见上方环境变量表）。
+### 从本地存储迁移到云存储
+
+如果已经在本地存储了相册数据，想迁移到云存储：
+
+1. 在 `server/.env` 中配置好目标云存储的凭证（但先不要改 `STORAGE_TYPE`）
+2. 重启服务：`pm2 restart travel-album`
+3. 用管理员账户登录管理后台，在「存储管理」区域确认目标存储显示「已配置」
+4. 选择目标存储，点击「开始迁移」，等待迁移完成
+5. 迁移成功后，修改 `server/.env` 中的 `STORAGE_TYPE` 为目标类型
+6. 再次重启服务：`pm2 restart travel-album`
+
+迁移过程中服务不会中断，单个文件失败不影响其他文件。迁移完成后会显示成功/失败数量。
 
 ## 项目结构
 
