@@ -35,7 +35,7 @@ router.get('/users/pending', requireAdmin, (_req: Request, res: Response) => {
 // PUT /api/admin/users/:id/approve - Approve user
 router.put('/users/:id/approve', requireAdmin, (req: Request, res: Response, next: NextFunction) => {
   try {
-    const user = approveUser(req.params.id);
+    const user = approveUser(req.params.id as string);
     res.json({ user });
   } catch (err) {
     next(err);
@@ -45,7 +45,7 @@ router.put('/users/:id/approve', requireAdmin, (req: Request, res: Response, nex
 // PUT /api/admin/users/:id/reject - Reject user
 router.put('/users/:id/reject', requireAdmin, (req: Request, res: Response, next: NextFunction) => {
   try {
-    const user = rejectUser(req.params.id);
+    const user = rejectUser(req.params.id as string);
     res.json({ user });
   } catch (err) {
     next(err);
@@ -55,7 +55,7 @@ router.put('/users/:id/reject', requireAdmin, (req: Request, res: Response, next
 // PUT /api/admin/users/:id/promote - Promote to admin
 router.put('/users/:id/promote', requireAdmin, (req: Request, res: Response, next: NextFunction) => {
   try {
-    promoteToAdmin(req.params.id);
+    promoteToAdmin(req.params.id as string);
     res.json({ message: '用户已提升为管理员' });
   } catch (err) {
     next(err);
@@ -66,7 +66,7 @@ router.put('/users/:id/promote', requireAdmin, (req: Request, res: Response, nex
 router.put('/users/:id/password', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { password } = req.body;
-    await resetPassword(req.params.id, password);
+    await resetPassword(req.params.id as string, password);
     res.json({ message: '密码已重置' });
   } catch (err) {
     next(err);
@@ -76,7 +76,7 @@ router.put('/users/:id/password', requireAdmin, async (req: Request, res: Respon
 // DELETE /api/admin/users/:id - Delete user (disable)
 router.delete('/users/:id', requireAdmin, (req: Request, res: Response, next: NextFunction) => {
   try {
-    disableUser(req.params.id);
+    disableUser(req.params.id as string);
     res.json({ message: '用户已删除' });
   } catch (err) {
     next(err);
