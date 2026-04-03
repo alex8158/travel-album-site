@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useAuth, authFetch } from '../contexts/AuthContext';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -9,6 +9,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -17,7 +18,49 @@ export default function LoginPage() {
 
     try {
       await login(username, password);
-      navigate('/');
+
+      const returnTo = searchParams.get('returnTo');
+      if (returnTo) {
+        // Check if returnTo matches /trips/:id pattern
+        const tripMatch = returnTo.match(/^\/trips\/([^/]+)$/);
+        if (tripMatch) {
+          const tripId = tripMatch[1];
+          try {
+            const res = await authFetch(`/api/trips/${tripId}`);
+            if (res.ok) {
+              const tripData = await res.json();
+              // Re-read user from localStorage since login just set it
+              const storedToken = localStorage.getItem('auth_token');
+              let currentUserId = '';
+              let currentRole = '';
+              if (storedToken) {
+                try {
+                  const payload = JSON.parse(atob(storedToken.split('.')[1]));
+                  currentUserId = payload.userId || '';
+                  currentRole = payload.role || '';
+                } catch {
+                  // ignore
+                }
+              }
+              if (currentRole === 'admin' || tripData.userId === currentUserId) {
+                navigate(`/my/trips/${tripId}`, { replace: true });
+              } else {
+                navigate(returnTo, { replace: true });
+              }
+            } else {
+              // API check failed, go back to returnTo
+              navigate(returnTo, { replace: true });
+            }
+          } catch {
+            // API check failure → redirect back to returnTo path
+            navigate(returnTo, { replace: true });
+          }
+        } else {
+          navigate(returnTo, { replace: true });
+        }
+      } else {
+        navigate('/', { replace: true });
+      }
     } catch (err: unknown) {
       const code = err instanceof Error ? err.message : '';
       if (code === 'ACCOUNT_PENDING') {

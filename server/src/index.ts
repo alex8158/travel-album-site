@@ -17,6 +17,7 @@ import galleryRouter from './routes/gallery';
 import trashRouter from './routes/trash';
 import adminRouter from './routes/admin';
 import usersRouter from './routes/users';
+import myRouter from './routes/my';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -104,6 +105,7 @@ app.use('/api/trips', galleryRouter);
 app.use('/api', trashRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/my', myRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

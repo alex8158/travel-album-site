@@ -28,6 +28,12 @@ vi.mock('./pages/UserSpacePage', () => ({
 vi.mock('./pages/AdminPage', () => ({
   default: () => <div data-testid="admin-page">AdminPage</div>,
 }));
+vi.mock('./pages/MyGalleryPage', () => ({
+  default: () => <div data-testid="my-gallery-page">MyGalleryPage</div>,
+}));
+vi.mock('./pages/AdminUserTripsPage', () => ({
+  default: () => <div data-testid="admin-user-trips-page">AdminUserTripsPage</div>,
+}));
 
 // Mock AuthContext to control login state
 const mockLogout = vi.fn();
@@ -97,30 +103,29 @@ describe('App routing', () => {
     expect(titleLink.closest('a')).toHaveAttribute('href', '/');
   });
 
-  it('renders "设置" link in header pointing to /settings', () => {
+  it('renders /my/trips/:id route with MyGalleryPage', () => {
+    setLoggedInRegular();
+    window.history.pushState({}, '', '/my/trips/abc123');
     render(<App />);
-    const settingsLink = screen.getByText('设置');
-    expect(settingsLink).toBeDefined();
-    expect(settingsLink.closest('a')).toHaveAttribute('href', '/settings');
+    expect(screen.getByTestId('my-gallery-page')).toBeDefined();
   });
 
-  it('navigates to SettingsPage when clicking "设置"', async () => {
-    const user = userEvent.setup();
+  it('renders /admin/users/:userId/trips route with AdminUserTripsPage', () => {
+    setLoggedInAdmin();
+    window.history.pushState({}, '', '/admin/users/user-1/trips');
     render(<App />);
-
-    await user.click(screen.getByText('设置'));
-    expect(screen.getByTestId('settings-page')).toBeDefined();
+    expect(screen.getByTestId('admin-user-trips-page')).toBeDefined();
   });
 });
 
-describe('NavHeader - not logged in', () => {
+describe('NavHeader - not logged in (public page)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setLoggedOut();
     window.history.pushState({}, '', '/');
   });
 
-  it('shows "登录" and "注册" buttons when not logged in', () => {
+  it('shows only "登录" and "注册" buttons when not logged in', () => {
     render(<App />);
     expect(screen.getByText('登录')).toBeDefined();
     expect(screen.getByText('注册')).toBeDefined();
@@ -136,6 +141,16 @@ describe('NavHeader - not logged in', () => {
     expect(screen.queryByText('退出')).toBeNull();
   });
 
+  it('hides "设置" when not logged in on public page', () => {
+    render(<App />);
+    expect(screen.queryByText('设置')).toBeNull();
+  });
+
+  it('hides "我的空间" when not logged in', () => {
+    render(<App />);
+    expect(screen.queryByText('我的空间')).toBeNull();
+  });
+
   it('navigates to LoginPage when clicking "登录"', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -149,49 +164,32 @@ describe('NavHeader - not logged in', () => {
     await user.click(screen.getByText('注册'));
     expect(screen.getByTestId('register-page')).toBeDefined();
   });
-
-  it('shows "返回首页" link when not on home page', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-
-    expect(screen.queryByText('← 返回首页')).toBeNull();
-
-    await user.click(screen.getByText('登录'));
-    expect(screen.getByText('← 返回首页')).toBeDefined();
-  });
 });
 
-describe('NavHeader - logged in regular user', () => {
+describe('NavHeader - logged in regular user on public page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setLoggedInRegular('alice');
     window.history.pushState({}, '', '/');
   });
 
-  it('shows username, "我的空间", "退出", and "新建旅行"', () => {
+  it('shows username, "我的空间", and "退出"', () => {
     render(<App />);
     expect(screen.getByText('alice')).toBeDefined();
     expect(screen.getByText('我的空间')).toBeDefined();
     expect(screen.getByText('退出')).toBeDefined();
-    expect(screen.getByText('+ 新建旅行')).toBeDefined();
+  });
+
+  it('hides "设置" and "新建旅行" on public page', () => {
+    render(<App />);
+    expect(screen.queryByText('设置')).toBeNull();
+    expect(screen.queryByText('+ 新建旅行')).toBeNull();
   });
 
   it('hides "登录" and "注册" when logged in', () => {
     render(<App />);
     expect(screen.queryByText('登录')).toBeNull();
     expect(screen.queryByText('注册')).toBeNull();
-  });
-
-  it('does not show "管理后台" for regular user', () => {
-    render(<App />);
-    expect(screen.queryByText('管理后台')).toBeNull();
-  });
-
-  it('navigates to UploadPage when clicking "新建旅行"', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByText('+ 新建旅行'));
-    expect(screen.getByTestId('upload-page')).toBeDefined();
   });
 
   it('navigates to UserSpacePage when clicking "我的空间"', async () => {
@@ -209,31 +207,77 @@ describe('NavHeader - logged in regular user', () => {
   });
 });
 
-describe('NavHeader - logged in admin', () => {
+describe('NavHeader - logged in regular user on user space', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setLoggedInRegular('alice');
+    window.history.pushState({}, '', '/my');
+  });
+
+  it('shows "设置" and "新建旅行" in user space', () => {
+    render(<App />);
+    expect(screen.getByText('设置')).toBeDefined();
+    expect(screen.getByText('+ 新建旅行')).toBeDefined();
+  });
+
+  it('shows username, "我的空间", and "退出" in user space', () => {
+    render(<App />);
+    expect(screen.getByText('alice')).toBeDefined();
+    expect(screen.getByText('我的空间')).toBeDefined();
+    expect(screen.getByText('退出')).toBeDefined();
+  });
+
+  it('does not show "会员管理" for regular user', () => {
+    render(<App />);
+    expect(screen.queryByText('会员管理')).toBeNull();
+  });
+});
+
+describe('NavHeader - logged in admin on user space', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setLoggedInAdmin('admin');
+    window.history.pushState({}, '', '/my');
+  });
+
+  it('shows "会员管理" for admin in user space', () => {
+    render(<App />);
+    expect(screen.getByText('会员管理')).toBeDefined();
+  });
+
+  it('shows all user space elements plus admin entry', () => {
+    render(<App />);
+    expect(screen.getByText('admin')).toBeDefined();
+    expect(screen.getByText('我的空间')).toBeDefined();
+    expect(screen.getByText('退出')).toBeDefined();
+    expect(screen.getByText('+ 新建旅行')).toBeDefined();
+    expect(screen.getByText('设置')).toBeDefined();
+    expect(screen.getByText('会员管理')).toBeDefined();
+  });
+
+  it('navigates to AdminPage when clicking "会员管理"', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('会员管理'));
+    expect(screen.getByTestId('admin-page')).toBeDefined();
+  });
+});
+
+describe('NavHeader - admin on public page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setLoggedInAdmin('admin');
     window.history.pushState({}, '', '/');
   });
 
-  it('shows "管理后台" entry for admin user', () => {
+  it('hides "会员管理" on public page even for admin', () => {
     render(<App />);
-    expect(screen.getByText('管理后台')).toBeDefined();
+    expect(screen.queryByText('会员管理')).toBeNull();
   });
 
-  it('shows all regular user elements plus admin entry', () => {
+  it('hides "设置" and "新建旅行" on public page for admin', () => {
     render(<App />);
-    expect(screen.getByText('admin')).toBeDefined();
-    expect(screen.getByText('我的空间')).toBeDefined();
-    expect(screen.getByText('退出')).toBeDefined();
-    expect(screen.getByText('+ 新建旅行')).toBeDefined();
-    expect(screen.getByText('管理后台')).toBeDefined();
-  });
-
-  it('navigates to AdminPage when clicking "管理后台"', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByText('管理后台'));
-    expect(screen.getByTestId('admin-page')).toBeDefined();
+    expect(screen.queryByText('设置')).toBeNull();
+    expect(screen.queryByText('+ 新建旅行')).toBeNull();
   });
 });

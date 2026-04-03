@@ -156,6 +156,137 @@ describe('Trash API with auth', () => {
     });
   });
 
+  describe('PUT /api/trips/:id/media/trash', () => {
+    it('should return 401 without auth token', async () => {
+      const mediaId = createMedia(tripId, owner.userId, 'active');
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .send({ mediaIds: [mediaId] });
+      expect(res.status).toBe(401);
+    });
+
+    it('should return 400 when mediaIds is empty', async () => {
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: [] });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_REQUEST');
+    });
+
+    it('should return 400 when mediaIds is missing', async () => {
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_REQUEST');
+    });
+
+    it('should return 400 when mediaIds is not an array', async () => {
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: 'not-an-array' });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_REQUEST');
+    });
+
+    it('should return 404 for non-existent trip', async () => {
+      const res = await request(app)
+        .put('/api/trips/non-existent-id/media/trash')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: ['some-id'] });
+      expect(res.status).toBe(404);
+    });
+
+    it('should return 403 when non-owner non-admin tries to batch trash', async () => {
+      const mediaId = createMedia(tripId, owner.userId, 'active');
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${other.token}`)
+        .send({ mediaIds: [mediaId] });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('should allow owner to batch trash active media items', async () => {
+      const m1 = createMedia(tripId, owner.userId, 'active');
+      const m2 = createMedia(tripId, owner.userId, 'active');
+
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: [m1, m2] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.trashedCount).toBe(2);
+
+      // Verify items are now trashed with correct reason
+      const db = getDb();
+      const row1 = db.prepare('SELECT status, trashed_reason FROM media_items WHERE id = ?').get(m1) as any;
+      const row2 = db.prepare('SELECT status, trashed_reason FROM media_items WHERE id = ?').get(m2) as any;
+      expect(row1.status).toBe('trashed');
+      expect(row1.trashed_reason).toBe('manual');
+      expect(row2.status).toBe('trashed');
+      expect(row2.trashed_reason).toBe('manual');
+    });
+
+    it('should allow admin to batch trash media of any trip', async () => {
+      const m1 = createMedia(tripId, owner.userId, 'active');
+
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .send({ mediaIds: [m1] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.trashedCount).toBe(1);
+    });
+
+    it('should only trash active items and skip already trashed ones', async () => {
+      const m1 = createMedia(tripId, owner.userId, 'active');
+      const m2 = createMedia(tripId, owner.userId, 'trashed');
+
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: [m1, m2] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.trashedCount).toBe(1);
+    });
+
+    it('should skip mediaIds that do not belong to the trip', async () => {
+      const otherTrip = createTrip(owner.userId);
+      const m1 = createMedia(tripId, owner.userId, 'active');
+      const m2 = createMedia(otherTrip, owner.userId, 'active');
+
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: [m1, m2] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.trashedCount).toBe(1);
+
+      // m2 should remain active (belongs to different trip)
+      const db = getDb();
+      const row = db.prepare('SELECT status FROM media_items WHERE id = ?').get(m2) as any;
+      expect(row.status).toBe('active');
+    });
+
+    it('should return trashedCount 0 when no matching active items', async () => {
+      const res = await request(app)
+        .put(`/api/trips/${tripId}/media/trash`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ mediaIds: ['non-existent-id'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.trashedCount).toBe(0);
+    });
+  });
+
   describe('PUT /api/media/:id/restore', () => {
     it('should return 401 without auth token', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');

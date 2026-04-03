@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { authFetch } from '../contexts/AuthContext';
 
 interface User {
@@ -160,6 +161,12 @@ export default function AdminPage() {
                   {u.status === 'active' ? '活跃' : u.status === 'pending' ? '待审批' : '已禁用'}
                 </td>
                 <td style={{ padding: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <Link
+                    to={`/admin/users/${u.id}/trips`}
+                    style={{ textDecoration: 'none', color: '#4a90d9', fontSize: '0.85rem' }}
+                  >
+                    查看相册
+                  </Link>
                   {u.status === 'pending' && (
                     <>
                       <button onClick={() => handleAction(`/api/admin/users/${u.id}/approve`, 'PUT')}>

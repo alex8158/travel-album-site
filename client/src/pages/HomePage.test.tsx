@@ -7,44 +7,6 @@ import HomePage, { TripSummary } from './HomePage';
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
 
-// Mock AuthContext
-let mockAuthValue = {
-  token: null as string | null,
-  user: null as { userId: string; username: string; role: 'admin' | 'regular' } | null,
-  isLoggedIn: false,
-  login: vi.fn(),
-  logout: vi.fn(),
-  register: vi.fn(),
-};
-
-vi.mock('../contexts/AuthContext', () => ({
-  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useAuth: () => mockAuthValue,
-  authFetch: vi.fn(),
-}));
-
-function setLoggedOut() {
-  mockAuthValue = {
-    token: null,
-    user: null,
-    isLoggedIn: false,
-    login: vi.fn(),
-    logout: vi.fn(),
-    register: vi.fn(),
-  };
-}
-
-function setLoggedIn(userId = 'user-1') {
-  mockAuthValue = {
-    token: 'fake-token',
-    user: { userId, username: 'testuser', role: 'regular' },
-    isLoggedIn: true,
-    login: vi.fn(),
-    logout: vi.fn(),
-    register: vi.fn(),
-  };
-}
-
 function renderHomePage() {
   return render(
     <MemoryRouter>
@@ -60,7 +22,6 @@ const sampleTrips: TripSummary[] = [
     descriptionExcerpt: '樱花季的美好回忆',
     coverImageUrl: '/api/media/img1/thumbnail',
     mediaCount: 42,
-    visibility: 'public',
     createdAt: '2024-03-15T10:00:00.000Z',
   },
   {
@@ -68,7 +29,6 @@ const sampleTrips: TripSummary[] = [
     title: '巴黎之旅',
     coverImageUrl: '/api/media/img2/thumbnail',
     mediaCount: 18,
-    visibility: 'public',
     createdAt: '2024-02-10T08:00:00.000Z',
   },
 ];
@@ -76,7 +36,6 @@ const sampleTrips: TripSummary[] = [
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    setLoggedOut();
   });
 
   it('shows loading state initially', () => {
@@ -121,7 +80,7 @@ describe('HomePage', () => {
     });
   });
 
-  it('renders trip cards as links to /trips/:id', async () => {
+  it('renders all trip cards as links to /trips/:id', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: sampleTrips });
     renderHomePage();
 
@@ -131,11 +90,13 @@ describe('HomePage', () => {
 
     const link1 = screen.getByTestId('trip-card-trip-1');
     const link2 = screen.getByTestId('trip-card-trip-2');
+    expect(link1.tagName).toBe('A');
     expect(link1).toHaveAttribute('href', '/trips/trip-1');
+    expect(link2.tagName).toBe('A');
     expect(link2).toHaveAttribute('href', '/trips/trip-2');
   });
 
-  it('shows empty state for non-logged-in user when no trips exist', async () => {
+  it('shows empty state when no trips exist', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: [] });
     renderHomePage();
 
@@ -144,18 +105,6 @@ describe('HomePage', () => {
     });
 
     expect(screen.getByText(/还没有公开的旅行记录/)).toBeDefined();
-  });
-
-  it('shows empty state for logged-in user when no trips exist', async () => {
-    setLoggedIn();
-    mockedAxios.get.mockResolvedValueOnce({ data: [] });
-    renderHomePage();
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('空状态')).toBeDefined();
-    });
-
-    expect(screen.getByText(/还没有旅行记录，快去创建一个吧！/)).toBeDefined();
   });
 
   it('shows error message when fetch fails', async () => {
@@ -182,22 +131,7 @@ describe('HomePage', () => {
     expect(grid.style.gridTemplateColumns).toContain('repeat');
   });
 
-  it('shows "未公开" label on unlisted trip cards', async () => {
-    const tripsWithUnlisted: TripSummary[] = [
-      { ...sampleTrips[0], visibility: 'unlisted' },
-      sampleTrips[1],
-    ];
-    mockedAxios.get.mockResolvedValueOnce({ data: tripsWithUnlisted });
-    renderHomePage();
-
-    await waitFor(() => {
-      expect(screen.getByText('未公开')).toBeDefined();
-    });
-
-    expect(screen.getByTestId('unlisted-label-trip-1')).toBeDefined();
-  });
-
-  it('does not show "未公开" label on public trip cards', async () => {
+  it('does not show any unlisted labels or non-clickable cards', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: sampleTrips });
     renderHomePage();
 
@@ -206,58 +140,10 @@ describe('HomePage', () => {
     });
 
     expect(screen.queryByText('未公开')).toBeNull();
-  });
-
-  it('unlisted trip cards are not clickable (no link)', async () => {
-    const tripsWithUnlisted: TripSummary[] = [
-      { ...sampleTrips[0], visibility: 'unlisted' },
-      sampleTrips[1],
-    ];
-    mockedAxios.get.mockResolvedValueOnce({ data: tripsWithUnlisted });
-    renderHomePage();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('trip-card-trip-1')).toBeDefined();
+    // All cards should be links
+    const cards = screen.getAllByRole('article');
+    cards.forEach(card => {
+      expect(card.closest('a')).not.toBeNull();
     });
-
-    const unlistedCard = screen.getByTestId('trip-card-trip-1');
-    expect(unlistedCard.tagName).toBe('DIV');
-    expect(unlistedCard).not.toHaveAttribute('href');
-  });
-
-  it('public trip cards are clickable links', async () => {
-    const tripsWithUnlisted: TripSummary[] = [
-      { ...sampleTrips[0], visibility: 'unlisted' },
-      sampleTrips[1],
-    ];
-    mockedAxios.get.mockResolvedValueOnce({ data: tripsWithUnlisted });
-    renderHomePage();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('trip-card-trip-2')).toBeDefined();
-    });
-
-    const publicCard = screen.getByTestId('trip-card-trip-2');
-    expect(publicCard.tagName).toBe('A');
-    expect(publicCard).toHaveAttribute('href', '/trips/trip-2');
-  });
-
-  it('unlisted trip cards have reduced opacity', async () => {
-    const tripsWithUnlisted: TripSummary[] = [
-      { ...sampleTrips[0], visibility: 'unlisted' },
-      sampleTrips[1],
-    ];
-    mockedAxios.get.mockResolvedValueOnce({ data: tripsWithUnlisted });
-    renderHomePage();
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('东京之旅')).toBeDefined();
-    });
-
-    const unlistedArticle = screen.getByLabelText('东京之旅');
-    expect(unlistedArticle.style.opacity).toBe('0.5');
-
-    const publicArticle = screen.getByLabelText('巴黎之旅');
-    expect(publicArticle.style.opacity).toBe('1');
   });
 });

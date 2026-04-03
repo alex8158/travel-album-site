@@ -21,6 +21,42 @@ async function deleteFilesFromStorage(row: MediaItemRow): Promise<void> {
   }
 }
 
+// PUT /api/trips/:id/media/trash — Batch mark media items as trashed
+router.put('/trips/:id/media/trash', authMiddleware, requireAuth, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDb();
+    const tripId = req.params.id;
+    const { mediaIds } = req.body;
+
+    // Validate mediaIds is a non-empty array of strings
+    if (!Array.isArray(mediaIds) || mediaIds.length === 0 || !mediaIds.every((id: unknown) => typeof id === 'string')) {
+      return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'mediaIds 必须是非空字符串数组' } });
+    }
+
+    // Verify trip exists
+    const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+    if (!trip) {
+      throw new AppError(404, 'NOT_FOUND', '旅行不存在');
+    }
+
+    // Check ownership: user must be trip owner or admin
+    if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+    }
+
+    // Update matching active media items belonging to this trip
+    const placeholders = mediaIds.map(() => '?').join(',');
+    const result = db.prepare(
+      `UPDATE media_items SET status = 'trashed', trashed_reason = 'manual'
+       WHERE trip_id = ? AND id IN (${placeholders}) AND status = 'active'`
+    ).run(tripId, ...mediaIds);
+
+    return res.json({ trashedCount: result.changes });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/trips/:id/trash — Return all trashed media items for a trip
 router.get('/trips/:id/trash', authMiddleware, requireAuth, (req: Request, res: Response, next: NextFunction) => {
   try {

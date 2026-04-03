@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
-import { useAuth } from '../contexts/AuthContext';
 
 export interface TripSummary {
   id: string;
@@ -9,7 +8,6 @@ export interface TripSummary {
   descriptionExcerpt?: string;
   coverImageUrl: string;
   mediaCount: number;
-  visibility: 'public' | 'unlisted';
   createdAt: string;
 }
 
@@ -17,7 +15,6 @@ export default function HomePage() {
   const [trips, setTrips] = useState<TripSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const { isLoggedIn } = useAuth();
 
   useEffect(() => {
     let cancelled = false;
@@ -52,9 +49,7 @@ export default function HomePage() {
   if (trips.length === 0) {
     return (
       <div aria-label="空状态">
-        {isLoggedIn
-          ? '还没有旅行记录，快去创建一个吧！'
-          : '还没有公开的旅行记录。'}
+        还没有公开的旅行记录。
       </div>
     );
   }
@@ -69,37 +64,21 @@ export default function HomePage() {
         padding: '16px',
       }}
     >
-      {trips.map((trip) => {
-        const isUnlisted = trip.visibility === 'unlisted';
-        const card = (
+      {trips.map((trip) => (
+        <Link
+          key={trip.id}
+          to={`/trips/${trip.id}`}
+          style={{ textDecoration: 'none', color: 'inherit' }}
+          data-testid={`trip-card-${trip.id}`}
+        >
           <article
             aria-label={trip.title}
             style={{
               border: '1px solid #ddd',
               borderRadius: '8px',
               overflow: 'hidden',
-              opacity: isUnlisted ? 0.5 : 1,
-              position: 'relative',
             }}
           >
-            {isUnlisted && (
-              <span
-                data-testid={`unlisted-label-${trip.id}`}
-                style={{
-                  position: 'absolute',
-                  top: '8px',
-                  right: '8px',
-                  background: 'rgba(0,0,0,0.6)',
-                  color: '#fff',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  fontSize: '0.75rem',
-                  zIndex: 1,
-                }}
-              >
-                未公开
-              </span>
-            )}
             <img
               src={trip.coverImageUrl}
               alt={`${trip.title} 封面`}
@@ -113,31 +92,8 @@ export default function HomePage() {
               <span style={{ fontSize: '0.85rem', color: '#999' }}>{trip.mediaCount} 个素材</span>
             </div>
           </article>
-        );
-
-        if (isUnlisted) {
-          return (
-            <div
-              key={trip.id}
-              style={{ textDecoration: 'none', color: 'inherit', cursor: 'default' }}
-              data-testid={`trip-card-${trip.id}`}
-            >
-              {card}
-            </div>
-          );
-        }
-
-        return (
-          <Link
-            key={trip.id}
-            to={`/trips/${trip.id}`}
-            style={{ textDecoration: 'none', color: 'inherit' }}
-            data-testid={`trip-card-${trip.id}`}
-          >
-            {card}
-          </Link>
-        );
-      })}
+        </Link>
+      ))}
     </div>
   );
 }
