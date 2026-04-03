@@ -8,7 +8,7 @@ import { authMiddleware, requireAuth } from '../middleware/auth';
 const router = Router();
 
 // POST /api/trips — Create a new trip (requires auth)
-router.post('/', requireAuth, (req: Request, res: Response) => {
+router.post('/', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const { title, description } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -79,7 +79,7 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 // PUT /api/trips/:id — Update trip title and/or description (requires auth + owner/admin)
-router.put('/:id', requireAuth, (req: Request, res: Response) => {
+router.put('/:id', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const db = getDb();
   const existing = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as TripRow | undefined;
 
@@ -111,7 +111,7 @@ router.put('/:id', requireAuth, (req: Request, res: Response) => {
 });
 
 // PUT /api/trips/:id/visibility — Update trip visibility (requires auth + owner/admin)
-router.put('/:id/visibility', requireAuth, (req: Request, res: Response) => {
+router.put('/:id/visibility', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const { visibility } = req.body;
 
   if (visibility !== 'public' && visibility !== 'unlisted') {
@@ -140,7 +140,7 @@ router.put('/:id/visibility', requireAuth, (req: Request, res: Response) => {
 });
 
 // PUT /api/trips/:id/cover — Manually set cover image (requires auth + owner/admin)
-router.put('/:id/cover', requireAuth, (req: Request, res: Response) => {
+router.put('/:id/cover', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const db = getDb();
   const tripId = req.params.id;
 

@@ -21,7 +21,7 @@ export default function UserSpacePage() {
     let cancelled = false;
     async function fetchTrips() {
       try {
-        const res = await authFetch('/api/users/me/trips');
+        const res = await authFetch('/api/my/trips');
         if (!res.ok) throw new Error('加载失败');
         const data = await res.json();
         if (!cancelled) setTrips(data.trips ?? []);

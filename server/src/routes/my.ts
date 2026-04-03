@@ -34,10 +34,20 @@ router.get('/trips', (req: Request, res: Response) => {
   const userId = req.user!.userId;
 
   const rows = db.prepare(
-    `SELECT * FROM trips WHERE user_id = ? ORDER BY created_at DESC`
-  ).all(userId) as TripRow[];
+    `SELECT t.*, COUNT(m.id) AS media_count
+     FROM trips t
+     LEFT JOIN media_items m ON m.trip_id = t.id AND m.status = 'active'
+     WHERE t.user_id = ?
+     GROUP BY t.id
+     ORDER BY t.created_at DESC`
+  ).all(userId) as (TripRow & { media_count: number })[];
 
-  const trips = rows.map(rowToTrip);
+  const trips = rows.map(row => ({
+    ...rowToTrip(row),
+    mediaCount: row.media_count,
+    coverImageUrl: row.cover_image_id ? `/api/media/${row.cover_image_id}/thumbnail` : '',
+  }));
+
   return res.json({ trips });
 });
 
