@@ -96,6 +96,47 @@ router.get('/users/:id/trips', requireAdmin, (req: Request, res: Response) => {
   return res.json({ trips });
 });
 
+// GET /api/admin/storage/status — Return current storage config status
+router.get('/storage/status', requireAdmin, (_req: Request, res: Response) => {
+  const currentType = (process.env.STORAGE_TYPE || 'local') as StorageType;
+
+  const providers: { type: StorageType; label: string; configured: boolean; missing: string[] }[] = [
+    { type: 'local', label: '本地存储', configured: true, missing: [] },
+    {
+      type: 's3',
+      label: 'AWS S3',
+      configured: !!(process.env.S3_BUCKET && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY),
+      missing: [
+        ...(!process.env.S3_BUCKET ? ['S3_BUCKET'] : []),
+        ...(!process.env.AWS_ACCESS_KEY_ID ? ['AWS_ACCESS_KEY_ID'] : []),
+        ...(!process.env.AWS_SECRET_ACCESS_KEY ? ['AWS_SECRET_ACCESS_KEY'] : []),
+      ],
+    },
+    {
+      type: 'oss',
+      label: '阿里 OSS',
+      configured: !!(process.env.OSS_BUCKET && process.env.OSS_ACCESS_KEY_ID && process.env.OSS_ACCESS_KEY_SECRET),
+      missing: [
+        ...(!process.env.OSS_BUCKET ? ['OSS_BUCKET'] : []),
+        ...(!process.env.OSS_ACCESS_KEY_ID ? ['OSS_ACCESS_KEY_ID'] : []),
+        ...(!process.env.OSS_ACCESS_KEY_SECRET ? ['OSS_ACCESS_KEY_SECRET'] : []),
+      ],
+    },
+    {
+      type: 'cos',
+      label: '腾讯 COS',
+      configured: !!(process.env.COS_BUCKET && process.env.COS_SECRET_ID && process.env.COS_SECRET_KEY),
+      missing: [
+        ...(!process.env.COS_BUCKET ? ['COS_BUCKET'] : []),
+        ...(!process.env.COS_SECRET_ID ? ['COS_SECRET_ID'] : []),
+        ...(!process.env.COS_SECRET_KEY ? ['COS_SECRET_KEY'] : []),
+      ],
+    },
+  ];
+
+  res.json({ currentType, providers });
+});
+
 // POST /api/admin/storage/migrate — Trigger storage migration
 router.post('/storage/migrate', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {

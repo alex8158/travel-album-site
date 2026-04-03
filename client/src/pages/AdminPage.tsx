@@ -10,22 +10,33 @@ interface User {
   updatedAt: string;
 }
 
+interface StorageProviderStatus {
+  type: string;
+  label: string;
+  configured: boolean;
+  missing: string[];
+}
+
+interface StorageStatus {
+  currentType: string;
+  providers: StorageProviderStatus[];
+}
+
 export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionMsg, setActionMsg] = useState('');
 
-  // Storage migration state
-  const [targetType, setTargetType] = useState('s3');
+  // Storage state
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [targetType, setTargetType] = useState('');
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState('');
 
   // Reset password state
   const [resetUserId, setResetUserId] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
-
-  const currentStorageType = 'local'; // default; server doesn't expose this yet
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -40,7 +51,21 @@ export default function AdminPage() {
     }
   }, []);
 
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+  const fetchStorageStatus = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/admin/storage/status');
+      if (!res.ok) return;
+      const data: StorageStatus = await res.json();
+      setStorageStatus(data);
+      // Default target to first configured provider that isn't current
+      const available = data.providers.filter(p => p.configured && p.type !== data.currentType);
+      if (available.length > 0 && !targetType) {
+        setTargetType(available[0].type);
+      }
+    } catch { /* non-critical */ }
+  }, []);
+
+  useEffect(() => { fetchUsers(); fetchStorageStatus(); }, [fetchUsers, fetchStorageStatus]);
 
   async function handleAction(url: string, method: string, body?: object) {
     setActionMsg('');
@@ -183,27 +208,74 @@ export default function AdminPage() {
       {/* Storage Management */}
       <section style={sectionStyle}>
         <h2 style={{ fontSize: '1.1rem', marginBottom: '12px' }}>存储管理</h2>
-        <p style={{ marginBottom: '12px' }}>
-          当前存储类型：<strong>{currentStorageType}</strong>
-        </p>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <label>
-            迁移到：
-            <select
-              value={targetType}
-              onChange={(e) => setTargetType(e.target.value)}
-              style={{ marginLeft: '8px', padding: '4px 8px' }}
-            >
-              <option value="s3">AWS S3</option>
-              <option value="oss">阿里 OSS</option>
-              <option value="cos">腾讯 COS</option>
-              <option value="local">本地存储</option>
-            </select>
-          </label>
-          <button onClick={handleMigrate} disabled={migrating}>
-            {migrating ? '迁移中...' : '开始迁移'}
-          </button>
-        </div>
+
+        {storageStatus ? (
+          <>
+            <p style={{ marginBottom: '16px' }}>
+              当前存储类型：<strong>{storageStatus.providers.find(p => p.type === storageStatus.currentType)?.label || storageStatus.currentType}</strong>
+            </p>
+
+            <h3 style={{ fontSize: '0.95rem', marginBottom: '8px' }}>存储配置状态</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', marginBottom: '16px' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
+                  <th style={{ padding: '6px 8px' }}>存储类型</th>
+                  <th style={{ padding: '6px 8px' }}>状态</th>
+                  <th style={{ padding: '6px 8px' }}>缺少的环境变量</th>
+                </tr>
+              </thead>
+              <tbody>
+                {storageStatus.providers.map((p) => (
+                  <tr key={p.type} style={{ borderBottom: '1px solid #eee', background: p.type === storageStatus.currentType ? '#f0f7ff' : undefined }}>
+                    <td style={{ padding: '6px 8px' }}>
+                      {p.label}
+                      {p.type === storageStatus.currentType && <span style={{ marginLeft: '6px', color: '#4a90d9', fontSize: '0.8rem' }}>（当前）</span>}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>
+                      {p.configured
+                        ? <span style={{ color: '#2e7d32' }}>✅ 已配置</span>
+                        : <span style={{ color: '#999' }}>⚠️ 未配置</span>
+                      }
+                    </td>
+                    <td style={{ padding: '6px 8px', color: '#999', fontSize: '0.85rem' }}>
+                      {p.missing.length > 0 ? p.missing.join(', ') : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <h3 style={{ fontSize: '0.95rem', marginBottom: '8px' }}>存储迁移</h3>
+            {(() => {
+              const available = storageStatus.providers.filter(p => p.configured && p.type !== storageStatus.currentType);
+              if (available.length === 0) {
+                return <p style={{ color: '#999', fontSize: '0.9rem' }}>没有其他已配置的存储可供迁移。请在服务器上设置对应的环境变量后重启服务。</p>;
+              }
+              return (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <label>
+                    迁移到：
+                    <select
+                      value={targetType}
+                      onChange={(e) => setTargetType(e.target.value)}
+                      style={{ marginLeft: '8px', padding: '4px 8px' }}
+                    >
+                      {available.map((p) => (
+                        <option key={p.type} value={p.type}>{p.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button onClick={handleMigrate} disabled={migrating}>
+                    {migrating ? '迁移中...' : '开始迁移'}
+                  </button>
+                </div>
+              );
+            })()}
+          </>
+        ) : (
+          <p style={{ color: '#999' }}>加载存储配置中...</p>
+        )}
+
         {migrateResult && (
           <p style={{ marginTop: '8px', color: migrateResult.includes('失败') && !migrateResult.includes('成功') ? '#d32f2f' : '#333' }}>
             {migrateResult}
