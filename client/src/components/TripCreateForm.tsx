@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react';
-import axios from 'axios';
+import { authFetch } from '../contexts/AuthContext';
 
 export interface TripCreateFormProps {
   onCreated?: (trip: { id: string; title: string; description?: string }) => void;
@@ -21,16 +21,25 @@ export default function TripCreateForm({ onCreated }: TripCreateFormProps) {
     setError('');
 
     try {
-      const res = await axios.post('/api/trips', {
-        title: title.trim(),
-        description: description.trim() || undefined,
+      const res = await authFetch('/api/trips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim() || undefined,
+        }),
       });
-      onCreated?.(res.data);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error?.message || '创建旅行失败，请重试');
+      }
+      const data = await res.json();
+      onCreated?.(data);
       setTitle('');
       setDescription('');
     } catch (err: unknown) {
-      if (axios.isAxiosError(err) && err.response?.data?.error?.message) {
-        setError(err.response.data.error.message);
+      if (err instanceof Error) {
+        setError(err.message);
       } else {
         setError('创建旅行失败，请重试');
       }

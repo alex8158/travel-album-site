@@ -57,8 +57,12 @@ export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProp
     formData.append('file', entry.file);
 
     try {
+      const token = localStorage.getItem('auth_token');
       await axios.post(`/api/trips/${tripId}/media`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         onUploadProgress(progressEvent) {
           if (progressEvent.total) {
             const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
