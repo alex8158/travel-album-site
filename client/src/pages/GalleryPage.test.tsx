@@ -8,6 +8,47 @@ import GalleryPage, { GalleryData } from './GalleryPage';
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
 
+const TEST_OWNER_ID = 'user-owner-1';
+
+// Mock AuthContext
+const mockAuthFetch = vi.fn();
+let mockAuthValue = {
+  token: null as string | null,
+  user: null as { userId: string; username: string; role: 'admin' | 'regular' } | null,
+  isLoggedIn: false,
+  login: vi.fn(),
+  logout: vi.fn(),
+  register: vi.fn(),
+};
+
+vi.mock('../contexts/AuthContext', () => ({
+  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useAuth: () => mockAuthValue,
+  authFetch: (...args: unknown[]) => mockAuthFetch(...args),
+}));
+
+function setLoggedOut() {
+  mockAuthValue = {
+    token: null,
+    user: null,
+    isLoggedIn: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+    register: vi.fn(),
+  };
+}
+
+function setLoggedInAsOwner() {
+  mockAuthValue = {
+    token: 'fake-token',
+    user: { userId: TEST_OWNER_ID, username: 'owner', role: 'regular' },
+    isLoggedIn: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+    register: vi.fn(),
+  };
+}
+
 function renderGalleryPage(tripId = 'trip-1') {
   return render(
     <MemoryRouter initialEntries={[`/trips/${tripId}`]}>
@@ -24,6 +65,7 @@ const sampleData: GalleryData = {
     title: '东京之旅',
     description: '樱花季的美好回忆',
     coverImageId: 'img-1',
+    userId: TEST_OWNER_ID,
     createdAt: '2024-03-15T10:00:00.000Z',
     updatedAt: '2024-03-15T10:00:00.000Z',
   },
@@ -85,6 +127,7 @@ const sampleData: GalleryData = {
 describe('GalleryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setLoggedOut();
   });
 
   it('shows loading state initially', () => {
@@ -144,9 +187,7 @@ describe('GalleryPage', () => {
     expect(grid.style.display).toBe('grid');
     expect(grid.style.gridTemplateColumns).toContain('repeat');
 
-    // Video thumbnail should be rendered
     expect(screen.getByTestId('video-vid-1')).toBeDefined();
-    // Play icon overlay should be present
     expect(screen.getByTestId('play-icon-vid-1')).toBeDefined();
   });
 
@@ -248,8 +289,23 @@ describe('GalleryPage', () => {
     expect(screen.queryByText('樱花季的美好回忆')).toBeNull();
   });
 
-  // --- Edit trip info tests ---
-  it('shows edit button and opens edit modal on click', async () => {
+  // --- Non-owner should not see edit controls ---
+  it('hides edit/append/cover buttons for non-owner', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
+    renderGalleryPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('东京之旅')).toBeDefined();
+    });
+
+    expect(screen.queryByTestId('edit-trip-btn')).toBeNull();
+    expect(screen.queryByTestId('append-media-btn')).toBeNull();
+    expect(screen.queryByTestId('change-cover-btn')).toBeNull();
+  });
+
+  // --- Owner can see edit controls ---
+  it('shows edit button for trip owner and opens edit modal on click', async () => {
+    setLoggedInAsOwner();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
@@ -266,12 +322,16 @@ describe('GalleryPage', () => {
     expect(screen.getByLabelText('旅行说明')).toHaveValue('樱花季的美好回忆');
   });
 
-  it('saves edited trip info via PUT /api/trips/:id', async () => {
+  it('saves edited trip info via authFetch PUT', async () => {
+    setLoggedInAsOwner();
     const user = userEvent.setup();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
-    mockedAxios.put.mockResolvedValueOnce({
-      data: { ...sampleData.trip, title: '大阪之旅', description: '美食天堂' },
+
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ ...sampleData.trip, title: '大阪之旅', description: '美食天堂' }),
     });
+
     renderGalleryPage();
 
     await waitFor(() => {
@@ -295,10 +355,10 @@ describe('GalleryPage', () => {
     fireEvent.click(screen.getByTestId('edit-save-btn'));
 
     await waitFor(() => {
-      expect(mockedAxios.put).toHaveBeenCalledWith('/api/trips/trip-1', {
-        title: '大阪之旅',
-        description: '美食天堂',
-      });
+      expect(mockAuthFetch).toHaveBeenCalledWith(
+        '/api/trips/trip-1',
+        expect.objectContaining({ method: 'PUT' }),
+      );
     });
 
     await waitFor(() => {
@@ -307,6 +367,7 @@ describe('GalleryPage', () => {
   });
 
   it('closes edit modal on cancel', async () => {
+    setLoggedInAsOwner();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
@@ -326,7 +387,8 @@ describe('GalleryPage', () => {
   });
 
   // --- Cover image picker tests ---
-  it('shows change cover button and opens cover picker', async () => {
+  it('shows change cover button for owner and opens cover picker', async () => {
+    setLoggedInAsOwner();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
@@ -343,9 +405,15 @@ describe('GalleryPage', () => {
     expect(screen.getByTestId('cover-pick-img-2')).toBeDefined();
   });
 
-  it('calls PUT /api/trips/:id/cover when selecting a cover image', async () => {
+  it('calls PUT cover via authFetch when selecting a cover image', async () => {
+    setLoggedInAsOwner();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
-    mockedAxios.put.mockResolvedValueOnce({ data: { ...sampleData.trip, coverImageId: 'img-2' } });
+
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
+
     renderGalleryPage();
 
     await waitFor(() => {
@@ -360,7 +428,10 @@ describe('GalleryPage', () => {
     fireEvent.click(screen.getByTestId('cover-pick-img-2'));
 
     await waitFor(() => {
-      expect(mockedAxios.put).toHaveBeenCalledWith('/api/trips/trip-1/cover', { imageId: 'img-2' });
+      expect(mockAuthFetch).toHaveBeenCalledWith(
+        '/api/trips/trip-1/cover',
+        expect.objectContaining({ method: 'PUT' }),
+      );
     });
   });
 
@@ -404,7 +475,8 @@ describe('GalleryPage', () => {
     });
   });
 
-  it('calls PUT /api/duplicate-groups/:id/default when selecting a default image', async () => {
+  it('calls PUT default via authFetch when selecting a default image', async () => {
+    setLoggedInAsOwner();
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
@@ -428,14 +500,20 @@ describe('GalleryPage', () => {
       expect(screen.getByTestId('default-pick-img-3')).toBeDefined();
     });
 
-    // Mock the PUT call and the subsequent gallery refresh
-    mockedAxios.put.mockResolvedValueOnce({ data: {} });
+    mockAuthFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
+    // Mock the subsequent gallery refresh
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
 
     fireEvent.click(screen.getByTestId('default-pick-img-3'));
 
     await waitFor(() => {
-      expect(mockedAxios.put).toHaveBeenCalledWith('/api/duplicate-groups/group-1/default', { imageId: 'img-3' });
+      expect(mockAuthFetch).toHaveBeenCalledWith(
+        '/api/duplicate-groups/group-1/default',
+        expect.objectContaining({ method: 'PUT' }),
+      );
     });
   });
 });

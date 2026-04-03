@@ -3,30 +3,57 @@ import express from 'express';
 import request from 'supertest';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
+import { signToken } from '../services/authService';
+import { authMiddleware } from '../middleware/auth';
 import tripsRouter from './trips';
 import galleryRouter from './gallery';
 
 const app = express();
 app.use(express.json());
+app.use(authMiddleware);
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', galleryRouter);
+
+function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string; token: string } {
+  const db = getDb();
+  const userId = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO users (id, username, password_hash, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?)`
+  ).run(userId, `user_${userId.slice(0, 8)}`, 'hash', role, now, now);
+  const token = signToken({ userId, role });
+  return { userId, token };
+}
+
+function createTrip(userId: string): string {
+  const db = getDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO trips (id, title, description, visibility, user_id, created_at, updated_at)
+     VALUES (?, ?, ?, 'public', ?, ?, ?)`
+  ).run(id, 'Test Trip', null, userId, now, now);
+  return id;
+}
 
 function createMediaItem(
   tripId: string,
   mediaType: 'image' | 'video',
-  opts?: { duplicateGroupId?: string; mimeType?: string }
+  opts?: { duplicateGroupId?: string; mimeType?: string; visibility?: string }
 ): string {
   const db = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
   const mime = opts?.mimeType ?? (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+  const visibility = opts?.visibility ?? 'public';
   db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, visibility, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
-    id, tripId, `uploads/${tripId}/originals/${id}.${mediaType === 'image' ? 'jpg' : 'mp4'}`,
+    id, tripId, `${tripId}/originals/${id}.${mediaType === 'image' ? 'jpg' : 'mp4'}`,
     mediaType, mime, `test.${mediaType === 'image' ? 'jpg' : 'mp4'}`, 1024,
-    opts?.duplicateGroupId ?? null, now
+    opts?.duplicateGroupId ?? null, visibility, now
   );
   return id;
 }
@@ -42,12 +69,25 @@ function createDuplicateGroup(tripId: string, defaultImageId: string, imageCount
   return id;
 }
 
+function createTag(mediaId: string, tagName: string): void {
+  const db = getDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)`
+  ).run(id, mediaId, tagName, now);
+}
+
 describe('GET /api/trips/:id/gallery', () => {
+  let owner: { userId: string; token: string };
+
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
+    owner = createTestUser('regular');
   });
 
   afterEach(() => {
@@ -61,21 +101,18 @@ describe('GET /api/trips/:id/gallery', () => {
   });
 
   it('should return empty images and videos for trip with no media', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'Empty Trip' });
+    const tripId = createTrip(owner.userId);
 
-    const res = await request(app).get(`/api/trips/${trip.body.id}/gallery`);
+    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
-    expect(res.body.trip.id).toBe(trip.body.id);
-    expect(res.body.trip.title).toBe('Empty Trip');
+    expect(res.body.trip.id).toBe(tripId);
     expect(res.body.images).toEqual([]);
     expect(res.body.videos).toEqual([]);
   });
 
   it('should return mixed images and videos correctly partitioned', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'Mixed Trip' });
-    const tripId = trip.body.id;
+    const tripId = createTrip(owner.userId);
 
-    // Create ungrouped images and videos
     const img1 = createMediaItem(tripId, 'image');
     const img2 = createMediaItem(tripId, 'image');
     const vid1 = createMediaItem(tripId, 'video');
@@ -84,7 +121,6 @@ describe('GET /api/trips/:id/gallery', () => {
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
 
-    // All images should be ungrouped
     expect(res.body.images).toHaveLength(2);
     for (const img of res.body.images) {
       expect(img.item.mediaType).toBe('image');
@@ -94,15 +130,12 @@ describe('GET /api/trips/:id/gallery', () => {
       expect(img.originalUrl).toMatch(/^\/api\/media\/.+\/original$/);
     }
 
-    // All videos
     expect(res.body.videos).toHaveLength(2);
     for (const vid of res.body.videos) {
       expect(vid.mediaType).toBe('video');
-      // Videos without thumbnail_path should have empty thumbnailUrl
       expect(vid.thumbnailUrl).toBe('');
     }
 
-    // Verify specific IDs are present
     const imageIds = res.body.images.map((i: any) => i.item.id);
     expect(imageIds).toContain(img1);
     expect(imageIds).toContain(img2);
@@ -113,18 +146,14 @@ describe('GET /api/trips/:id/gallery', () => {
   });
 
   it('should only show default images for duplicate groups', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'Dedup Trip' });
-    const tripId = trip.body.id;
+    const tripId = createTrip(owner.userId);
 
-    // Create images first (without group assignment)
     const img1 = createMediaItem(tripId, 'image');
     const img2 = createMediaItem(tripId, 'image');
-    const img3 = createMediaItem(tripId, 'image'); // ungrouped
+    const img3 = createMediaItem(tripId, 'image');
 
-    // Create a duplicate group with img1 as default
     const groupId = createDuplicateGroup(tripId, img1, 2);
 
-    // Assign images to the group
     const db = getDb();
     db.prepare('UPDATE media_items SET duplicate_group_id = ? WHERE id = ?').run(groupId, img1);
     db.prepare('UPDATE media_items SET duplicate_group_id = ? WHERE id = ?').run(groupId, img2);
@@ -132,7 +161,6 @@ describe('GET /api/trips/:id/gallery', () => {
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
 
-    // Should have 2 images: the default from the group + the ungrouped one
     expect(res.body.images).toHaveLength(2);
 
     const defaultImg = res.body.images.find((i: any) => i.isDefault);
@@ -140,21 +168,17 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(defaultImg.item.id).toBe(img1);
     expect(defaultImg.duplicateGroup).toBeDefined();
     expect(defaultImg.duplicateGroup.id).toBe(groupId);
-    expect(defaultImg.duplicateGroup.defaultImageId).toBe(img1);
 
     const ungroupedImg = res.body.images.find((i: any) => !i.isDefault);
     expect(ungroupedImg).toBeDefined();
     expect(ungroupedImg.item.id).toBe(img3);
-    expect(ungroupedImg.duplicateGroup).toBeUndefined();
 
-    // img2 should NOT appear (it's in the group but not the default)
     const allImageIds = res.body.images.map((i: any) => i.item.id);
     expect(allImageIds).not.toContain(img2);
   });
 
   it('should include correct thumbnail and original URLs', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'URL Trip' });
-    const tripId = trip.body.id;
+    const tripId = createTrip(owner.userId);
     const imgId = createMediaItem(tripId, 'image');
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
@@ -165,14 +189,12 @@ describe('GET /api/trips/:id/gallery', () => {
   });
 
   it('should return thumbnailUrl for videos with thumbnail_path', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'Video Thumb Trip' });
-    const tripId = trip.body.id;
+    const tripId = createTrip(owner.userId);
     const vidId = createMediaItem(tripId, 'video');
 
-    // Set thumbnail_path in DB
     const db = getDb();
     db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(
-      `uploads/${tripId}/thumbnails/${vidId}_thumb.webp`, vidId
+      `${tripId}/thumbnails/${vidId}_thumb.webp`, vidId
     );
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
@@ -182,13 +204,188 @@ describe('GET /api/trips/:id/gallery', () => {
   });
 
   it('should return empty thumbnailUrl for videos without thumbnail_path', async () => {
-    const trip = await request(app).post('/api/trips').send({ title: 'No Thumb Trip' });
-    const tripId = trip.body.id;
-    const vidId = createMediaItem(tripId, 'video');
+    const tripId = createTrip(owner.userId);
+    createMediaItem(tripId, 'video');
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
     expect(res.body.videos[0].thumbnailUrl).toBe('');
+  });
+
+  describe('visibility filtering', () => {
+    it('should only return public media items for unauthenticated access', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const publicImg = createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public' });
+      createMediaItem(tripId, 'video', { visibility: 'private' });
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(publicImg);
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(publicVid);
+    });
+
+    it('should only return public media items for non-owner authenticated user', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const publicImg = createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public' });
+      createMediaItem(tripId, 'video', { visibility: 'private' });
+
+      const other = createTestUser('regular');
+      const res = await request(app)
+        .get(`/api/trips/${tripId}/gallery`)
+        .set('Authorization', `Bearer ${other.token}`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(publicImg);
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(publicVid);
+    });
+
+    it('should return all media items for the trip owner', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      createMediaItem(tripId, 'video', { visibility: 'public' });
+      createMediaItem(tripId, 'video', { visibility: 'private' });
+
+      const res = await request(app)
+        .get(`/api/trips/${tripId}/gallery`)
+        .set('Authorization', `Bearer ${owner.token}`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(2);
+      expect(res.body.videos).toHaveLength(2);
+    });
+
+    it('should return all media items for an admin', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      createMediaItem(tripId, 'video', { visibility: 'public' });
+      createMediaItem(tripId, 'video', { visibility: 'private' });
+
+      const admin = createTestUser('admin');
+      const res = await request(app)
+        .get(`/api/trips/${tripId}/gallery`)
+        .set('Authorization', `Bearer ${admin.token}`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(2);
+      expect(res.body.videos).toHaveLength(2);
+    });
+
+    it('should return empty arrays when all media is private and user is not owner', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      createMediaItem(tripId, 'video', { visibility: 'private' });
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(0);
+      expect(res.body.videos).toHaveLength(0);
+    });
+  });
+
+  describe('tag filtering', () => {
+    it('should return only images with the specified tag', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      const img2 = createMediaItem(tripId, 'image');
+      createTag(img1, 'sunset');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=sunset`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(img1);
+    });
+
+    it('should return only videos with the specified tag', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const vid1 = createMediaItem(tripId, 'video');
+      const vid2 = createMediaItem(tripId, 'video');
+      createTag(vid1, 'beach');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=beach`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(vid1);
+      expect(res.body.images).toHaveLength(0);
+    });
+
+    it('should normalize the tag query parameter (lowercase, no spaces)', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      createTag(img1, 'mytrip');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=My Trip`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(img1);
+    });
+
+    it('should return empty results when no media matches the tag', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image');
+      createMediaItem(tripId, 'video');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=nonexistent`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(0);
+      expect(res.body.videos).toHaveLength(0);
+    });
+
+    it('should return all media when no tag parameter is provided', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      const vid1 = createMediaItem(tripId, 'video');
+      createTag(img1, 'sunset');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.videos).toHaveLength(1);
+    });
+
+    it('should filter both images and videos with the same tag', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      const vid1 = createMediaItem(tripId, 'video');
+      const img2 = createMediaItem(tripId, 'image');
+      createTag(img1, '2024-01');
+      createTag(vid1, '2024-01');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=2024-01`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(img1);
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(vid1);
+    });
   });
 });

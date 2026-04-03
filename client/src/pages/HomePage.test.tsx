@@ -7,6 +7,44 @@ import HomePage, { TripSummary } from './HomePage';
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
 
+// Mock AuthContext
+let mockAuthValue = {
+  token: null as string | null,
+  user: null as { userId: string; username: string; role: 'admin' | 'regular' } | null,
+  isLoggedIn: false,
+  login: vi.fn(),
+  logout: vi.fn(),
+  register: vi.fn(),
+};
+
+vi.mock('../contexts/AuthContext', () => ({
+  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useAuth: () => mockAuthValue,
+  authFetch: vi.fn(),
+}));
+
+function setLoggedOut() {
+  mockAuthValue = {
+    token: null,
+    user: null,
+    isLoggedIn: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+    register: vi.fn(),
+  };
+}
+
+function setLoggedIn(userId = 'user-1') {
+  mockAuthValue = {
+    token: 'fake-token',
+    user: { userId, username: 'testuser', role: 'regular' },
+    isLoggedIn: true,
+    login: vi.fn(),
+    logout: vi.fn(),
+    register: vi.fn(),
+  };
+}
+
 function renderHomePage() {
   return render(
     <MemoryRouter>
@@ -38,6 +76,7 @@ const sampleTrips: TripSummary[] = [
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setLoggedOut();
   });
 
   it('shows loading state initially', () => {
@@ -96,7 +135,7 @@ describe('HomePage', () => {
     expect(link2).toHaveAttribute('href', '/trips/trip-2');
   });
 
-  it('shows empty state when no trips exist', async () => {
+  it('shows empty state for non-logged-in user when no trips exist', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: [] });
     renderHomePage();
 
@@ -104,7 +143,19 @@ describe('HomePage', () => {
       expect(screen.getByLabelText('空状态')).toBeDefined();
     });
 
-    expect(screen.getByText(/还没有旅行记录/)).toBeDefined();
+    expect(screen.getByText(/还没有公开的旅行记录/)).toBeDefined();
+  });
+
+  it('shows empty state for logged-in user when no trips exist', async () => {
+    setLoggedIn();
+    mockedAxios.get.mockResolvedValueOnce({ data: [] });
+    renderHomePage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('空状态')).toBeDefined();
+    });
+
+    expect(screen.getByText(/还没有旅行记录，快去创建一个吧！/)).toBeDefined();
   });
 
   it('shows error message when fetch fails', async () => {

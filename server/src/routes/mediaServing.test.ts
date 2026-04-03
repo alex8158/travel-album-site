@@ -29,6 +29,7 @@ describe('Media Serving API', () => {
 
   beforeEach(async () => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
@@ -45,7 +46,7 @@ describe('Media Serving API', () => {
     db.prepare(
       `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
        VALUES (?, ?, ?, 'image', 'image/jpeg', ?, ?, ?)`
-    ).run(mediaId, tripId, `uploads/${tripId}/originals/${mediaId}.jpg`, 'photo.jpg', imgBuf.length, new Date().toISOString());
+    ).run(mediaId, tripId, `${tripId}/originals/${mediaId}.jpg`, 'photo.jpg', imgBuf.length, new Date().toISOString());
   });
 
   afterEach(() => {
@@ -85,7 +86,7 @@ describe('Media Serving API', () => {
       // Verify thumbnail was created and DB updated
       const db = getDb();
       const row = db.prepare('SELECT thumbnail_path FROM media_items WHERE id = ?').get(mediaId) as any;
-      expect(row.thumbnail_path).toBe(`uploads/${tripId}/thumbnails/${mediaId}_thumb.webp`);
+      expect(row.thumbnail_path).toBe(`${tripId}/thumbnails/${mediaId}_thumb.webp`);
     });
 
     it('should serve existing thumbnail without regenerating', async () => {
@@ -101,7 +102,7 @@ describe('Media Serving API', () => {
       // Set thumbnail_path in DB
       const db = getDb();
       db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(
-        `uploads/${tripId}/thumbnails/${mediaId}_thumb.webp`, mediaId
+        `${tripId}/thumbnails/${mediaId}_thumb.webp`, mediaId
       );
 
       const res = await request(app).get(`/api/media/${mediaId}/thumbnail`);

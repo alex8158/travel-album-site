@@ -6,6 +6,7 @@ import { selectCoverImage } from './coverSelector';
 describe('CoverSelector', () => {
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
@@ -39,7 +40,7 @@ describe('CoverSelector', () => {
     ).run(
       id,
       tripId,
-      `uploads/${tripId}/originals/${id}.jpg`,
+      `${tripId}/originals/${id}.jpg`,
       mediaType,
       mediaType === 'image' ? 'image/jpeg' : 'video/mp4',
       `file_${id}.${mediaType === 'image' ? 'jpg' : 'mp4'}`,

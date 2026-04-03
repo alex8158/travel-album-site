@@ -1,9 +1,9 @@
 import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { getDb } from '../database';
-
-const serverRoot = path.join(__dirname, '..', '..');
+import { getStorageProvider } from '../storage/factory';
 
 export interface OptimizeOptions {
   maxResolution?: number;
@@ -35,33 +35,41 @@ export async function optimizeImage(
 ): Promise<string> {
   const ext = path.extname(imagePath).slice(1) || 'jpg';
   const outputFilename = `${mediaId}_opt.${ext}`;
-  const outputDir = path.join(serverRoot, 'uploads', tripId, 'optimized');
-  fs.mkdirSync(outputDir, { recursive: true });
+  const outputRelativePath = `${tripId}/optimized/${outputFilename}`;
 
-  const outputAbsPath = path.join(outputDir, outputFilename);
+  // Process to a temp file, then save via StorageProvider
+  const tempPath = path.join(os.tmpdir(), outputFilename);
 
-  let pipeline = sharp(imagePath);
+  try {
+    let pipeline = sharp(imagePath);
 
-  if (options?.maxResolution) {
-    pipeline = pipeline.resize(options.maxResolution, options.maxResolution, {
-      fit: 'inside',
-      withoutEnlargement: true,
-    });
+    if (options?.maxResolution) {
+      pipeline = pipeline.resize(options.maxResolution, options.maxResolution, {
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+    }
+
+    pipeline = pipeline
+      .normalize()
+      .modulate({ brightness: 1.0 })
+      .sharpen({ sigma: 1.0 });
+
+    const lowerExt = ext.toLowerCase();
+    if (options?.jpegQuality && (lowerExt === 'jpeg' || lowerExt === 'jpg')) {
+      pipeline = pipeline.jpeg({ quality: options.jpegQuality });
+    }
+
+    await pipeline.toFile(tempPath);
+
+    const storageProvider = getStorageProvider();
+    const buffer = fs.readFileSync(tempPath);
+    await storageProvider.save(outputRelativePath, buffer);
+  } finally {
+    try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
   }
 
-  pipeline = pipeline
-    .normalize()
-    .modulate({ brightness: 1.0 })
-    .sharpen({ sigma: 1.0 });
-
-  const lowerExt = ext.toLowerCase();
-  if (options?.jpegQuality && (lowerExt === 'jpeg' || lowerExt === 'jpg')) {
-    pipeline = pipeline.jpeg({ quality: options.jpegQuality });
-  }
-
-  await pipeline.toFile(outputAbsPath);
-
-  return `uploads/${tripId}/optimized/${outputFilename}`;
+  return outputRelativePath;
 }
 
 /**
@@ -74,6 +82,7 @@ export async function optimizeTrip(
   options?: OptimizeOptions
 ): Promise<OptimizeResult[]> {
   const db = getDb();
+  const storageProvider = getStorageProvider();
 
   const rows = db.prepare(
     "SELECT id, file_path, original_filename FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
@@ -89,9 +98,9 @@ export async function optimizeTrip(
   const results: OptimizeResult[] = [];
 
   for (const row of rows) {
-    const absolutePath = path.resolve(serverRoot, row.file_path);
     try {
-      const optimizedPath = await optimizeImage(absolutePath, tripId, row.id, options);
+      const localPath = await storageProvider.downloadToTemp(row.file_path);
+      const optimizedPath = await optimizeImage(localPath, tripId, row.id, options);
       updateOptimizedStmt.run(optimizedPath, row.id);
       results.push({ mediaId: row.id, optimizedPath });
     } catch (err) {

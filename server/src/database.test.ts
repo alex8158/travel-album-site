@@ -29,8 +29,9 @@ describe('Database initialization', () => {
     const columns = db.prepare("PRAGMA table_info(trips)").all() as Array<{ name: string }>;
     const columnNames = columns.map((c) => c.name);
     expect(columnNames).toContain('visibility');
+    expect(columnNames).toContain('user_id');
     expect(columnNames).toEqual(
-      expect.arrayContaining(['id', 'title', 'description', 'cover_image_id', 'visibility', 'created_at', 'updated_at']),
+      expect.arrayContaining(['id', 'title', 'description', 'cover_image_id', 'visibility', 'user_id', 'created_at', 'updated_at']),
     );
   });
 
@@ -38,12 +39,17 @@ describe('Database initialization', () => {
     const db = getDb();
     const columns = db.prepare("PRAGMA table_info(media_items)").all() as Array<{ name: string }>;
     const columnNames = columns.map((c) => c.name);
-    expect(columnNames).toEqual([
-      'id', 'trip_id', 'file_path', 'thumbnail_path', 'media_type', 'mime_type',
-      'original_filename', 'file_size', 'width', 'height', 'perceptual_hash',
-      'quality_score', 'sharpness_score', 'duplicate_group_id', 'created_at',
-      'status', 'trashed_reason', 'processing_error', 'optimized_path', 'compiled_path',
-    ]);
+    expect(columnNames).toContain('user_id');
+    expect(columnNames).toContain('visibility');
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        'id', 'trip_id', 'file_path', 'thumbnail_path', 'media_type', 'mime_type',
+        'original_filename', 'file_size', 'width', 'height', 'perceptual_hash',
+        'quality_score', 'sharpness_score', 'duplicate_group_id', 'created_at',
+        'status', 'trashed_reason', 'processing_error', 'optimized_path', 'compiled_path',
+        'user_id', 'visibility',
+      ]),
+    );
   });
 
   it('should create duplicate_groups table with correct columns', () => {
@@ -65,5 +71,31 @@ describe('Database initialization', () => {
     const row = db.prepare('SELECT * FROM trips WHERE id = ?').get('trip-1') as any;
     expect(row.title).toBe('Test Trip');
     expect(row.description).toBe('A test trip');
+  });
+
+  it('should create users table with correct columns', () => {
+    const db = getDb();
+    const columns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+    const columnNames = columns.map((c) => c.name);
+    expect(columnNames).toEqual(
+      expect.arrayContaining(['id', 'username', 'password_hash', 'role', 'status', 'created_at', 'updated_at']),
+    );
+  });
+
+  it('should create media_tags table with correct columns', () => {
+    const db = getDb();
+    const columns = db.prepare("PRAGMA table_info(media_tags)").all() as Array<{ name: string }>;
+    const columnNames = columns.map((c) => c.name);
+    expect(columnNames).toEqual(
+      expect.arrayContaining(['id', 'media_id', 'tag_name', 'created_at']),
+    );
+  });
+
+  it('should create indexes on media_tags table', () => {
+    const db = getDb();
+    const indexes = db.prepare("PRAGMA index_list(media_tags)").all() as Array<{ name: string }>;
+    const indexNames = indexes.map((i) => i.name);
+    expect(indexNames).toContain('idx_media_tags_media_id');
+    expect(indexNames).toContain('idx_media_tags_tag_name');
   });
 });

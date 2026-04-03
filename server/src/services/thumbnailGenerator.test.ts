@@ -22,6 +22,7 @@ describe('ThumbnailGenerator', () => {
 
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
@@ -47,9 +48,9 @@ describe('ThumbnailGenerator', () => {
 
       const relPath = await generateThumbnail(origPath, tripId, mediaId);
 
-      expect(relPath).toBe(`uploads/${tripId}/thumbnails/${mediaId}_thumb.webp`);
+      expect(relPath).toBe(`${tripId}/thumbnails/${mediaId}_thumb.webp`);
 
-      const absPath = path.join(uploadsBase, '..', relPath);
+      const absPath = path.join(uploadsBase, relPath);
       expect(fs.existsSync(absPath)).toBe(true);
 
       const meta = await sharp(absPath).metadata();
@@ -65,7 +66,7 @@ describe('ThumbnailGenerator', () => {
       fs.writeFileSync(origPath, imgBuf);
 
       const relPath = await generateThumbnail(origPath, tripId, mediaId);
-      const absPath = path.join(uploadsBase, '..', relPath);
+      const absPath = path.join(uploadsBase, relPath);
       const meta = await sharp(absPath).metadata();
 
       // 1000x500 scaled to fit 400x400 → 400x200
@@ -80,7 +81,7 @@ describe('ThumbnailGenerator', () => {
       fs.writeFileSync(origPath, imgBuf);
 
       const relPath = await generateThumbnail(origPath, tripId, mediaId);
-      const absPath = path.join(uploadsBase, '..', relPath);
+      const absPath = path.join(uploadsBase, relPath);
       const meta = await sharp(absPath).metadata();
 
       expect(meta.width).toBe(200);
@@ -103,16 +104,16 @@ describe('ThumbnailGenerator', () => {
         db.prepare(
           `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
            VALUES (?, ?, ?, 'image', 'image/jpeg', ?, ?, ?)`
-        ).run(id, tripId, `uploads/${tripId}/originals/${filename}`, `photo${i}.jpg`, imgBuf.length, new Date().toISOString());
+        ).run(id, tripId, `${tripId}/originals/${filename}`, `photo${i}.jpg`, imgBuf.length, new Date().toISOString());
       }
 
       await generateThumbnailsForTrip(tripId);
 
       for (const id of ids) {
         const row = db.prepare('SELECT thumbnail_path FROM media_items WHERE id = ?').get(id) as any;
-        expect(row.thumbnail_path).toBe(`uploads/${tripId}/thumbnails/${id}_thumb.webp`);
+        expect(row.thumbnail_path).toBe(`${tripId}/thumbnails/${id}_thumb.webp`);
 
-        const absPath = path.resolve(uploadsBase, '..', row.thumbnail_path);
+        const absPath = path.resolve(uploadsBase, row.thumbnail_path);
         expect(fs.existsSync(absPath)).toBe(true);
       }
     });
@@ -123,7 +124,7 @@ describe('ThumbnailGenerator', () => {
       db.prepare(
         `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
          VALUES (?, ?, ?, 'unknown', 'application/octet-stream', ?, ?, ?)`
-      ).run(unknownId, tripId, `uploads/${tripId}/originals/${unknownId}.bin`, 'file.bin', 1000, new Date().toISOString());
+      ).run(unknownId, tripId, `${tripId}/originals/${unknownId}.bin`, 'file.bin', 1000, new Date().toISOString());
 
       await generateThumbnailsForTrip(tripId);
 

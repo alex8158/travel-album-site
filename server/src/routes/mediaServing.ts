@@ -1,12 +1,10 @@
 import { Router, Request, Response } from 'express';
-import path from 'path';
 import fs from 'fs';
 import { getDb } from '../database';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
+import { getStorageProvider } from '../storage/factory';
 
 const router = Router();
-
-const serverRoot = path.join(__dirname, '..', '..');
 
 interface MediaItemRow {
   id: string;
@@ -32,25 +30,30 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
   }
 
-  let thumbAbsPath: string | null = null;
+  const storageProvider = getStorageProvider();
+  let thumbLocalPath: string | null = null;
 
-  // If thumbnail already exists on disk, use it
+  // If thumbnail already exists in storage, use it
   if (row.thumbnail_path) {
-    const candidate = path.resolve(serverRoot, row.thumbnail_path);
-    if (fs.existsSync(candidate)) {
-      thumbAbsPath = candidate;
+    try {
+      const exists = await storageProvider.exists(row.thumbnail_path);
+      if (exists) {
+        thumbLocalPath = await storageProvider.downloadToTemp(row.thumbnail_path);
+      }
+    } catch {
+      // Fall through to regenerate
     }
   }
 
   // Generate on-the-fly if no thumbnail yet
-  if (!thumbAbsPath) {
+  if (!thumbLocalPath) {
     try {
-      const originalAbs = path.resolve(serverRoot, row.file_path);
+      const originalLocalPath = await storageProvider.downloadToTemp(row.file_path);
       const thumbRelPath = row.media_type === 'video'
-        ? await generateVideoThumbnail(originalAbs, row.trip_id, row.id)
-        : await generateThumbnail(originalAbs, row.trip_id, row.id);
+        ? await generateVideoThumbnail(originalLocalPath, row.trip_id, row.id)
+        : await generateThumbnail(originalLocalPath, row.trip_id, row.id);
       db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
-      thumbAbsPath = path.resolve(serverRoot, thumbRelPath);
+      thumbLocalPath = await storageProvider.downloadToTemp(thumbRelPath);
     } catch (err) {
       console.error(`[MediaServing] On-the-fly thumbnail generation failed for ${row.id}:`, err);
       if (row.media_type === 'video') {
@@ -60,11 +63,11 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     }
   }
 
-  return res.sendFile(thumbAbsPath);
+  return res.sendFile(thumbLocalPath);
 });
 
 // GET /api/media/:id/original — Serve the best available version (optimized/compiled or original)
-router.get('/:id/original', (req: Request, res: Response) => {
+router.get('/:id/original', async (req: Request, res: Response) => {
   const db = getDb();
   const row = db.prepare(
     'SELECT id, file_path, media_type, optimized_path, compiled_path FROM media_items WHERE id = ?'
@@ -74,36 +77,45 @@ router.get('/:id/original', (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
   }
 
+  const storageProvider = getStorageProvider();
+
   // For videos: serve compiled version by default, unless ?original=true
   if (row.media_type === 'video') {
     const wantOriginal = req.query.original === 'true';
     if (!wantOriginal && row.compiled_path) {
-      const compiledAbs = path.resolve(serverRoot, row.compiled_path);
-      if (fs.existsSync(compiledAbs)) {
-        return res.sendFile(compiledAbs);
-      }
+      try {
+        const compiledLocal = await storageProvider.downloadToTemp(row.compiled_path);
+        if (fs.existsSync(compiledLocal)) {
+          return res.sendFile(compiledLocal);
+        }
+      } catch { /* fall through */ }
     }
   }
 
   // For images: serve optimized version if available
   if (row.media_type === 'image' && row.optimized_path) {
-    const optimizedAbs = path.resolve(serverRoot, row.optimized_path);
-    if (fs.existsSync(optimizedAbs)) {
-      return res.sendFile(optimizedAbs);
-    }
+    try {
+      const optimizedLocal = await storageProvider.downloadToTemp(row.optimized_path);
+      if (fs.existsSync(optimizedLocal)) {
+        return res.sendFile(optimizedLocal);
+      }
+    } catch { /* fall through */ }
   }
 
   // Fallback: serve original file
-  const absPath = path.resolve(serverRoot, row.file_path);
-  if (!fs.existsSync(absPath)) {
+  try {
+    const localPath = await storageProvider.downloadToTemp(row.file_path);
+    if (!fs.existsSync(localPath)) {
+      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
+    }
+    return res.sendFile(localPath);
+  } catch {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
   }
-
-  return res.sendFile(absPath);
 });
 
 // GET /api/media/:id/raw — Always serve the original file regardless of optimized/compiled versions
-router.get('/:id/raw', (req: Request, res: Response) => {
+router.get('/:id/raw', async (req: Request, res: Response) => {
   const db = getDb();
   const row = db.prepare(
     'SELECT id, file_path FROM media_items WHERE id = ?'
@@ -113,12 +125,16 @@ router.get('/:id/raw', (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
   }
 
-  const absPath = path.resolve(serverRoot, row.file_path);
-  if (!fs.existsSync(absPath)) {
+  try {
+    const storageProvider = getStorageProvider();
+    const localPath = await storageProvider.downloadToTemp(row.file_path);
+    if (!fs.existsSync(localPath)) {
+      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
+    }
+    return res.sendFile(localPath);
+  } catch {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
   }
-
-  return res.sendFile(absPath);
 });
 
 export default router;

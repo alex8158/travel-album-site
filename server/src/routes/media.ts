@@ -6,10 +6,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { classify } from '../services/fileClassifier';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
+import { requireAuth } from '../middleware/auth';
+import { TripRow } from '../helpers/tripRow';
+import { getStorageProvider } from '../storage/factory';
+import { generateTags } from '../services/tagGenerator';
 
 const router = Router();
-
-const uploadsBase = path.join(__dirname, '..', '..', 'uploads');
 
 const SUPPORTED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -66,15 +68,20 @@ function getFileExtension(originalname: string, mimetype: string): string {
 // Use multer memory storage so we can validate before writing to disk
 const upload = multer({ storage: multer.memoryStorage() });
 
-// POST /api/trips/:id/media — Upload a media file
-router.post('/:id/media', upload.single('file'), async (req: Request, res: Response) => {
+// POST /api/trips/:id/media — Upload a media file (requires auth + trip owner/admin)
+router.post('/:id/media', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists
-  const trip = db.prepare('SELECT id FROM trips WHERE id = ?').get(tripId);
+  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
   if (!trip) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify user is trip owner or admin
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
   // Check file was provided
@@ -96,14 +103,12 @@ router.post('/:id/media', upload.single('file'), async (req: Request, res: Respo
 
   const mediaId = uuidv4();
   const ext = getFileExtension(file.originalname, file.mimetype);
-  const tripDir = path.join(uploadsBase, tripId, 'originals');
-  fs.mkdirSync(tripDir, { recursive: true });
-
   const filename = `${mediaId}${ext}`;
-  const filePath = path.join(tripDir, filename);
+  const relativePath = `${tripId}/originals/${filename}`;
 
-  // Write file to disk
-  fs.writeFileSync(filePath, file.buffer);
+  // Save file via StorageProvider
+  const storageProvider = getStorageProvider();
+  await storageProvider.save(relativePath, file.buffer);
 
   // Determine effective mime type
   const effectiveMime = SUPPORTED_MIME_TYPES.has(file.mimetype)
@@ -111,16 +116,17 @@ router.post('/:id/media', upload.single('file'), async (req: Request, res: Respo
     : EXTENSION_TO_MIME[ext] || file.mimetype;
 
   const now = new Date().toISOString();
-  const relativePath = `uploads/${tripId}/originals/${filename}`;
+  const userId = req.user!.userId;
 
   db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, file.buffer.length, now);
+    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, file.buffer.length, userId, 'public', now);
 
   // Auto-classify file type using magic bytes / extension fallback
   try {
-    const classification = await classify(filePath);
+    const localPath = await storageProvider.downloadToTemp(relativePath);
+    const classification = await classify(localPath);
     db.prepare(
       `UPDATE media_items SET media_type = ?, mime_type = ? WHERE id = ?`
     ).run(classification.type, classification.mimeType, mediaId);
@@ -129,8 +135,55 @@ router.post('/:id/media', upload.single('file'), async (req: Request, res: Respo
     // Leave as 'unknown' — non-fatal
   }
 
+  // Generate tags and insert into media_tags table
+  try {
+    const classifiedRow = db.prepare('SELECT media_type FROM media_items WHERE id = ?').get(mediaId) as { media_type: string } | undefined;
+    const mediaType = classifiedRow?.media_type || 'unknown';
+    const tags = generateTags(mediaId, trip.title, mediaType, file.originalname, new Date());
+    const insertTag = db.prepare(
+      'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
+    );
+    for (const tag of tags) {
+      insertTag.run(tag.id, tag.mediaId, tag.tagName, tag.createdAt);
+    }
+  } catch (err) {
+    console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
+    // Non-fatal — media item is still created successfully
+  }
+
   const row = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
   return res.status(201).json(rowToMediaItem(row));
+});
+
+// PUT /api/trips/:id/media/visibility — Batch change visibility for all media in a trip (owner or admin)
+router.put('/:id/media/visibility', requireAuth, (req: Request, res: Response) => {
+  const tripId = req.params.id;
+  const { visibility } = req.body;
+
+  if (visibility !== 'public' && visibility !== 'private') {
+    return res.status(400).json({
+      error: { code: 'INVALID_VISIBILITY', message: '可见性状态无效，必须为 public 或 private' }
+    });
+  }
+
+  const db = getDb();
+
+  // Verify trip exists
+  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!trip) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify user is trip owner or admin
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  const result = db.prepare(
+    "UPDATE media_items SET visibility = ? WHERE trip_id = ? AND status = 'active'"
+  ).run(visibility, tripId);
+
+  return res.json({ updatedCount: result.changes });
 });
 
 export default router;

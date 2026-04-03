@@ -20,6 +20,8 @@ export interface MediaItemRow {
   processing_error: string | null;
   optimized_path: string | null;
   compiled_path: string | null;
+  user_id: string | null;
+  visibility: string;
   created_at: string;
 }
 
@@ -49,6 +51,8 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     processingError: row.processing_error ?? undefined,
     optimizedPath: row.optimized_path ?? undefined,
     compiledPath: row.compiled_path ?? undefined,
+    userId: row.user_id ?? undefined,
+    visibility: (row.visibility || 'public') as MediaItem['visibility'],
     createdAt: row.created_at,
   };
 }

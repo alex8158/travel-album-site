@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { getDb } from './database';
+import authRouter from './routes/auth';
 import tripsRouter from './routes/trips';
 import mediaRouter from './routes/media';
 import processRouter from './routes/process';
@@ -10,6 +11,8 @@ import duplicateGroupsRouter from './routes/duplicateGroups';
 import mediaServingRouter from './routes/mediaServing';
 import galleryRouter from './routes/gallery';
 import trashRouter from './routes/trash';
+import adminRouter from './routes/admin';
+import usersRouter from './routes/users';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -33,6 +36,7 @@ for (const dir of dirs) {
 }
 
 // Routes
+app.use('/api/auth', authRouter);
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', mediaRouter);
 app.use('/api/trips', processRouter);
@@ -40,6 +44,8 @@ app.use('/api/duplicate-groups', duplicateGroupsRouter);
 app.use('/api/media', mediaServingRouter);
 app.use('/api/trips', galleryRouter);
 app.use('/api', trashRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/users', usersRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

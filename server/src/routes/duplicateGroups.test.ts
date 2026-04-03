@@ -40,6 +40,7 @@ function seedGroup(db: ReturnType<typeof getDb>) {
 describe('PUT /api/duplicate-groups/:id/default', () => {
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');

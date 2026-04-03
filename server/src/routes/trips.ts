@@ -3,11 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import type { TripSummary, TripVisibility } from '../types';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
+import { authMiddleware, requireAuth } from '../middleware/auth';
 
 const router = Router();
 
-// POST /api/trips — Create a new trip
-router.post('/', (req: Request, res: Response) => {
+// POST /api/trips — Create a new trip (requires auth)
+router.post('/', requireAuth, (req: Request, res: Response) => {
   const { title, description } = req.body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -17,23 +18,25 @@ router.post('/', (req: Request, res: Response) => {
   const db = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
+  const userId = req.user!.userId;
 
   db.prepare(
-    'INSERT INTO trips (id, title, description, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, title.trim(), description ?? null, 'public', now, now);
+    'INSERT INTO trips (id, title, description, visibility, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, title.trim(), description ?? null, 'public', userId, now, now);
 
   const row = db.prepare('SELECT * FROM trips WHERE id = ?').get(id) as TripRow;
   return res.status(201).json(rowToTrip(row));
 });
 
-// GET /api/trips — List all trips as TripSummary, ordered by created_at DESC
-router.get('/', (_req: Request, res: Response) => {
+// GET /api/trips — List public trips as TripSummary, ordered by created_at DESC
+router.get('/', authMiddleware, (_req: Request, res: Response) => {
   const db = getDb();
   const rows = db.prepare(`
     SELECT t.*,
            COUNT(m.id) AS media_count
     FROM trips t
     LEFT JOIN media_items m ON m.trip_id = t.id
+    WHERE t.visibility = 'public'
     GROUP BY t.id
     ORDER BY t.created_at DESC
   `).all() as (TripRow & { media_count: number })[];
@@ -75,13 +78,18 @@ router.get('/:id', (req: Request, res: Response) => {
   return res.json(rowToTrip(row));
 });
 
-// PUT /api/trips/:id — Update trip title and/or description
-router.put('/:id', (req: Request, res: Response) => {
+// PUT /api/trips/:id — Update trip title and/or description (requires auth + owner/admin)
+router.put('/:id', requireAuth, (req: Request, res: Response) => {
   const db = getDb();
   const existing = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as TripRow | undefined;
 
   if (!existing) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify owner or admin
+  if (req.user!.role !== 'admin' && existing.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
   const { title, description } = req.body;
@@ -102,8 +110,8 @@ router.put('/:id', (req: Request, res: Response) => {
   return res.json(rowToTrip(row));
 });
 
-// PUT /api/trips/:id/visibility — Update trip visibility
-router.put('/:id/visibility', (req: Request, res: Response) => {
+// PUT /api/trips/:id/visibility — Update trip visibility (requires auth + owner/admin)
+router.put('/:id/visibility', requireAuth, (req: Request, res: Response) => {
   const { visibility } = req.body;
 
   if (visibility !== 'public' && visibility !== 'unlisted') {
@@ -119,6 +127,11 @@ router.put('/:id/visibility', (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
+  // Verify owner or admin
+  if (req.user!.role !== 'admin' && existing.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
   const now = new Date().toISOString();
   db.prepare('UPDATE trips SET visibility = ?, updated_at = ? WHERE id = ?').run(visibility, now, req.params.id);
 
@@ -126,14 +139,19 @@ router.put('/:id/visibility', (req: Request, res: Response) => {
   return res.json(rowToTrip(row));
 });
 
-// PUT /api/trips/:id/cover — Manually set cover image
-router.put('/:id/cover', (req: Request, res: Response) => {
+// PUT /api/trips/:id/cover — Manually set cover image (requires auth + owner/admin)
+router.put('/:id/cover', requireAuth, (req: Request, res: Response) => {
   const db = getDb();
   const tripId = req.params.id;
 
   const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
   if (!trip) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify owner or admin
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
   const { imageId } = req.body;

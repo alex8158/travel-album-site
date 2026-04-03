@@ -5,6 +5,7 @@ import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
 import type { ProcessResult } from '../components/ProcessTrigger';
+import { authFetch } from '../contexts/AuthContext';
 
 type Step = 'create' | 'upload' | 'process' | 'done';
 type Visibility = 'public' | 'unlisted';
@@ -24,7 +25,7 @@ export default function UploadPage() {
     if (!tripId) return;
     setUpdating(true);
     try {
-      await fetch(`/api/trips/${tripId}/visibility`, {
+      await authFetch(`/api/trips/${tripId}/visibility`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ visibility: value }),

@@ -6,6 +6,7 @@ export interface Trip {
   description?: string;
   coverImageId?: string;
   visibility: TripVisibility;
+  userId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +31,8 @@ export interface MediaItem {
   processingError?: string;
   optimizedPath?: string;
   compiledPath?: string;
+  userId?: string;
+  visibility: 'public' | 'private';
   createdAt: string;
 }
 
@@ -93,4 +96,25 @@ export interface ProcessOptions {
     jpegQuality?: number;
     videoResolution?: number;
   };
+}
+
+export interface User {
+  id: string;
+  username: string;
+  role: 'admin' | 'regular';
+  status: 'active' | 'pending' | 'disabled';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JwtPayload {
+  userId: string;
+  role: 'admin' | 'regular';
+}
+
+export interface MediaTag {
+  id: string;
+  mediaId: string;
+  tagName: string;
+  createdAt: string;
 }

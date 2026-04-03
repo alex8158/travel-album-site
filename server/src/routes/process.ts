@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import path from 'path';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
 import { processTrip, getTrashedDuplicateCount } from '../services/qualitySelector';
@@ -12,15 +11,12 @@ import { editVideo } from '../services/videoEditor';
 import { ProgressReporter } from '../services/progressReporter';
 import type { MediaItem } from '../types';
 import { MediaItemRow, rowToMediaItem as baseRowToMediaItem } from '../helpers/mediaItemRow';
+import { getStorageProvider } from '../storage/factory';
 
 const router = Router();
 
-// Base directory for resolving relative file paths stored in DB
-const serverRoot = path.join(__dirname, '..', '..');
-
 function rowToMediaItem(row: MediaItemRow): MediaItem {
-  const item = baseRowToMediaItem(row);
-  return { ...item, filePath: path.resolve(serverRoot, row.file_path) };
+  return baseRowToMediaItem(row);
 }
 
 // POST /api/trips/:id/process — Trigger full processing pipeline and return summary
@@ -79,8 +75,9 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
 
   for (const videoRow of videoRows) {
-    const videoPath = path.resolve(serverRoot, videoRow.file_path);
+    const storageProvider = getStorageProvider();
     try {
+      const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
       const analysis = await analyzeVideo(videoPath, videoRow.id);
       const editResult = await editVideo(videoPath, analysis, tripId, videoRow.id, { videoResolution });
       if (editResult.compiledPath) {
@@ -212,11 +209,12 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     reporter.sendStepStart('videoAnalysis', { processed: 0, total: totalVideos });
     const analysisResults: Map<string, Awaited<ReturnType<typeof analyzeVideo>>> = new Map();
     const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
+    const storageProvider = getStorageProvider();
 
     for (const videoRow of videoRows) {
       if (clientDisconnected) return;
-      const videoPath = path.resolve(serverRoot, videoRow.file_path);
       try {
+        const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
         const analysis = await analyzeVideo(videoPath, videoRow.id);
         analysisResults.set(videoRow.id, analysis);
       } catch (err) {
@@ -239,8 +237,8 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
       const analysis = analysisResults.get(videoRow.id);
       if (!analysis) continue;
 
-      const videoPath = path.resolve(serverRoot, videoRow.file_path);
       try {
+        const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
         const editResult = await editVideo(videoPath, analysis, tripId, videoRow.id, { videoResolution });
         if (editResult.compiledPath) {
           updateCompiledStmt.run(editResult.compiledPath, videoRow.id);

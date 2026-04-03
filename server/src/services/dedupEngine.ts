@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import type { MediaItem, DuplicateGroup } from '../types';
+import { getStorageProvider } from '../storage/factory';
 
 /**
  * Compute a 64-bit dHash (difference hash) for an image.
@@ -108,9 +109,11 @@ export async function deduplicate(
 
   // 1. Compute hashes for all images
   const hashes: string[] = [];
+  const storageProvider = getStorageProvider();
   for (const item of imageItems) {
     try {
-      const hash = await computeHash(item.filePath);
+      const localPath = await storageProvider.downloadToTemp(item.filePath);
+      const hash = await computeHash(localPath);
       hashes.push(hash);
     } catch {
       // If hash computation fails, use empty string (won't match anything)

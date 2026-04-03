@@ -4,6 +4,8 @@ import express from 'express';
 import request from 'supertest';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
+import { signToken } from '../services/authService';
+import { authMiddleware } from '../middleware/auth';
 import tripsRouter from './trips';
 import galleryRouter from './gallery';
 
@@ -20,8 +22,21 @@ import galleryRouter from './gallery';
 
 const app = express();
 app.use(express.json());
+app.use(authMiddleware);
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', galleryRouter);
+
+function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string; token: string } {
+  const db = getDb();
+  const userId = uuidv4();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO users (id, username, password_hash, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?)`
+  ).run(userId, `user_${userId.slice(0, 8)}`, 'hash', role, now, now);
+  const token = signToken({ userId, role });
+  return { userId, token };
+}
 
 function insertMediaItem(
   tripId: string,
@@ -33,10 +48,13 @@ function insertMediaItem(
   const now = new Date().toISOString();
   const mime = mediaType === 'image' ? 'image/jpeg' : 'video/mp4';
   const ext = mediaType === 'image' ? 'jpg' : 'mp4';
+  // Retrieve the trip's user_id so media is owned correctly
+  const trip = db.prepare('SELECT user_id FROM trips WHERE id = ?').get(tripId) as { user_id: string } | undefined;
+  const userId = trip?.user_id ?? null;
   db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, tripId, `uploads/${tripId}/originals/${id}.${ext}`, mediaType, mime, `file.${ext}`, 1024, duplicateGroupId, now);
+    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, user_id, visibility, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?)`
+  ).run(id, tripId, `${tripId}/originals/${id}.${ext}`, mediaType, mime, `file.${ext}`, 1024, duplicateGroupId, userId, now);
   return id;
 }
 
@@ -52,11 +70,15 @@ function insertDuplicateGroup(tripId: string, defaultImageId: string, imageCount
 }
 
 describe('Property 13: Gallery 数据的图片/视频分区', () => {
+  let owner: { userId: string; token: string };
+
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
+    owner = createTestUser('regular');
   });
 
   afterEach(() => {
@@ -76,14 +98,17 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
         async ({ ungroupedImageCount, duplicateGroups, videoCount }) => {
           // Clean slate for each run
           const db = getDb();
+          db.exec('DELETE FROM media_tags');
           db.exec('DELETE FROM media_items');
           db.exec('DELETE FROM duplicate_groups');
           db.exec('DELETE FROM trips');
 
-          // Create a trip
+          // Create a trip with auth
           const tripRes = await request(app)
             .post('/api/trips')
+            .set('Authorization', `Bearer ${owner.token}`)
             .send({ title: 'Property Test Trip' });
+          expect(tripRes.status).toBe(201);
           const tripId = tripRes.body.id;
 
           // Track expected displayable counts
@@ -116,8 +141,10 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
             insertMediaItem(tripId, 'video', null);
           }
 
-          // Fetch gallery
-          const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+          // Fetch gallery as owner so all public media is visible
+          const res = await request(app)
+            .get(`/api/trips/${tripId}/gallery`)
+            .set('Authorization', `Bearer ${owner.token}`);
           expect(res.status).toBe(200);
 
           const { images, videos } = res.body;

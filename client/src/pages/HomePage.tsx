@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 
 export interface TripSummary {
   id: string;
@@ -16,6 +17,7 @@ export default function HomePage() {
   const [trips, setTrips] = useState<TripSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const { isLoggedIn } = useAuth();
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +50,13 @@ export default function HomePage() {
   }
 
   if (trips.length === 0) {
-    return <div aria-label="空状态">还没有旅行记录，快去创建一个吧！</div>;
+    return (
+      <div aria-label="空状态">
+        {isLoggedIn
+          ? '还没有旅行记录，快去创建一个吧！'
+          : '还没有公开的旅行记录。'}
+      </div>
+    );
   }
 
   return (

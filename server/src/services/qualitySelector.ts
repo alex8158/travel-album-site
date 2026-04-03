@@ -64,13 +64,10 @@ export async function computeQualityScore(imagePath: string): Promise<QualitySco
 }
 
 
-import path from 'path';
-
-const serverRoot = path.join(__dirname, '..', '..');
+import { getStorageProvider } from '../storage/factory';
 
 function rowToMediaItem(row: MediaItemRow): MediaItem {
-  const item = baseRowToMediaItem(row);
-  return { ...item, filePath: path.resolve(serverRoot, row.file_path) };
+  return baseRowToMediaItem(row);
 }
 
 /**
@@ -105,10 +102,12 @@ export async function selectBest(groupId: string): Promise<MediaItem> {
   const updateStmt = db.prepare(
     'UPDATE media_items SET quality_score = ?, sharpness_score = ? WHERE id = ?'
   );
+  const storageProvider = getStorageProvider();
 
   for (const item of items) {
     try {
-      const score = await computeQualityScore(item.filePath);
+      const localPath = await storageProvider.downloadToTemp(item.filePath);
+      const score = await computeQualityScore(localPath);
       scores.push(score);
       updateStmt.run(score.overall, score.sharpness, item.id);
     } catch {
@@ -177,11 +176,13 @@ export async function processTrip(tripId: string): Promise<void> {
   const updateStmt = db.prepare(
     'UPDATE media_items SET quality_score = ?, sharpness_score = ? WHERE id = ?'
   );
+  const storageProvider = getStorageProvider();
 
   for (const row of ungroupedRows) {
     const item = rowToMediaItem(row);
     try {
-      const score = await computeQualityScore(item.filePath);
+      const localPath = await storageProvider.downloadToTemp(item.filePath);
+      const score = await computeQualityScore(localPath);
       updateStmt.run(score.overall, score.sharpness, item.id);
     } catch {
       updateStmt.run(0, 0, item.id);

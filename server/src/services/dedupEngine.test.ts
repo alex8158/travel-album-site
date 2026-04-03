@@ -204,8 +204,8 @@ describe('deduplicate', () => {
     fs.copyFileSync(img1, img2);
 
     const items: MediaItem[] = [
-      { id: 'img-1', tripId: 'trip-1', filePath: img1, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
-      { id: 'img-2', tripId: 'trip-1', filePath: img2, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
+      { id: 'img-1', tripId: 'trip-1', filePath: img1, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
+      { id: 'img-2', tripId: 'trip-1', filePath: img2, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
     ];
     items.forEach(insertMediaItem);
 
@@ -236,8 +236,8 @@ describe('deduplicate', () => {
       .toFile(checkerPath);
 
     const items: MediaItem[] = [
-      { id: 'img-1', tripId: 'trip-1', filePath: white, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'white.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
-      { id: 'img-2', tripId: 'trip-1', filePath: checkerPath, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'checker.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
+      { id: 'img-1', tripId: 'trip-1', filePath: white, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'white.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
+      { id: 'img-2', tripId: 'trip-1', filePath: checkerPath, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'checker.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
     ];
     items.forEach(insertMediaItem);
 
@@ -252,8 +252,8 @@ describe('deduplicate', () => {
     fs.copyFileSync(img1, img2);
 
     const items: MediaItem[] = [
-      { id: 'img-1', tripId: 'trip-1', filePath: img1, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
-      { id: 'img-2', tripId: 'trip-1', filePath: img2, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
+      { id: 'img-1', tripId: 'trip-1', filePath: img1, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
+      { id: 'img-2', tripId: 'trip-1', filePath: img2, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
     ];
     items.forEach(insertMediaItem);
 
@@ -274,9 +274,9 @@ describe('deduplicate', () => {
     fs.copyFileSync(imgA, imgC); // C identical to A
 
     const items: MediaItem[] = [
-      { id: 'img-1', tripId: 'trip-1', filePath: imgA, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
-      { id: 'img-2', tripId: 'trip-1', filePath: imgB, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
-      { id: 'img-3', tripId: 'trip-1', filePath: imgC, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'c.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
+      { id: 'img-1', tripId: 'trip-1', filePath: imgA, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
+      { id: 'img-2', tripId: 'trip-1', filePath: imgB, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'b.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
+      { id: 'img-3', tripId: 'trip-1', filePath: imgC, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'c.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
     ];
     items.forEach(insertMediaItem);
 
@@ -295,7 +295,7 @@ describe('deduplicate', () => {
     const img = await createTestImage(dir, 'a.jpg', { r: 50, g: 50, b: 50 });
 
     const items: MediaItem[] = [
-      { id: 'img-1', tripId: 'trip-1', filePath: img, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, createdAt: new Date().toISOString() },
+      { id: 'img-1', tripId: 'trip-1', filePath: img, mediaType: 'image', mimeType: 'image/jpeg', originalFilename: 'a.jpg', fileSize: 1000, status: 'active', visibility: 'public', createdAt: new Date().toISOString() },
     ];
     items.forEach(insertMediaItem);
 

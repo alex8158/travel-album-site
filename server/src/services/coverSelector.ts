@@ -1,10 +1,9 @@
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { getDb } from '../database';
-
-const serverRoot = path.join(__dirname, '..', '..');
-const framesDir = path.join(serverRoot, 'uploads', 'frames');
+import { getStorageProvider } from '../storage/factory';
 
 interface MediaItemRow {
   id: string;
@@ -67,15 +66,26 @@ export async function selectCoverImage(tripId: string): Promise<string | null> {
   ).get(tripId) as MediaItemRow | undefined;
 
   if (firstVideo) {
-    const videoAbsPath = path.resolve(serverRoot, firstVideo.file_path);
-    const frameFilename = `${firstVideo.id}_frame.jpg`;
-    const frameAbsPath = path.join(framesDir, frameFilename);
-
     try {
-      await extractVideoFrame(videoAbsPath, frameAbsPath);
-      // Use the video's media_item id as cover reference
-      db.prepare('UPDATE trips SET cover_image_id = ? WHERE id = ?').run(firstVideo.id, tripId);
-      return firstVideo.id;
+      const storageProvider = getStorageProvider();
+      const videoLocalPath = await storageProvider.downloadToTemp(firstVideo.file_path);
+      const frameFilename = `${firstVideo.id}_frame.jpg`;
+      const frameTempPath = path.join(os.tmpdir(), frameFilename);
+
+      try {
+        await extractVideoFrame(videoLocalPath, frameTempPath);
+
+        // Save frame to storage
+        const frameRelativePath = `frames/${frameFilename}`;
+        const buffer = fs.readFileSync(frameTempPath);
+        await storageProvider.save(frameRelativePath, buffer);
+
+        // Use the video's media_item id as cover reference
+        db.prepare('UPDATE trips SET cover_image_id = ? WHERE id = ?').run(firstVideo.id, tripId);
+        return firstVideo.id;
+      } finally {
+        try { fs.unlinkSync(frameTempPath); } catch { /* ignore */ }
+      }
     } catch (err) {
       console.error(`[CoverSelector] Failed to extract video frame for ${firstVideo.id}:`, err);
       // Fall through to return null

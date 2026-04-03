@@ -3,6 +3,8 @@ import { getDb } from '../database';
 import type { MediaItem, DuplicateGroup, GalleryData, GalleryImage } from '../types';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
+import { authMiddleware } from '../middleware/auth';
+import { normalizeTagName } from '../services/tagGenerator';
 
 const router = Router();
 
@@ -25,7 +27,7 @@ function rowToGroup(row: DuplicateGroupRow): DuplicateGroup {
 }
 
 // GET /api/trips/:id/gallery — Get gallery data for a trip
-router.get('/:id/gallery', (req: Request, res: Response) => {
+router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
   const db = getDb();
   const tripId = req.params.id;
 
@@ -36,6 +38,22 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
   }
 
   const trip = rowToTrip(tripRow);
+
+  // Determine if the requester is the trip owner or an admin
+  const isOwnerOrAdmin =
+    req.user != null &&
+    (req.user.role === 'admin' || req.user.userId === tripRow.user_id);
+
+  // Visibility filter: public access only sees public media items
+  const visibilityClause = isOwnerOrAdmin ? '' : "AND m.visibility = 'public'";
+
+  // Tag filter: normalize and build clause if ?tag= is provided
+  const rawTag = req.query.tag as string | undefined;
+  const normalizedTag = rawTag ? normalizeTagName(rawTag) : null;
+  const tagJoin = normalizedTag
+    ? 'INNER JOIN media_tags mt ON mt.media_id = m.id'
+    : '';
+  const tagClause = normalizedTag ? 'AND mt.tag_name = ?' : '';
 
   // Get all duplicate groups for this trip
   const groupRows = db.prepare(
@@ -50,9 +68,12 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
   for (const groupRow of groupRows) {
     if (!groupRow.default_image_id) continue;
 
+    const defaultImageParams: unknown[] = [groupRow.default_image_id, 'image'];
+    if (normalizedTag) defaultImageParams.push(normalizedTag);
+
     const defaultImageRow = db.prepare(
-      "SELECT * FROM media_items WHERE id = ? AND media_type = ? AND status = 'active'"
-    ).get(groupRow.default_image_id, 'image') as MediaItemRow | undefined;
+      `SELECT m.* FROM media_items m ${tagJoin} WHERE m.id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause}`
+    ).get(...defaultImageParams) as MediaItemRow | undefined;
 
     if (defaultImageRow) {
       images.push({
@@ -66,9 +87,12 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
   }
 
   // Get ungrouped images (images not in any duplicate group)
+  const ungroupedParams: unknown[] = [tripId, 'image'];
+  if (normalizedTag) ungroupedParams.push(normalizedTag);
+
   const ungroupedRows = db.prepare(
-    "SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND duplicate_group_id IS NULL AND status = 'active'"
-  ).all(tripId, 'image') as MediaItemRow[];
+    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.duplicate_group_id IS NULL AND m.status = 'active' ${visibilityClause} ${tagClause}`
+  ).all(...ungroupedParams) as MediaItemRow[];
 
   for (const row of ungroupedRows) {
     images.push({
@@ -80,9 +104,12 @@ router.get('/:id/gallery', (req: Request, res: Response) => {
   }
 
   // Get all videos
+  const videoParams: unknown[] = [tripId, 'video'];
+  if (normalizedTag) videoParams.push(normalizedTag);
+
   const videoRows = db.prepare(
-    "SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND status = 'active'"
-  ).all(tripId, 'video') as MediaItemRow[];
+    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause}`
+  ).all(...videoParams) as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({
     ...rowToMediaItem(row),

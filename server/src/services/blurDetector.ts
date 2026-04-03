@@ -1,6 +1,6 @@
 import sharp from 'sharp';
-import path from 'path';
 import { getDb } from '../database';
+import { getStorageProvider } from '../storage/factory';
 
 /**
  * Laplacian convolution kernel for sharpness detection.
@@ -13,8 +13,6 @@ const LAPLACIAN_KERNEL = {
 };
 
 const DEFAULT_BLUR_THRESHOLD = 100.0;
-
-const serverRoot = path.join(__dirname, '..', '..');
 
 export interface BlurResult {
   mediaId: string;
@@ -60,6 +58,7 @@ export async function detectAndTrashBlurry(
   threshold: number = DEFAULT_BLUR_THRESHOLD
 ): Promise<{ blurryCount: number; results: BlurResult[] }> {
   const db = getDb();
+  const storageProvider = getStorageProvider();
 
   const rows = db.prepare(
     "SELECT id, file_path FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
@@ -76,10 +75,10 @@ export async function detectAndTrashBlurry(
   let blurryCount = 0;
 
   for (const row of rows) {
-    const absolutePath = path.resolve(serverRoot, row.file_path);
     let sharpnessScore = 0;
     try {
-      sharpnessScore = await computeSharpness(absolutePath);
+      const localPath = await storageProvider.downloadToTemp(row.file_path);
+      sharpnessScore = await computeSharpness(localPath);
     } catch {
       // If sharpness computation fails, default to 0 (will be considered blurry)
       sharpnessScore = 0;

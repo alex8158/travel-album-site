@@ -7,6 +7,7 @@ import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import type { ProcessResult } from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
+import { useAuth, authFetch } from '../contexts/AuthContext';
 
 export interface GalleryTrip {
   id: string;
@@ -14,6 +15,7 @@ export interface GalleryTrip {
   description?: string;
   coverImageId?: string;
   visibility?: 'public' | 'unlisted';
+  userId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +96,7 @@ export type AppendMode = 'idle' | 'uploading' | 'processing' | 'done';
 
 export default function GalleryPage() {
   const { id } = useParams<{ id: string }>();
+  const { user, isLoggedIn } = useAuth();
   const [data, setData] = useState<GalleryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -230,13 +233,19 @@ export default function GalleryPage() {
     setEditSaving(true);
     setEditError('');
     try {
-      const res = await axios.put(`/api/trips/${data.trip.id}`, {
-        title: editTitle.trim(),
-        description: editDescription.trim() || undefined,
+      const res = await authFetch(`/api/trips/${data.trip.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim() || undefined,
+        }),
       });
+      if (!res.ok) throw new Error('save failed');
+      const resData = await res.json();
       setData({
         ...data,
-        trip: { ...data.trip, title: res.data.title, description: res.data.description, updatedAt: res.data.updatedAt },
+        trip: { ...data.trip, title: resData.title, description: resData.description, updatedAt: resData.updatedAt },
       });
       setEditModalOpen(false);
     } catch {
@@ -251,7 +260,11 @@ export default function GalleryPage() {
     if (!data) return;
     setCoverSaving(true);
     try {
-      await axios.put(`/api/trips/${data.trip.id}/cover`, { imageId });
+      await authFetch(`/api/trips/${data.trip.id}/cover`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageId }),
+      });
       setData({ ...data, trip: { ...data.trip, coverImageId: imageId } });
       setCoverPickerOpen(false);
     } catch {
@@ -276,7 +289,11 @@ export default function GalleryPage() {
   async function handleSetDefault(groupId: string, imageId: string) {
     setDefaultSaving(true);
     try {
-      await axios.put(`/api/duplicate-groups/${groupId}/default`, { imageId });
+      await authFetch(`/api/duplicate-groups/${groupId}/default`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageId }),
+      });
       await fetchGallery();
       setDefaultPickerGroupId(null);
     } catch {
@@ -289,7 +306,7 @@ export default function GalleryPage() {
   // --- Trash zone handlers ---
   async function handleRestore(mediaId: string) {
     try {
-      await axios.put(`/api/media/${mediaId}/restore`);
+      await authFetch(`/api/media/${mediaId}/restore`, { method: 'PUT' });
       await fetchGallery();
       await fetchTrash();
     } catch {
@@ -301,7 +318,7 @@ export default function GalleryPage() {
     if (!id) return;
     if (!window.confirm('确定要永久删除待删除区中的所有文件吗？此操作不可撤销。')) return;
     try {
-      await axios.delete(`/api/trips/${id}/trash`);
+      await authFetch(`/api/trips/${id}/trash`, { method: 'DELETE' });
       await fetchGallery();
       await fetchTrash();
     } catch {
@@ -334,6 +351,9 @@ export default function GalleryPage() {
 
   const { trip, images, videos } = data;
 
+  // Determine if the current user can edit this trip (owner or admin)
+  const canEdit = isLoggedIn && user != null && (user.role === 'admin' || user.userId === trip.userId);
+
   return (
     <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
       <Link to="/" style={{ display: 'inline-block', marginBottom: '16px' }}>
@@ -343,15 +363,17 @@ export default function GalleryPage() {
       <header aria-label="旅行信息">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <h1>{trip.title}</h1>
-          <button
-            onClick={openEditModal}
-            aria-label="编辑旅行信息"
-            data-testid="edit-trip-btn"
-            style={{ background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '4px 12px', cursor: 'pointer' }}
-          >
-            ✏️ 编辑
-          </button>
-          {(trip.visibility === 'public' || trip.visibility === undefined) && (
+          {canEdit && (
+            <button
+              onClick={openEditModal}
+              aria-label="编辑旅行信息"
+              data-testid="edit-trip-btn"
+              style={{ background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '4px 12px', cursor: 'pointer' }}
+            >
+              ✏️ 编辑
+            </button>
+          )}
+          {canEdit && (trip.visibility === 'public' || trip.visibility === undefined) && (
             <button
               onClick={handleAppendClick}
               aria-label="追加素材"
@@ -363,7 +385,7 @@ export default function GalleryPage() {
           )}
         </div>
         {trip.description && <p style={{ color: '#666' }}>{trip.description}</p>}
-        {images.length > 0 && (
+        {canEdit && images.length > 0 && (
           <button
             onClick={() => setCoverPickerOpen(true)}
             aria-label="更换封面图"
@@ -547,7 +569,7 @@ export default function GalleryPage() {
       )}
 
       {/* Trash Zone */}
-      {trashedItems.length > 0 && (
+      {canEdit && trashedItems.length > 0 && (
         <section aria-label="待删除区" data-testid="trash-zone" style={{ marginTop: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
             <h2>待删除区 ({trashedItems.length})</h2>

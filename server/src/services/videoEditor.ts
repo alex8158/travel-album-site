@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { VideoAnalysisResult, VideoSegment } from './videoAnalyzer';
+import { getStorageProvider } from '../storage/factory';
 
 export interface EditOptions {
   videoResolution?: number;
@@ -249,14 +250,19 @@ export async function editVideo(
     }
 
     // Concatenate all segments
-    const compiledDir = path.join('uploads', tripId, 'compiled');
-    const compiledPath = path.join(compiledDir, `${mediaId}_compiled.mp4`);
+    const compiledRelativePath = `${tripId}/compiled/${mediaId}_compiled.mp4`;
+    const compiledTempPath = path.join(tempDir, `${mediaId}_compiled.mp4`);
 
-    await concatenateSegments(segmentPaths, compiledPath, tempDir, options);
+    await concatenateSegments(segmentPaths, compiledTempPath, tempDir, options);
+
+    // Save compiled video via StorageProvider
+    const storageProvider = getStorageProvider();
+    const compiledBuffer = fs.readFileSync(compiledTempPath);
+    await storageProvider.save(compiledRelativePath, compiledBuffer);
 
     return {
       mediaId,
-      compiledPath,
+      compiledPath: compiledRelativePath,
       selectedSegments: selectedIndices,
     };
   } catch (err) {
