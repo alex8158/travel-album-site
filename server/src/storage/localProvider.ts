@@ -11,8 +11,16 @@ export class LocalStorageProvider implements StorageProvider {
     this.basePath = basePath || process.env.LOCAL_STORAGE_PATH || './uploads';
   }
 
+  /** Strip leading 'uploads/' prefix if present (legacy path compatibility) */
+  private normalizePath(relativePath: string): string {
+    if (relativePath.startsWith('uploads/')) {
+      return relativePath.slice('uploads/'.length);
+    }
+    return relativePath;
+  }
+
   async save(relativePath: string, data: Buffer | Readable): Promise<void> {
-    const fullPath = path.resolve(this.basePath, relativePath);
+    const fullPath = path.resolve(this.basePath, this.normalizePath(relativePath));
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
 
     if (Buffer.isBuffer(data)) {
@@ -27,12 +35,12 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async read(relativePath: string): Promise<Buffer> {
-    const fullPath = path.resolve(this.basePath, relativePath);
+    const fullPath = path.resolve(this.basePath, this.normalizePath(relativePath));
     return fs.readFile(fullPath);
   }
 
   async delete(relativePath: string): Promise<void> {
-    const fullPath = path.resolve(this.basePath, relativePath);
+    const fullPath = path.resolve(this.basePath, this.normalizePath(relativePath));
     try {
       await fs.unlink(fullPath);
     } catch (err: any) {
@@ -43,7 +51,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async exists(relativePath: string): Promise<boolean> {
-    const fullPath = path.resolve(this.basePath, relativePath);
+    const fullPath = path.resolve(this.basePath, this.normalizePath(relativePath));
     try {
       await fs.access(fullPath);
       return true;
@@ -53,10 +61,10 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   async getUrl(relativePath: string): Promise<string> {
-    return `/uploads/${relativePath}`;
+    return `/uploads/${this.normalizePath(relativePath)}`;
   }
 
   async downloadToTemp(relativePath: string): Promise<string> {
-    return path.resolve(this.basePath, relativePath);
+    return path.resolve(this.basePath, this.normalizePath(relativePath));
   }
 }
