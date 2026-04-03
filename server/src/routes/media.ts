@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { classify } from '../services/fileClassifier';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
-import { requireAuth } from '../middleware/auth';
+import { authMiddleware, requireAuth } from '../middleware/auth';
 import { TripRow } from '../helpers/tripRow';
 import { getStorageProvider } from '../storage/factory';
 import { generateTags } from '../services/tagGenerator';
@@ -69,7 +69,7 @@ function getFileExtension(originalname: string, mimetype: string): string {
 const upload = multer({ storage: multer.memoryStorage() });
 
 // POST /api/trips/:id/media — Upload a media file (requires auth + trip owner/admin)
-router.post('/:id/media', requireAuth, upload.single('file'), async (req: Request, res: Response) => {
+router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const db = getDb();
 
@@ -156,7 +156,7 @@ router.post('/:id/media', requireAuth, upload.single('file'), async (req: Reques
 });
 
 // PUT /api/trips/:id/media/visibility — Batch change visibility for all media in a trip (owner or admin)
-router.put('/:id/media/visibility', requireAuth, (req: Request, res: Response) => {
+router.put('/:id/media/visibility', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const tripId = req.params.id;
   const { visibility } = req.body;
 
