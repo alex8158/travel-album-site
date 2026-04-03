@@ -4,7 +4,7 @@ import { deduplicate } from '../services/dedupEngine';
 import { processTrip, getTrashedDuplicateCount } from '../services/qualitySelector';
 import { generateThumbnailsForTrip } from '../services/thumbnailGenerator';
 import { selectCoverImage } from '../services/coverSelector';
-import { detectAndTrashBlurry } from '../services/blurDetector';
+import { detectBlurry } from '../services/blurDetector';
 import { optimizeTrip } from '../services/imageOptimizer';
 import { analyzeVideo } from '../services/videoAnalyzer';
 import { editVideo } from '../services/videoEditor';
@@ -31,7 +31,8 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   }
 
   // Parse optional query parameters
-  const blurThreshold = req.query.blurThreshold ? Number(req.query.blurThreshold) : undefined;
+  const hardThreshold = req.query.hardThreshold ? Number(req.query.hardThreshold) : undefined;
+  const softThreshold = req.query.softThreshold ? Number(req.query.softThreshold) : undefined;
   const maxResolution = req.query.maxResolution ? Number(req.query.maxResolution) : undefined;
   const jpegQuality = req.query.jpegQuality ? Number(req.query.jpegQuality) : undefined;
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
@@ -47,12 +48,16 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   // Step 1: Dedup
   const groups = await deduplicate(imageItems);
 
-  // Step 2: Quality
-  await processTrip(tripId);
-
-  // Step 3: Blur detection
-  const blurResult = await detectAndTrashBlurry(tripId, blurThreshold);
+  // Step 2: Blur detection (computes sharpness_score for quality reuse)
+  const blurOptions: Record<string, number> = {};
+  if (hardThreshold !== undefined) blurOptions.hardThreshold = hardThreshold;
+  if (softThreshold !== undefined) blurOptions.softThreshold = softThreshold;
+  const blurResult = await detectBlurry(tripId, Object.keys(blurOptions).length > 0 ? blurOptions : undefined);
   const blurryCount = blurResult.blurryCount;
+  const suspectCount = blurResult.suspectCount;
+
+  // Step 3: Quality scoring (reuses sharpness_score from blur detection)
+  await processTrip(tripId);
 
   // Step 4: Trashed duplicate count
   const trashedDuplicateCount = getTrashedDuplicateCount(tripId);
@@ -108,6 +113,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     })),
     totalGroups: groups.length,
     blurryCount,
+    suspectCount,
     trashedDuplicateCount,
     optimizedCount,
     compiledCount,
@@ -128,7 +134,8 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   }
 
   // Parse optional query parameters
-  const blurThreshold = req.query.blurThreshold ? Number(req.query.blurThreshold) : undefined;
+  const hardThreshold = req.query.hardThreshold ? Number(req.query.hardThreshold) : undefined;
+  const softThreshold = req.query.softThreshold ? Number(req.query.softThreshold) : undefined;
   const maxResolution = req.query.maxResolution ? Number(req.query.maxResolution) : undefined;
   const jpegQuality = req.query.jpegQuality ? Number(req.query.jpegQuality) : undefined;
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
@@ -166,29 +173,27 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     reporter.sendStepComplete('dedup', { processed: imageItems.length, total: imageItems.length });
 
-    // Step 2: Quality
-    if (clientDisconnected) return;
-    reporter.sendStepStart('quality', { processed: 0, total: imageItems.length });
-    await processTrip(tripId);
-    if (clientDisconnected) return;
-    reporter.sendStepComplete('quality', { processed: imageItems.length, total: imageItems.length });
-
-    // Step 3: Blur detection
+    // Step 2: Blur detection (computes sharpness_score for quality reuse)
     if (clientDisconnected) return;
     reporter.sendStepStart('blurDetect', { processed: 0, total: imageItems.length });
-    const blurResult = await detectAndTrashBlurry(tripId, blurThreshold);
+    const blurOptions: Record<string, number> = {};
+    if (hardThreshold !== undefined) blurOptions.hardThreshold = hardThreshold;
+    if (softThreshold !== undefined) blurOptions.softThreshold = softThreshold;
+    const blurResult = await detectBlurry(tripId, Object.keys(blurOptions).length > 0 ? blurOptions : undefined);
     const blurryCount = blurResult.blurryCount;
+    const suspectCount = blurResult.suspectCount;
     if (clientDisconnected) return;
     reporter.sendStepComplete('blurDetect', { processed: imageItems.length, total: imageItems.length });
 
-    // Step 4: Trashed duplicates count
+    // Step 3: Quality scoring (reuses sharpness_score from blur detection)
     if (clientDisconnected) return;
-    reporter.sendStepStart('trashDuplicates', { processed: 0, total: 1 });
+    reporter.sendStepStart('quality', { processed: 0, total: imageItems.length });
+    await processTrip(tripId);
     const trashedDuplicateCount = getTrashedDuplicateCount(tripId);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('trashDuplicates', { processed: 1, total: 1 });
+    reporter.sendStepComplete('quality', { processed: imageItems.length, total: imageItems.length });
 
-    // Step 5: Image optimization
+    // Step 4: Image optimization
     if (clientDisconnected) return;
     reporter.sendStepStart('imageOptimize', { processed: 0, total: imageItems.length });
     const optimizeResults = await optimizeTrip(tripId, { maxResolution, jpegQuality });
@@ -197,14 +202,14 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     reporter.sendStepComplete('imageOptimize', { processed: imageItems.length, total: imageItems.length });
 
-    // Step 6: Thumbnail
+    // Step 5: Thumbnail
     if (clientDisconnected) return;
     reporter.sendStepStart('thumbnail', { processed: 0, total: totalItems });
     await generateThumbnailsForTrip(tripId);
     if (clientDisconnected) return;
     reporter.sendStepComplete('thumbnail', { processed: totalItems, total: totalItems });
 
-    // Step 7: Video analysis
+    // Step 6: Video analysis
     if (clientDisconnected) return;
     reporter.sendStepStart('videoAnalysis', { processed: 0, total: totalVideos });
     const analysisResults: Map<string, Awaited<ReturnType<typeof analyzeVideo>>> = new Map();
@@ -226,7 +231,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     reporter.sendStepComplete('videoAnalysis', { processed: totalVideos, total: totalVideos });
 
-    // Step 8: Video editing
+    // Step 7: Video editing
     if (clientDisconnected) return;
     reporter.sendStepStart('videoEdit', { processed: 0, total: analysisResults.size });
     let compiledCount = 0;
@@ -256,7 +261,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     reporter.sendStepComplete('videoEdit', { processed: analysisResults.size, total: analysisResults.size });
 
-    // Step 9: Cover
+    // Step 8: Cover
     if (clientDisconnected) return;
     reporter.sendStepStart('cover', { processed: 0, total: 1 });
     const coverImageId = await selectCoverImage(tripId);
@@ -274,6 +279,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
       })),
       totalGroups: groups.length,
       blurryCount,
+      suspectCount,
       trashedDuplicateCount,
       optimizedCount,
       compiledCount,

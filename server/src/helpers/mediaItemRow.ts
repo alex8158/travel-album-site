@@ -22,6 +22,11 @@ export interface MediaItemRow {
   compiled_path: string | null;
   user_id: string | null;
   visibility: string;
+  blur_status: string | null;
+  exposure_score: number | null;
+  contrast_score: number | null;
+  noise_score: number | null;
+  phash: string | null;
   created_at: string;
 }
 
@@ -49,6 +54,11 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     status: (row.status || 'active') as MediaItem['status'],
     trashedReason: row.trashed_reason ?? undefined,
     processingError: row.processing_error ?? undefined,
+    blurStatus: row.blur_status as MediaItem['blurStatus'] ?? undefined,
+    exposureScore: row.exposure_score ?? undefined,
+    contrastScore: row.contrast_score ?? undefined,
+    noiseScore: row.noise_score ?? undefined,
+    phash: row.phash ?? undefined,
     optimizedPath: row.optimized_path ?? undefined,
     compiledPath: row.compiled_path ?? undefined,
     userId: row.user_id ?? undefined,

@@ -149,6 +149,41 @@ function initTables(db: Database.Database): void {
   } catch {
     // Column already exists
   }
+
+  // Migration: add blur_status column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN blur_status TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add exposure_score column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN exposure_score REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add contrast_score column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN contrast_score REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add noise_score column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN noise_score REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add phash column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN phash TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
 }
 
 export function closeDb(): void {

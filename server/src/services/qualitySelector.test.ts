@@ -78,25 +78,28 @@ afterEach(() => {
 // --- computeQualityScore tests ---
 
 describe('computeQualityScore', () => {
-  it('should return resolution as width × height', async () => {
+  it('should return normalized resolution in [0, 1]', async () => {
     const dir = makeTmpDir();
     const img = await createTestImage(dir, 'test.jpg', { r: 128, g: 128, b: 128 }, 100, 80);
     const score = await computeQualityScore(img);
-    expect(score.resolution).toBe(100 * 80);
+    // resolution = min(100*80 / 12_000_000, 1.0)
+    expect(score.resolution).toBeCloseTo(8000 / 12_000_000, 6);
   });
 
-  it('should return file size > 0', async () => {
+  it('should return normalized file size in [0, 1]', async () => {
     const dir = makeTmpDir();
     const img = await createTestImage(dir, 'test.jpg', { r: 128, g: 128, b: 128 });
     const score = await computeQualityScore(img);
     expect(score.fileSize).toBeGreaterThan(0);
+    expect(score.fileSize).toBeLessThanOrEqual(1.0);
   });
 
-  it('should return sharpness >= 0', async () => {
+  it('should return normalized sharpness in [0, 1]', async () => {
     const dir = makeTmpDir();
     const img = await createTestImage(dir, 'test.jpg', { r: 128, g: 128, b: 128 });
     const score = await computeQualityScore(img);
     expect(score.sharpness).toBeGreaterThanOrEqual(0);
+    expect(score.sharpness).toBeLessThanOrEqual(1.0);
   });
 
   it('should give higher sharpness to a detailed image than a solid color', async () => {
@@ -107,14 +110,20 @@ describe('computeQualityScore', () => {
     const solidScore = await computeQualityScore(solid);
     const checkerScore = await computeQualityScore(checker);
 
-    expect(checkerScore.sharpness).toBeGreaterThan(solidScore.sharpness);
+    expect(checkerScore.sharpness).toBeGreaterThan(solidScore.sharpness!);
   });
 
-  it('should set overall equal to resolution', async () => {
+  it('should compute overall as weighted sum of all dimensions', async () => {
     const dir = makeTmpDir();
     const img = await createTestImage(dir, 'test.jpg', { r: 50, g: 50, b: 50 }, 200, 150);
     const score = await computeQualityScore(img);
-    expect(score.overall).toBe(score.resolution);
+    // overall should be a weighted combination, not just resolution
+    expect(score.overall).toBeGreaterThan(0);
+    expect(score.overall).toBeLessThanOrEqual(1.0);
+    // Verify it includes contributions from multiple dimensions
+    expect(score.exposure).not.toBeNull();
+    expect(score.contrast).not.toBeNull();
+    expect(score.noiseArtifact).not.toBeNull();
   });
 });
 
@@ -161,6 +170,11 @@ describe('selectBest', () => {
         status TEXT NOT NULL DEFAULT 'active',
         trashed_reason TEXT,
         processing_error TEXT,
+        blur_status TEXT,
+        exposure_score REAL,
+        contrast_score REAL,
+        noise_score REAL,
+        phash TEXT,
         optimized_path TEXT,
         compiled_path TEXT,
         created_at TEXT NOT NULL,
@@ -225,7 +239,7 @@ describe('selectBest', () => {
     expect(best.id).toBe('img-checker');
   });
 
-  it('should update quality_score and sharpness_score in media_items', async () => {
+  it('should update quality_score and dimension scores in media_items', async () => {
     const dir = makeTmpDir();
     const img = await createTestImage(dir, 'test.jpg', { r: 50, g: 50, b: 50 }, 100, 100);
 
@@ -234,9 +248,15 @@ describe('selectBest', () => {
 
     await selectBest('group-1');
 
-    const row = testDb.prepare('SELECT quality_score, sharpness_score FROM media_items WHERE id = ?').get('img-1') as any;
-    expect(row.quality_score).toBe(100 * 100); // resolution
+    const row = testDb.prepare('SELECT quality_score, sharpness_score, exposure_score, contrast_score, noise_score FROM media_items WHERE id = ?').get('img-1') as any;
+    // quality_score is the weighted overall, should be in [0, 1]
+    expect(row.quality_score).toBeGreaterThanOrEqual(0);
+    expect(row.quality_score).toBeLessThanOrEqual(1.0);
     expect(row.sharpness_score).toBeGreaterThanOrEqual(0);
+    // New dimension columns should be written
+    expect(row.exposure_score).not.toBeNull();
+    expect(row.contrast_score).not.toBeNull();
+    expect(row.noise_score).not.toBeNull();
   });
 
   it('should trash non-best images with reason duplicate', async () => {
@@ -317,6 +337,11 @@ describe('getTrashedDuplicateCount', () => {
         status TEXT NOT NULL DEFAULT 'active',
         trashed_reason TEXT,
         processing_error TEXT,
+        blur_status TEXT,
+        exposure_score REAL,
+        contrast_score REAL,
+        noise_score REAL,
+        phash TEXT,
         optimized_path TEXT,
         compiled_path TEXT,
         created_at TEXT NOT NULL,
@@ -409,6 +434,11 @@ describe('processTrip', () => {
         status TEXT NOT NULL DEFAULT 'active',
         trashed_reason TEXT,
         processing_error TEXT,
+        blur_status TEXT,
+        exposure_score REAL,
+        contrast_score REAL,
+        noise_score REAL,
+        phash TEXT,
         optimized_path TEXT,
         compiled_path TEXT,
         created_at TEXT NOT NULL,
@@ -441,9 +471,15 @@ describe('processTrip', () => {
 
     await processTrip('trip-1');
 
-    const row = testDb.prepare('SELECT quality_score, sharpness_score FROM media_items WHERE id = ?').get('img-solo') as any;
-    expect(row.quality_score).toBe(80 * 60);
+    const row = testDb.prepare('SELECT quality_score, sharpness_score, exposure_score, contrast_score, noise_score FROM media_items WHERE id = ?').get('img-solo') as any;
+    // quality_score is the weighted overall, should be in [0, 1]
+    expect(row.quality_score).toBeGreaterThanOrEqual(0);
+    expect(row.quality_score).toBeLessThanOrEqual(1.0);
     expect(row.sharpness_score).toBeGreaterThanOrEqual(0);
+    // New dimension columns should be written
+    expect(row.exposure_score).not.toBeNull();
+    expect(row.contrast_score).not.toBeNull();
+    expect(row.noise_score).not.toBeNull();
   });
 
   it('should process both grouped and ungrouped images', async () => {

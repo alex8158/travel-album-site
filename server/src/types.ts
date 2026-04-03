@@ -29,6 +29,11 @@ export interface MediaItem {
   status: 'active' | 'trashed' | 'deleted';
   trashedReason?: string;
   processingError?: string;
+  blurStatus?: 'clear' | 'suspect' | 'blurry';
+  exposureScore?: number;
+  contrastScore?: number;
+  noiseScore?: number;
+  phash?: string;
   optimizedPath?: string;
   compiledPath?: string;
   userId?: string;
@@ -69,9 +74,12 @@ export interface GalleryImage {
 }
 
 export interface QualityScore {
-  resolution: number;
-  fileSize: number;
-  sharpness: number;
+  sharpness: number | null;
+  exposure: number | null;
+  contrast: number | null;
+  resolution: number | null;
+  noiseArtifact: number | null;
+  fileSize: number | null;
   overall: number;
 }
 
@@ -82,6 +90,7 @@ export interface ProcessResult {
   duplicateGroups: { groupId: string; imageCount: number }[];
   totalGroups: number;
   blurryCount: number;
+  suspectCount: number;
   trashedDuplicateCount: number;
   optimizedCount: number;
   compiledCount: number;

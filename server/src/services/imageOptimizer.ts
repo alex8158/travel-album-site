@@ -24,7 +24,7 @@ interface MediaItemRow {
 
 /**
  * Optimize a single image using sharp.
- * Chain: optional resize → normalize → modulate → sharpen → optional jpeg quality → toFile
+ * Chain: optional resize → median(3) → gamma/clahe → sharpen(0.7) → withMetadata → optional jpeg quality → toFile
  * Returns the relative output path string.
  */
 export async function optimizeImage(
@@ -50,11 +50,19 @@ export async function optimizeImage(
       });
     }
 
-    pipeline = pipeline
-      .normalize()
-      .modulate({ brightness: 1.0 })
-      .sharpen({ sigma: 1.0 });
+    // Step 1: Light denoising
+    pipeline = pipeline.median(3);
 
+    // Step 2: Adaptive brightness/contrast correction
+    pipeline = pipeline.gamma().clahe({ width: 3, height: 3 });
+
+    // Step 3: Light sharpening (sigma 0.5-0.8, using 0.7)
+    pipeline = pipeline.sharpen({ sigma: 0.7 });
+
+    // Preserve EXIF metadata
+    pipeline = pipeline.withMetadata();
+
+    // JPEG quality (if applicable)
     const lowerExt = ext.toLowerCase();
     if (options?.jpegQuality && (lowerExt === 'jpeg' || lowerExt === 'jpg')) {
       pipeline = pipeline.jpeg({ quality: options.jpegQuality });

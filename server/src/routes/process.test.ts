@@ -33,7 +33,7 @@ vi.mock('../services/dedupEngine', () => ({
 }));
 
 vi.mock('../services/blurDetector', () => ({
-  detectAndTrashBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, results: [] }),
+  detectBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, suspectCount: 0, results: [] }),
 }));
 
 vi.mock('../services/imageOptimizer', () => ({
@@ -93,6 +93,7 @@ describe('POST /api/trips/:id/process', () => {
       duplicateGroups: [],
       totalGroups: 0,
       blurryCount: 0,
+      suspectCount: 0,
       trashedDuplicateCount: 0,
       optimizedCount: 0,
       compiledCount: 0,
