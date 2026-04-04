@@ -24,7 +24,7 @@ interface MediaItemRow {
 
 /**
  * Optimize a single image using sharp.
- * Chain: optional resize → median(3) → gamma/clahe → sharpen(0.7) → withMetadata → optional jpeg quality → toFile
+ * Chain: optional resize → sharpen(0.7) → conditional gamma/clahe (dark images only) → withMetadata
  * Returns the relative output path string.
  */
 export async function optimizeImage(
@@ -41,6 +41,11 @@ export async function optimizeImage(
   const tempPath = path.join(getTempDir(), outputFilename);
 
   try {
+    // Check image brightness to decide whether to apply gamma/clahe
+    const stats = await sharp(imagePath).stats();
+    const avgMean = stats.channels.reduce((sum, c) => sum + c.mean, 0) / stats.channels.length;
+    const isDark = avgMean < 80; // Only apply brightness correction to dark images
+
     let pipeline = sharp(imagePath);
 
     if (options?.maxResolution) {
@@ -50,13 +55,14 @@ export async function optimizeImage(
       });
     }
 
-    // Step 1: Light denoising
-    pipeline = pipeline.median(3);
+    // No default median(3) — removed to avoid softening detail
 
-    // Step 2: Adaptive brightness/contrast correction
-    pipeline = pipeline.gamma().clahe({ width: 3, height: 3 });
+    // Only apply gamma/clahe to dark images
+    if (isDark) {
+      pipeline = pipeline.gamma(1.1).clahe({ width: 3, height: 3, maxSlope: 2 });
+    }
 
-    // Step 3: Light sharpening (sigma 0.5-0.8, using 0.7)
+    // Light sharpening
     pipeline = pipeline.sharpen({ sigma: 0.7 });
 
     // Preserve EXIF metadata
