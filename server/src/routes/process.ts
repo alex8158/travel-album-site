@@ -75,11 +75,15 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'video' AND status = 'active'"
   ).all(tripId) as MediaItemRow[];
 
-  let compiledCount = 0;
+  // Filter out already-processed videos (those with compiled_path or thumbnail_path set)
+  const unprocessedVideos = videoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
+  const alreadyProcessedCount = videoRows.length - unprocessedVideos.length;
+
+  let compiledCount = alreadyProcessedCount;
   const updateCompiledStmt = db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?');
   const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
 
-  for (const videoRow of videoRows) {
+  for (const videoRow of unprocessedVideos) {
     const storageProvider = getStorageProvider();
     try {
       const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
@@ -160,11 +164,15 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const imageItems = rows.map(rowToMediaItem);
 
     // Query videos for this trip
-    const videoRows = db.prepare(
+    const allVideoRows = db.prepare(
       "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'video' AND status = 'active'"
     ).all(tripId) as MediaItemRow[];
-    const totalVideos = videoRows.length;
+    const totalVideos = allVideoRows.length;
     const totalItems = imageItems.length + totalVideos;
+
+    // Filter out already-processed videos (those with compiled_path or thumbnail_path set)
+    const videoRows = allVideoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
+    const alreadyProcessedCount = totalVideos - videoRows.length;
 
     // Step 1: Dedup
     if (clientDisconnected) return;
@@ -211,7 +219,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
 
     // Step 6: Video analysis
     if (clientDisconnected) return;
-    reporter.sendStepStart('videoAnalysis', { processed: 0, total: totalVideos });
+    reporter.sendStepStart('videoAnalysis', { processed: 0, total: videoRows.length });
     const analysisResults: Map<string, Awaited<ReturnType<typeof analyzeVideo>>> = new Map();
     const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
     const storageProvider = getStorageProvider();
@@ -229,12 +237,12 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
       }
     }
     if (clientDisconnected) return;
-    reporter.sendStepComplete('videoAnalysis', { processed: totalVideos, total: totalVideos });
+    reporter.sendStepComplete('videoAnalysis', { processed: videoRows.length, total: videoRows.length });
 
     // Step 7: Video editing
     if (clientDisconnected) return;
     reporter.sendStepStart('videoEdit', { processed: 0, total: analysisResults.size });
-    let compiledCount = 0;
+    let compiledCount = alreadyProcessedCount;
     const updateCompiledStmt = db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?');
 
     for (const videoRow of videoRows) {

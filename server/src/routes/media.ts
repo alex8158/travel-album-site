@@ -10,6 +10,7 @@ import { authMiddleware, requireAuth } from '../middleware/auth';
 import { TripRow } from '../helpers/tripRow';
 import { getStorageProvider } from '../storage/factory';
 import { generateTags } from '../services/tagGenerator';
+import { getTempDir } from '../helpers/tempDir';
 
 const router = Router();
 
@@ -65,94 +66,125 @@ function getFileExtension(originalname: string, mimetype: string): string {
 
 
 
-// Use multer memory storage so we can validate before writing to disk
-const upload = multer({ storage: multer.memoryStorage() });
+// Use multer disk storage to avoid buffering large files in memory
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, getTempDir());
+  },
+  filename: (_req, file, cb) => {
+    const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({ storage });
 
 // POST /api/trips/:id/media — Upload a media file (requires auth + trip owner/admin)
 router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const db = getDb();
 
-  // Verify trip exists
-  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
-  if (!trip) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
-  }
-
-  // Verify user is trip owner or admin
-  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
-    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
-  }
-
-  // Check file was provided
-  if (!req.file) {
-    return res.status(400).json({ error: { code: 'NO_FILE', message: '未提供文件' } });
-  }
-
-  const file = req.file;
-
-  // Validate file format
-  if (!isSupportedFile(file.mimetype, file.originalname)) {
-    return res.status(400).json({
-      error: {
-        code: 'UNSUPPORTED_FORMAT',
-        message: `不支持的文件格式: ${file.mimetype}。支持的格式: JPEG, PNG, WebP, HEIC, MP4, MOV, AVI, MKV`,
-      },
-    });
-  }
-
-  const mediaId = uuidv4();
-  const ext = getFileExtension(file.originalname, file.mimetype);
-  const filename = `${mediaId}${ext}`;
-  const relativePath = `${tripId}/originals/${filename}`;
-
-  // Save file via StorageProvider
-  const storageProvider = getStorageProvider();
-  await storageProvider.save(relativePath, file.buffer);
-
-  // Determine effective mime type
-  const effectiveMime = SUPPORTED_MIME_TYPES.has(file.mimetype)
-    ? file.mimetype
-    : EXTENSION_TO_MIME[ext] || file.mimetype;
-
-  const now = new Date().toISOString();
-  const userId = req.user!.userId;
-
-  db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, file.buffer.length, userId, 'public', now);
-
-  // Auto-classify file type using magic bytes / extension fallback
-  try {
-    const localPath = await storageProvider.downloadToTemp(relativePath);
-    const classification = await classify(localPath);
-    db.prepare(
-      `UPDATE media_items SET media_type = ?, mime_type = ? WHERE id = ?`
-    ).run(classification.type, classification.mimeType, mediaId);
-  } catch (err) {
-    console.error(`[FileClassifier] Error classifying file ${mediaId}:`, err);
-    // Leave as 'unknown' — non-fatal
-  }
-
-  // Generate tags and insert into media_tags table
-  try {
-    const classifiedRow = db.prepare('SELECT media_type FROM media_items WHERE id = ?').get(mediaId) as { media_type: string } | undefined;
-    const mediaType = classifiedRow?.media_type || 'unknown';
-    const tags = generateTags(mediaId, trip.title, mediaType, file.originalname, new Date());
-    const insertTag = db.prepare(
-      'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
-    );
-    for (const tag of tags) {
-      insertTag.run(tag.id, tag.mediaId, tag.tagName, tag.createdAt);
+  // Helper to clean up temp file left by diskStorage
+  const cleanupTempFile = () => {
+    if (req.file?.path) {
+      try {
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+      } catch (cleanupErr) {
+        console.warn(`[Upload] Failed to clean up temp file ${req.file.path}:`, cleanupErr);
+      }
     }
-  } catch (err) {
-    console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
-    // Non-fatal — media item is still created successfully
-  }
+  };
 
-  const row = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
-  return res.status(201).json(rowToMediaItem(row));
+  try {
+    // Verify trip exists
+    const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+    if (!trip) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+    }
+
+    // Verify user is trip owner or admin
+    if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+    }
+
+    // Check file was provided
+    if (!req.file) {
+      return res.status(400).json({ error: { code: 'NO_FILE', message: '未提供文件' } });
+    }
+
+    const file = req.file;
+
+    // Validate file format
+    if (!isSupportedFile(file.mimetype, file.originalname)) {
+      return res.status(400).json({
+        error: {
+          code: 'UNSUPPORTED_FORMAT',
+          message: `不支持的文件格式: ${file.mimetype}。支持的格式: JPEG, PNG, WebP, HEIC, MP4, MOV, AVI, MKV`,
+        },
+      });
+    }
+
+    const mediaId = uuidv4();
+    const ext = getFileExtension(file.originalname, file.mimetype);
+    const filename = `${mediaId}${ext}`;
+    const relativePath = `${tripId}/originals/${filename}`;
+    const tempFilePath = file.path;
+
+    // Save file via StorageProvider using a read stream from disk
+    const storageProvider = getStorageProvider();
+    await storageProvider.save(relativePath, fs.createReadStream(tempFilePath));
+
+    // Get file size from disk
+    const fileSize = fs.statSync(tempFilePath).size;
+
+    // Determine effective mime type
+    const effectiveMime = SUPPORTED_MIME_TYPES.has(file.mimetype)
+      ? file.mimetype
+      : EXTENSION_TO_MIME[ext] || file.mimetype;
+
+    const now = new Date().toISOString();
+    const userId = req.user!.userId;
+
+    db.prepare(
+      `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, fileSize, userId, 'public', now);
+
+    // Auto-classify file type using the temp file directly (no need to download again)
+    try {
+      const classification = await classify(tempFilePath);
+      db.prepare(
+        `UPDATE media_items SET media_type = ?, mime_type = ? WHERE id = ?`
+      ).run(classification.type, classification.mimeType, mediaId);
+    } catch (err) {
+      console.error(`[FileClassifier] Error classifying file ${mediaId}:`, err);
+      // Leave as 'unknown' — non-fatal
+    }
+
+    // Generate tags and insert into media_tags table
+    try {
+      const classifiedRow = db.prepare('SELECT media_type FROM media_items WHERE id = ?').get(mediaId) as { media_type: string } | undefined;
+      const mediaType = classifiedRow?.media_type || 'unknown';
+      const tags = generateTags(mediaId, trip.title, mediaType, file.originalname, new Date());
+      const insertTag = db.prepare(
+        'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
+      );
+      for (const tag of tags) {
+        insertTag.run(tag.id, tag.mediaId, tag.tagName, tag.createdAt);
+      }
+    } catch (err) {
+      console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
+      // Non-fatal — media item is still created successfully
+    }
+
+    const row = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
+    return res.status(201).json(rowToMediaItem(row));
+  } finally {
+    // Always clean up the temp file, whether success or failure
+    cleanupTempFile();
+  }
 });
 
 // PUT /api/trips/:id/media/visibility — Batch change visibility for all media in a trip (owner or admin)

@@ -427,12 +427,37 @@ export default function MyGalleryPage() {
         )}
       </header>
 
+      {/* Unprocessed media banner */}
+      {!showAppend && appendMode !== 'processing' && (() => {
+        const unprocessedImages = images.filter(img => img.item.qualityScore == null);
+        const hasUnprocessed = unprocessedImages.length > 0;
+        if (!hasUnprocessed) return null;
+        return (
+          <div style={{ border: '1px solid #f0ad4e', borderRadius: '8px', padding: '12px', marginBottom: '16px', background: '#fcf8e3' }}>
+            <p style={{ margin: 0 }}>有 {unprocessedImages.length} 个素材尚未处理。</p>
+            <button
+              onClick={() => { setShowAppend(true); setAppendMode('processing'); }}
+              style={{ marginTop: '8px' }}
+            >
+              开始处理
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Append Media Area */}
       {showAppend && (
         <div data-testid="append-area" style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '16px', marginBottom: '16px', background: '#fafafa' }}>
           {appendMode === 'uploading' && (
             <>
-              <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} />
+              <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} onVideoUploaded={(mediaId, mediaType) => {
+                console.log(`[MyGalleryPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+              }} onUploadCancelled={(completedCount) => {
+                setAppendUploadCount(completedCount);
+                if (completedCount > 0) {
+                  setAppendMode('cancelled');
+                }
+              }} />
               <button
                 onClick={handleAppendCancel}
                 data-testid="append-cancel-btn"
@@ -441,6 +466,19 @@ export default function MyGalleryPage() {
                 取消
               </button>
             </>
+          )}
+          {appendMode === 'cancelled' && (
+            <div>
+              <p>上传已取消，已成功上传 {appendUploadCount} 个文件。</p>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                <button onClick={() => setAppendMode('processing')}>
+                  处理已上传的素材
+                </button>
+                <button onClick={() => { setShowAppend(false); setAppendMode('idle'); }}>
+                  稍后处理
+                </button>
+              </div>
+            </div>
           )}
           {appendMode === 'processing' && (
             <>

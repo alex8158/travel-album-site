@@ -75,7 +75,7 @@ export interface TrashedItem {
   trashedReason: string;
 }
 
-export type AppendMode = 'idle' | 'uploading' | 'processing' | 'done';
+export type AppendMode = 'idle' | 'uploading' | 'cancelled' | 'processing' | 'done';
 
 export default function GalleryPage() {
   const { id } = useParams<{ id: string }>();

@@ -7,7 +7,7 @@ import ProcessingLog from '../components/ProcessingLog';
 import type { ProcessResult } from '../components/ProcessTrigger';
 import { authFetch } from '../contexts/AuthContext';
 
-type Step = 'create' | 'upload' | 'process' | 'done';
+type Step = 'create' | 'upload' | 'cancelled' | 'process' | 'done';
 type Visibility = 'public' | 'unlisted';
 
 export default function UploadPage() {
@@ -60,7 +60,31 @@ export default function UploadPage() {
               setUploadCount(count);
               setStep('process');
             }}
+            onVideoUploaded={(mediaId, mediaType) => {
+              console.log(`[UploadPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+            }}
+            onUploadCancelled={(completedCount) => {
+              setUploadCount(completedCount);
+              if (completedCount > 0) {
+                setStep('cancelled');
+              }
+            }}
           />
+        </div>
+      )}
+
+      {step === 'cancelled' && tripId && (
+        <div>
+          <h2>上传已取消</h2>
+          <p>已成功上传 {uploadCount} 个文件。</p>
+          <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+            <button onClick={() => setStep('process')}>
+              处理已上传的素材
+            </button>
+            <Link to={`/my/trips/${tripId}`}>
+              稍后处理
+            </Link>
+          </div>
         </div>
       )}
 

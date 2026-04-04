@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import axios from 'axios';
 import FileUploader, { isFormatSupported } from './FileUploader';
 
-vi.mock('axios');
-const mockedAxios = vi.mocked(axios, true);
+const { mockApiPost, mockGetApiErrorMessage } = vi.hoisted(() => ({
+  mockApiPost: vi.fn(),
+  mockGetApiErrorMessage: vi.fn().mockReturnValue(undefined),
+}));
 
-function mockIsAxiosError(returnValue: boolean) {
-  (mockedAxios.isAxiosError as unknown as ReturnType<typeof vi.fn>) = vi.fn().mockReturnValue(returnValue);
-}
+vi.mock('../api', () => ({
+  apiPost: mockApiPost,
+  getApiErrorMessage: mockGetApiErrorMessage,
+}));
 
 function createFile(name: string, type: string, size = 1024): File {
   const buffer = new ArrayBuffer(size);
@@ -47,6 +49,7 @@ describe('isFormatSupported', () => {
 describe('FileUploader', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetApiErrorMessage.mockReturnValue(undefined);
   });
 
   it('renders file and folder selection buttons', () => {
@@ -108,8 +111,7 @@ describe('FileUploader', () => {
   });
 
   it('auto-starts upload after file selection and shows aggregate progress', async () => {
-    mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
-    mockIsAxiosError(false);
+    mockApiPost.mockResolvedValue({ data: { id: 'media-1' } });
 
     render(<FileUploader tripId="trip-42" />);
     const input = screen.getByTestId('file-input');
@@ -120,7 +122,7 @@ describe('FileUploader', () => {
 
     // Should auto-upload without needing a manual button click
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      expect(mockApiPost).toHaveBeenCalledTimes(2);
     });
 
     await waitFor(() => {
@@ -130,8 +132,7 @@ describe('FileUploader', () => {
   });
 
   it('does not render per-file upload list', async () => {
-    mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
-    mockIsAxiosError(false);
+    mockApiPost.mockResolvedValue({ data: { id: 'media-1' } });
 
     render(<FileUploader tripId="trip-1" />);
     const input = screen.getByTestId('file-input');
@@ -141,7 +142,7 @@ describe('FileUploader', () => {
     });
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+      expect(mockApiPost).toHaveBeenCalledTimes(1);
     });
 
     // Should NOT have per-file upload list
@@ -149,10 +150,9 @@ describe('FileUploader', () => {
   });
 
   it('shows failed files below progress bar with retry button', async () => {
-    mockedAxios.post
+    mockApiPost
       .mockResolvedValueOnce({ data: { id: 'media-1' } })
       .mockRejectedValueOnce(new Error('Network Error'));
-    mockIsAxiosError(false);
 
     render(<FileUploader tripId="trip-1" />);
     const input = screen.getByTestId('file-input');
@@ -162,7 +162,7 @@ describe('FileUploader', () => {
     });
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      expect(mockApiPost).toHaveBeenCalledTimes(2);
     });
 
     await waitFor(() => {
@@ -177,11 +177,10 @@ describe('FileUploader', () => {
 
   it('retries a failed upload and calls onAllUploaded when all complete', async () => {
     const onAllUploaded = vi.fn();
-    mockedAxios.post
+    mockApiPost
       .mockResolvedValueOnce({ data: { id: 'media-1' } })
       .mockRejectedValueOnce(new Error('Network Error'))
       .mockResolvedValueOnce({ data: { id: 'media-2' } });
-    mockIsAxiosError(false);
 
     render(<FileUploader tripId="trip-1" onAllUploaded={onAllUploaded} />);
     const input = screen.getByTestId('file-input');
@@ -191,7 +190,7 @@ describe('FileUploader', () => {
     });
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      expect(mockApiPost).toHaveBeenCalledTimes(2);
     });
 
     await waitFor(() => {
@@ -202,7 +201,7 @@ describe('FileUploader', () => {
     await user.click(screen.getByRole('button', { name: '重试' }));
 
     await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledTimes(3);
+      expect(mockApiPost).toHaveBeenCalledTimes(3);
     });
 
     await waitFor(() => {
@@ -216,8 +215,7 @@ describe('FileUploader', () => {
 
   it('calls onAllUploaded when all files upload successfully', async () => {
     const onAllUploaded = vi.fn();
-    mockedAxios.post.mockResolvedValue({ data: { id: 'media-1' } });
-    mockIsAxiosError(false);
+    mockApiPost.mockResolvedValue({ data: { id: 'media-1' } });
 
     render(<FileUploader tripId="trip-1" onAllUploaded={onAllUploaded} />);
     const input = screen.getByTestId('file-input');

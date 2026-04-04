@@ -1,9 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
-import axios from 'axios';
+import { apiPost, getApiErrorMessage } from '../api';
 
 export interface FileUploaderProps {
   tripId: string;
   onAllUploaded?: (count: number) => void;
+  onVideoUploaded?: (mediaId: string, mediaType: string) => void;
+  onUploadCancelled?: (completedCount: number) => void;
 }
 
 export type UploadStatus = 'pending' | 'uploading' | 'completed' | 'failed';
@@ -39,12 +41,22 @@ export function isFormatSupported(file: File): boolean {
   return SUPPORTED_EXTENSIONS.has(ext);
 }
 
-export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProps) {
+function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem('auth_token');
+  } catch {
+    return null;
+  }
+}
+
+export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, onUploadCancelled }: FileUploaderProps) {
   const [mode, setMode] = useState<'file' | 'folder'>('file');
   const [entries, setEntries] = useState<UploadFileEntry[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
 
   const updateEntry = useCallback((index: number, patch: Partial<UploadFileEntry>) => {
     setEntries(prev => prev.map((e, i) => i === index ? { ...e, ...patch } : e));
@@ -56,13 +68,17 @@ export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProp
     const formData = new FormData();
     formData.append('file', entry.file);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      const token = localStorage.getItem('auth_token');
-      await axios.post(`/api/trips/${tripId}/media`, formData, {
+      const token = getAuthToken();
+      const response = await apiPost(`/api/trips/${tripId}/media`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        signal: controller.signal,
         onUploadProgress(progressEvent) {
           if (progressEvent.total) {
             const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
@@ -71,29 +87,46 @@ export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProp
         },
       });
       updateEntry(index, { status: 'completed', progress: 100 });
+
+      const responseData = response.data;
+      if (responseData.mediaType === 'video') {
+        // Fire-and-forget: trigger immediate video processing
+        apiPost(`/api/media/${responseData.id}/process`, null, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }).catch(err => console.error('Video processing failed:', err));
+        onVideoUploaded?.(responseData.id, responseData.mediaType);
+      }
     } catch (err: unknown) {
-      const message = axios.isAxiosError(err) && err.response?.data?.error?.message
-        ? err.response.data.error.message
-        : '上传失败';
-      updateEntry(index, { status: 'failed', error: message });
+      if (controller.signal.aborted) {
+        updateEntry(index, { status: 'failed', error: '已取消' });
+      } else {
+        const message = getApiErrorMessage(err) || '上传失败';
+        updateEntry(index, { status: 'failed', error: message });
+      }
+    } finally {
+      abortControllerRef.current = null;
     }
-  }, [tripId, updateEntry]);
+  }, [tripId, updateEntry, onVideoUploaded]);
 
   const doUpload = useCallback(async (fileEntries: UploadFileEntry[]) => {
+    cancelledRef.current = false;
     setUploading(true);
     for (let i = 0; i < fileEntries.length; i++) {
+      if (cancelledRef.current) break;
       if (fileEntries[i].status === 'pending') {
         await uploadFile(i, fileEntries[i]);
       }
     }
     setUploading(false);
-    setEntries(prev => {
-      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
-      if (allDone && onAllUploaded) {
-        onAllUploaded(prev.length);
-      }
-      return prev;
-    });
+    if (!cancelledRef.current) {
+      setEntries(prev => {
+        const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
+        if (allDone && onAllUploaded) {
+          onAllUploaded(prev.length);
+        }
+        return prev;
+      });
+    }
   }, [uploadFile, onAllUploaded]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -146,9 +179,54 @@ export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProp
     });
   }, [entries, uploadFile, onAllUploaded]);
 
+  const handleRetryAll = useCallback(async () => {
+    cancelledRef.current = false;
+    setUploading(true);
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i].status === 'failed') {
+        await uploadFile(i, entries[i]);
+      }
+    }
+    setUploading(false);
+    setEntries(prev => {
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
+      if (allDone && onAllUploaded) {
+        onAllUploaded(prev.length);
+      }
+      return prev;
+    });
+  }, [entries, uploadFile, onAllUploaded]);
+
+  const handleCancelAll = useCallback(() => {
+    const completed = entries.filter(e => e.status === 'completed').length;
+    setEntries(prev => prev.filter(e => e.status !== 'failed'));
+    if (completed > 0) {
+      onUploadCancelled?.(completed);
+    }
+    // If all remaining are completed, trigger onAllUploaded
+    setEntries(prev => {
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
+      if (allDone && onAllUploaded) {
+        onAllUploaded(prev.length);
+      }
+      return prev;
+    });
+  }, [entries, onAllUploaded, onUploadCancelled]);
+
+  const handleCancelUpload = useCallback(() => {
+    cancelledRef.current = true;
+    // Abort the current in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    // Mark remaining pending entries as failed with '已取消'
+    setEntries(prev => prev.map(e =>
+      e.status === 'pending' ? { ...e, status: 'failed' as const, error: '已取消' } : e
+    ));
+  }, []);
+
   const handleSelectFiles = useCallback(() => {
     setMode('file');
-    // Need to update the input before clicking
     if (inputRef.current) {
       inputRef.current.removeAttribute('webkitdirectory');
       inputRef.current.click();
@@ -220,11 +298,24 @@ export default function FileUploader({ tripId, onAllUploaded }: FileUploaderProp
             <span data-testid="upload-count">{completedCount}/{totalCount}</span>
             <span data-testid="upload-percent">{progressPercent}%</span>
           </div>
+          {uploading && (
+            <button onClick={handleCancelUpload} style={{ marginTop: 8 }}>
+              取消上传
+            </button>
+          )}
         </div>
       )}
 
       {failedEntries.length > 0 && (
         <div aria-label="失败文件" style={{ marginTop: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <button onClick={handleRetryAll} disabled={uploading}>
+              全部重试
+            </button>
+            <button onClick={handleCancelAll} disabled={uploading}>
+              全部取消
+            </button>
+          </div>
           {failedEntries.map(({ entry, index }) => (
             <div key={index} data-testid={`failed-entry-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <span style={{ color: 'red' }}>{entry.file.name}</span>
