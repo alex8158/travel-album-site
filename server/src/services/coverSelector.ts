@@ -1,7 +1,7 @@
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 
@@ -70,7 +70,7 @@ export async function selectCoverImage(tripId: string): Promise<string | null> {
       const storageProvider = getStorageProvider();
       const videoLocalPath = await storageProvider.downloadToTemp(firstVideo.file_path);
       const frameFilename = `${firstVideo.id}_frame.jpg`;
-      const frameTempPath = path.join(os.tmpdir(), frameFilename);
+      const frameTempPath = path.join(getTempDir(), frameFilename);
 
       try {
         await extractVideoFrame(videoLocalPath, frameTempPath);

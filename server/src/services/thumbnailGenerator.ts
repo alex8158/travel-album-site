@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 
@@ -27,7 +27,7 @@ export async function generateThumbnail(
   const thumbRelativePath = `${tripId}/thumbnails/${thumbFilename}`;
 
   // Generate thumbnail to a temp file, then save via StorageProvider
-  const tempPath = path.join(os.tmpdir(), thumbFilename);
+  const tempPath = path.join(getTempDir(), thumbFilename);
   try {
     await sharp(imagePath)
       .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
@@ -58,8 +58,8 @@ export async function generateVideoThumbnail(
   const thumbRelativePath = `${tripId}/thumbnails/${thumbFilename}`;
 
   // Extract first frame to a temp JPEG file
-  const tempFramePath = path.join(os.tmpdir(), `${mediaId}_frame.jpg`);
-  const tempThumbPath = path.join(os.tmpdir(), thumbFilename);
+  const tempFramePath = path.join(getTempDir(), `${mediaId}_frame.jpg`);
+  const tempThumbPath = path.join(getTempDir(), thumbFilename);
 
   try {
     await new Promise<void>((resolve, reject) => {

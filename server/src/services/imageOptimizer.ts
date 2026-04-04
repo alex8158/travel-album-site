@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 
@@ -38,7 +38,7 @@ export async function optimizeImage(
   const outputRelativePath = `${tripId}/optimized/${outputFilename}`;
 
   // Process to a temp file, then save via StorageProvider
-  const tempPath = path.join(os.tmpdir(), outputFilename);
+  const tempPath = path.join(getTempDir(), outputFilename);
 
   try {
     let pipeline = sharp(imagePath);

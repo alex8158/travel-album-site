@@ -9,7 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Readable } from 'stream';
 import { promises as fs } from 'fs';
 import path from 'path';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { StorageProvider } from './types';
 
 export class S3StorageProvider implements StorageProvider {
@@ -109,7 +109,7 @@ export class S3StorageProvider implements StorageProvider {
     const data = await this.read(relativePath);
     const ext = path.extname(relativePath);
     const tempPath = path.join(
-      os.tmpdir(),
+      getTempDir(),
       `s3-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
     );
     await fs.writeFile(tempPath, data);

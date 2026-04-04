@@ -1,7 +1,7 @@
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { VideoAnalysisResult, VideoSegment } from './videoAnalyzer';
 import { getStorageProvider } from '../storage/factory';
 
@@ -229,7 +229,7 @@ export async function editVideo(
     };
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `video-edit-${mediaId}-`));
+  const tempDir = fs.mkdtempSync(path.join(getTempDir(), `video-edit-${mediaId}-`));
 
   try {
     // Extract and optionally stabilize each selected segment

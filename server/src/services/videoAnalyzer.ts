@@ -2,7 +2,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import { getTempDir } from '../helpers/tempDir';
 import { computeSharpness } from './blurDetector';
 
 export interface VideoSegment {
@@ -150,7 +150,7 @@ export async function analyzeVideo(
   const segments: VideoSegment[] = [];
 
   // Create a temp directory for intermediate frame files
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `video-analysis-${mediaId}-`));
+  const tempDir = fs.mkdtempSync(path.join(getTempDir(), `video-analysis-${mediaId}-`));
 
   try {
     for (let i = 0; i < segmentCount; i++) {
