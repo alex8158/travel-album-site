@@ -67,7 +67,7 @@ export async function optimizeImage(
     }
 
     // Light sharpening
-    pipeline = pipeline.sharpen({ sigma: 0.7 });
+    pipeline = pipeline.sharpen({ sigma: 0.45 });
 
     // Preserve EXIF metadata
     pipeline = pipeline.withMetadata();
