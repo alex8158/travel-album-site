@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 
 export interface LightboxImage {
   originalUrl: string;
@@ -17,6 +17,12 @@ export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext
   const isFirst = currentIndex === 0;
   const isLast = currentIndex === images.length - 1;
   const current = images[currentIndex];
+  const [rotation, setRotation] = useState(0);
+
+  // Reset rotation when switching images
+  useEffect(() => {
+    setRotation(0);
+  }, [currentIndex]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -96,8 +102,33 @@ export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext
         src={current.originalUrl}
         alt={current.alt}
         data-testid="lightbox-image"
-        style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain' }}
+        style={{
+          maxWidth: '90vw',
+          maxHeight: '90vh',
+          objectFit: 'contain',
+          transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
+          transition: 'transform 0.3s ease',
+        }}
       />
+
+      <div style={{ position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: '12px' }}>
+        <button
+          onClick={() => setRotation(r => r - 90)}
+          aria-label="逆时针旋转"
+          data-testid="lightbox-rotate-left"
+          style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer', borderRadius: '50%', width: 40, height: 40 }}
+        >
+          ↺
+        </button>
+        <button
+          onClick={() => setRotation(r => r + 90)}
+          aria-label="顺时针旋转"
+          data-testid="lightbox-rotate-right"
+          style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer', borderRadius: '50%', width: 40, height: 40 }}
+        >
+          ↻
+        </button>
+      </div>
 
       {!isLast && (
         <button

@@ -30,6 +30,7 @@ export async function generateThumbnail(
   const tempPath = path.join(getTempDir(), thumbFilename);
   try {
     await sharp(imagePath)
+      .rotate() // Auto-rotate based on EXIF orientation
       .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
       .webp()
       .toFile(tempPath);
@@ -76,6 +77,7 @@ export async function generateVideoThumbnail(
 
     // Resize and convert to WebP using sharp
     await sharp(tempFramePath)
+      .rotate() // Auto-rotate based on EXIF orientation
       .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
       .webp()
       .toFile(tempThumbPath);
