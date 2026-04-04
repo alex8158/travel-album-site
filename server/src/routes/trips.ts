@@ -179,4 +179,32 @@ router.put('/:id/cover', authMiddleware, requireAuth, (req: Request, res: Respon
   return res.json(rowToTrip(row));
 });
 
+// DELETE /api/trips/:id — Delete a trip and all associated data (requires auth + owner/admin)
+router.delete('/:id', authMiddleware, requireAuth, (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id;
+
+  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!trip) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify owner or admin
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  // Cascade delete: media_tags → media_items → duplicate_groups → trip
+  const mediaIds = db.prepare('SELECT id FROM media_items WHERE trip_id = ?').all(tripId) as { id: string }[];
+  if (mediaIds.length > 0) {
+    const placeholders = mediaIds.map(() => '?').join(',');
+    db.prepare(`DELETE FROM media_tags WHERE media_id IN (${placeholders})`).run(...mediaIds.map(m => m.id));
+  }
+  db.prepare('DELETE FROM media_items WHERE trip_id = ?').run(tripId);
+  db.prepare('DELETE FROM duplicate_groups WHERE trip_id = ?').run(tripId);
+  db.prepare('DELETE FROM trips WHERE id = ?').run(tripId);
+
+  return res.json({ message: '相册已删除' });
+});
+
 export default router;

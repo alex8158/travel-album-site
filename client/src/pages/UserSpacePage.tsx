@@ -53,9 +53,19 @@ export default function UserSpacePage() {
     }
   }
 
-  function handleDeleteTrip(_tripId: string) {
+  async function handleDeleteTrip(tripId: string) {
     if (!window.confirm('确定要删除这个相册吗？此操作不可撤销。')) return;
-    // Delete not implemented yet - just show the confirm dialog
+    try {
+      const res = await authFetch(`/api/trips/${tripId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setTrips(prev => prev.filter(t => t.id !== tripId));
+      } else {
+        const data = await res.json();
+        alert(data.error?.message || '删除失败');
+      }
+    } catch {
+      alert('删除失败，请稍后重试');
+    }
   }
 
   if (loading) return <div role="status" aria-label="加载中">加载中...</div>;
