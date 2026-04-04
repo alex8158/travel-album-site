@@ -42,9 +42,13 @@ export async function optimizeImage(
 
   try {
     // Check image brightness to decide whether to apply gamma/clahe
+    // const stats = await sharp(imagePath).stats();
+    // const avgMean = stats.channels.reduce((sum, c) => sum + c.mean, 0) / stats.channels.length;
+    // const isDark = avgMean < 80; // Only apply brightness correction to dark images
     const stats = await sharp(imagePath).stats();
-    const avgMean = stats.channels.reduce((sum, c) => sum + c.mean, 0) / stats.channels.length;
-    const isDark = avgMean < 80; // Only apply brightness correction to dark images
+    const rgbChannels = stats.channels.slice(0, 3);
+    const avgMean = rgbChannels.reduce((sum, c) => sum + c.mean, 0) / rgbChannels.length;
+    const isDark = avgMean < 80;
 
     let pipeline = sharp(imagePath);
 
