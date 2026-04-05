@@ -33,14 +33,25 @@ router.get('/trips', (req: Request, res: Response) => {
   const db = getDb();
   const userId = req.user!.userId;
 
-  const rows = db.prepare(
-    `SELECT t.*, COUNT(m.id) AS media_count
-     FROM trips t
-     LEFT JOIN media_items m ON m.trip_id = t.id AND m.status = 'active'
-     WHERE t.user_id = ?
-     GROUP BY t.id
-     ORDER BY t.created_at DESC`
-  ).all(userId) as (TripRow & { media_count: number })[];
+  // Admin sees all trips; regular users see only their own
+  const isAdmin = req.user!.role === 'admin';
+  const query = isAdmin
+    ? `SELECT t.*, COUNT(m.id) AS media_count
+       FROM trips t
+       LEFT JOIN media_items m ON m.trip_id = t.id AND m.status = 'active'
+       GROUP BY t.id
+       ORDER BY t.created_at DESC`
+    : `SELECT t.*, COUNT(m.id) AS media_count
+       FROM trips t
+       LEFT JOIN media_items m ON m.trip_id = t.id AND m.status = 'active'
+       WHERE t.user_id = ?
+       GROUP BY t.id
+       ORDER BY t.created_at DESC`;
+
+  const rows = (isAdmin
+    ? db.prepare(query).all()
+    : db.prepare(query).all(userId)
+  ) as (TripRow & { media_count: number })[];
 
   const trips = rows.map(row => ({
     ...rowToTrip(row),
