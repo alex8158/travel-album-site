@@ -33,8 +33,8 @@ describe('ProgressReporter', () => {
 
   describe('sendStepStart', () => {
     it('should send progress event with correct percent for each step', () => {
-      const steps: StepName[] = ['dedup', 'blurDetect', 'quality', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
-      const expectedPercents = [0, 13, 25, 38, 50, 63, 75, 88];
+      const steps: StepName[] = ['blurDetect', 'dedup', 'analyze', 'optimize', 'classify', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+      const expectedPercents = [0, 11, 22, 33, 44, 56, 67, 78, 89];
 
       steps.forEach((step, i) => {
         const res = createMockResponse();
@@ -46,7 +46,7 @@ describe('ProgressReporter', () => {
         const data = JSON.parse(written.split('data: ')[1].split('\n')[0]);
         expect(data.step).toBe(step);
         expect(data.stepIndex).toBe(i + 1);
-        expect(data.totalSteps).toBe(8);
+        expect(data.totalSteps).toBe(9);
         expect(data.percent).toBe(expectedPercents[i]);
       });
     });
@@ -54,8 +54,8 @@ describe('ProgressReporter', () => {
 
   describe('sendStepComplete', () => {
     it('should send progress event with correct percent for each step', () => {
-      const steps: StepName[] = ['dedup', 'blurDetect', 'quality', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
-      const expectedPercents = [13, 25, 38, 50, 63, 75, 88, 100];
+      const steps: StepName[] = ['blurDetect', 'dedup', 'analyze', 'optimize', 'classify', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+      const expectedPercents = [11, 22, 33, 44, 56, 67, 78, 89, 100];
 
       steps.forEach((step, i) => {
         const res = createMockResponse();
@@ -67,7 +67,7 @@ describe('ProgressReporter', () => {
         const data = JSON.parse(written.split('data: ')[1].split('\n')[0]);
         expect(data.step).toBe(step);
         expect(data.stepIndex).toBe(i + 1);
-        expect(data.totalSteps).toBe(8);
+        expect(data.totalSteps).toBe(9);
         expect(data.percent).toBe(expectedPercents[i]);
       });
     });
@@ -80,8 +80,12 @@ describe('ProgressReporter', () => {
       const result = {
         tripId: 'trip-1',
         totalImages: 10,
-        duplicateGroups: [{ groupId: 'g1', imageCount: 3 }],
-        totalGroups: 1,
+        totalVideos: 0,
+        blurryDeletedCount: 2,
+        dedupDeletedCount: 1,
+        analyzedCount: 7,
+        classifiedCount: 7,
+        categoryStats: { people: 2, animal: 1, landscape: 3, other: 1 },
         coverImageId: 'img-1',
       };
 

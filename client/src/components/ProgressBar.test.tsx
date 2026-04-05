@@ -7,8 +7,8 @@ describe('getStepLabel', () => {
     expect(getStepLabel('dedup')).toBe('图片去重');
   });
 
-  it('maps quality to 质量评分', () => {
-    expect(getStepLabel('quality')).toBe('质量评分');
+  it('maps blurDetect to 模糊检测', () => {
+    expect(getStepLabel('blurDetect')).toBe('模糊检测');
   });
 
   it('maps thumbnail to 缩略图生成', () => {
@@ -58,15 +58,15 @@ describe('ProgressBar', () => {
     render(
       <ProgressBar
         status="processing"
-        currentStep="quality"
+        currentStep="analyze"
         stepIndex={2}
-        totalSteps={4}
+        totalSteps={9}
         percent={50}
       />
     );
 
-    expect(screen.getByText('质量评分')).toBeDefined();
-    expect(screen.getByText('步骤 2/4')).toBeDefined();
+    expect(screen.getByText('图片分析')).toBeDefined();
+    expect(screen.getByText('步骤 2/9')).toBeDefined();
     expect(screen.getByText('50%')).toBeDefined();
   });
 

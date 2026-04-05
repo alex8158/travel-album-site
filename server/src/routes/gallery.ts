@@ -55,6 +55,12 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
     : '';
   const tagClause = normalizedTag ? 'AND mt.tag_name = ?' : '';
 
+  // Category filter: ?category=landscape|animal|people|other
+  const validCategories = ['landscape', 'animal', 'people', 'other'];
+  const rawCategory = req.query.category as string | undefined;
+  const category = rawCategory && validCategories.includes(rawCategory) ? rawCategory : null;
+  const categoryClause = category ? 'AND m.category = ?' : '';
+
   // Get all duplicate groups for this trip
   const groupRows = db.prepare(
     'SELECT * FROM duplicate_groups WHERE trip_id = ?'
@@ -70,9 +76,10 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
 
     const defaultImageParams: unknown[] = [groupRow.default_image_id, 'image'];
     if (normalizedTag) defaultImageParams.push(normalizedTag);
+    if (category) defaultImageParams.push(category);
 
     const defaultImageRow = db.prepare(
-      `SELECT m.* FROM media_items m ${tagJoin} WHERE m.id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause}`
+      `SELECT m.* FROM media_items m ${tagJoin} WHERE m.id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause} ${categoryClause}`
     ).get(...defaultImageParams) as MediaItemRow | undefined;
 
     if (defaultImageRow) {
@@ -89,9 +96,10 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
   // Get ungrouped images (images not in any duplicate group)
   const ungroupedParams: unknown[] = [tripId, 'image'];
   if (normalizedTag) ungroupedParams.push(normalizedTag);
+  if (category) ungroupedParams.push(category);
 
   const ungroupedRows = db.prepare(
-    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.duplicate_group_id IS NULL AND m.status = 'active' ${visibilityClause} ${tagClause}`
+    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.duplicate_group_id IS NULL AND m.status = 'active' ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...ungroupedParams) as MediaItemRow[];
 
   for (const row of ungroupedRows) {
@@ -106,9 +114,10 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
   // Get all videos
   const videoParams: unknown[] = [tripId, 'video'];
   if (normalizedTag) videoParams.push(normalizedTag);
+  if (category) videoParams.push(category);
 
   const videoRows = db.prepare(
-    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause}`
+    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...videoParams) as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({

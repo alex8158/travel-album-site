@@ -6,13 +6,14 @@ export interface ProcessingLogProps {
   onClose: () => void;
 }
 
-export default function ProcessingLog({ uploadCount, result, onClose }: ProcessingLogProps) {
-  const duplicatedCount = result.duplicateGroups.reduce(
-    (sum, g) => sum + (g.imageCount - 1),
-    0
-  );
-  const keptImages = result.totalImages - duplicatedCount;
+const CATEGORY_LABELS: Record<string, string> = {
+  people: '人物',
+  animal: '动物',
+  landscape: '风景',
+  other: '其他',
+};
 
+export default function ProcessingLog({ uploadCount, result, onClose }: ProcessingLogProps) {
   return (
     <div className="processing-log-overlay" role="dialog" aria-label="处理日志">
       <div className="processing-log-modal">
@@ -21,11 +22,18 @@ export default function ProcessingLog({ uploadCount, result, onClose }: Processi
           <li>上传文件数量：{uploadCount}</li>
           <li>处理图片数量：{result.totalImages}</li>
           <li>处理视频数量：{result.totalVideos}</li>
-          <li>重复组数量：{result.totalGroups}</li>
-          <li>最终保留图片数量：{keptImages}</li>
-          <li>模糊图片数量：{result.blurryCount}</li>
-          <li>重复淘汰数量：{result.trashedDuplicateCount}</li>
+          <li>模糊删除数量：{result.blurryDeletedCount}</li>
+          <li>去重删除数量：{result.dedupDeletedCount}</li>
+          <li>分析成功数量：{result.analyzedCount}</li>
           <li>优化成功数量：{result.optimizedCount}</li>
+          <li>分类成功数量：{result.classifiedCount}</li>
+          {result.categoryStats && (
+            <>
+              {Object.entries(result.categoryStats).map(([key, count]) => (
+                <li key={key}>{CATEGORY_LABELS[key] || key}：{count} 张</li>
+              ))}
+            </>
+          )}
           <li>成片数量：{result.compiledCount}</li>
           {result.failedCount > 0 && (
             <li>处理失败数量：{result.failedCount}</li>

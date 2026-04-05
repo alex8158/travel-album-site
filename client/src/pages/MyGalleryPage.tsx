@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import Lightbox from '../components/Lightbox';
 import VideoPlayer from '../components/VideoPlayer';
@@ -12,6 +12,18 @@ import type {
   TrashedItem,
   AppendMode,
 } from './GalleryPage';
+
+type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
+
+const CATEGORY_LABELS: Record<CategoryTab, string> = {
+  all: '全部',
+  landscape: '风景',
+  animal: '动物',
+  people: '人物',
+  other: '其他',
+};
+
+const CATEGORY_TABS: CategoryTab[] = ['all', 'landscape', 'animal', 'people', 'other'];
 
 const TRASHED_REASON_MAP: Record<string, string> = {
   blur: '模糊',
@@ -66,6 +78,9 @@ export default function MyGalleryPage() {
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
+
+  // Category filter state
+  const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
 
   async function fetchGallery() {
     if (!id) return;
@@ -368,6 +383,30 @@ export default function MyGalleryPage() {
 
   const { trip, images, videos } = data;
 
+  const categoryCounts = useMemo(() => {
+    const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
+    for (const img of images) {
+      const cat = img.item.category as CategoryTab | undefined;
+      if (cat && cat in counts) {
+        counts[cat]++;
+      } else {
+        counts.other++;
+      }
+    }
+    return counts;
+  }, [images]);
+
+  const filteredImages = useMemo(() => {
+    if (activeCategory === 'all') return images;
+    return images.filter((img) => {
+      const cat = img.item.category;
+      if (activeCategory === 'other') {
+        return !cat || cat === 'other';
+      }
+      return cat === activeCategory;
+    });
+  }, [images, activeCategory]);
+
   return (
     <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
       <Link to="/my" style={{ display: 'inline-block', marginBottom: '16px' }}>
@@ -503,6 +542,26 @@ export default function MyGalleryPage() {
       {images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
+          <div data-testid="category-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            {CATEGORY_TABS.map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveCategory(tab)}
+                data-testid={`category-tab-${tab}`}
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: activeCategory === tab ? '2px solid #4a90d9' : '1px solid #ccc',
+                  background: activeCategory === tab ? '#e8f0fe' : '#fff',
+                  fontWeight: activeCategory === tab ? 'bold' : 'normal',
+                  cursor: 'pointer',
+                }}
+              >
+                {CATEGORY_LABELS[tab]} ({categoryCounts[tab]})
+              </button>
+            ))}
+          </div>
+          {filteredImages.length > 0 ? (
           <div
             data-testid="image-grid"
             style={{
@@ -511,7 +570,7 @@ export default function MyGalleryPage() {
               gap: '12px',
             }}
           >
-            {images.map((img, idx) => (
+            {filteredImages.map((img, idx) => (
               <div
                 key={img.item.id}
                 data-testid={`image-${img.item.id}`}
@@ -587,6 +646,11 @@ export default function MyGalleryPage() {
               </div>
             ))}
           </div>
+          ) : (
+            <div data-testid="empty-category" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
+              该分类下暂无图片
+            </div>
+          )}
         </section>
       )}
 
@@ -794,14 +858,14 @@ export default function MyGalleryPage() {
 
       {lightboxIndex !== null && (
         <Lightbox
-          images={images.map((img) => ({
+          images={filteredImages.map((img) => ({
             originalUrl: img.originalUrl,
             alt: img.item.originalFilename,
           }))}
           currentIndex={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onPrev={() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
-          onNext={() => setLightboxIndex((i) => (i !== null && i < images.length - 1 ? i + 1 : i))}
+          onNext={() => setLightboxIndex((i) => (i !== null && i < filteredImages.length - 1 ? i + 1 : i))}
         />
       )}
 

@@ -1,22 +1,64 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
-import { processTrip, getTrashedDuplicateCount } from '../services/qualitySelector';
+import { detectBlurry } from '../services/blurDetector';
+import { analyzeTrip } from '../services/imageAnalyzer';
+import { optimizeTrip } from '../services/imageOptimizer';
+import { classifyTrip } from '../services/imageClassifier';
 import { generateThumbnailsForTrip } from '../services/thumbnailGenerator';
 import { selectCoverImage } from '../services/coverSelector';
-import { detectBlurry } from '../services/blurDetector';
-import { optimizeTrip } from '../services/imageOptimizer';
 import { analyzeVideo } from '../services/videoAnalyzer';
 import { editVideo } from '../services/videoEditor';
 import { ProgressReporter } from '../services/progressReporter';
-import type { MediaItem } from '../types';
-import { MediaItemRow, rowToMediaItem as baseRowToMediaItem } from '../helpers/mediaItemRow';
+import { MediaItemRow } from '../helpers/mediaItemRow';
 import { getStorageProvider } from '../storage/factory';
 
 const router = Router();
 
-function rowToMediaItem(row: MediaItemRow): MediaItem {
-  return baseRowToMediaItem(row);
+/**
+ * Query category stats for a trip from the database.
+ */
+function getCategoryStats(tripId: string): { people: number; animal: number; landscape: number; other: number } {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT category, COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' GROUP BY category"
+  ).all(tripId) as Array<{ category: string | null; cnt: number }>;
+
+  const stats = { people: 0, animal: 0, landscape: 0, other: 0 };
+  for (const row of rows) {
+    const cat = row.category as keyof typeof stats;
+    if (cat in stats) {
+      stats[cat] = row.cnt;
+    } else {
+      stats.other += row.cnt;
+    }
+  }
+  return stats;
+}
+
+/**
+ * Get the list of media IDs that failed optimization (have [optimize] error and no optimized_path).
+ */
+function getOptimizeFailedIds(tripId: string): Set<string> {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT id FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND optimized_path IS NULL AND processing_error LIKE '%[optimize]%'"
+  ).all(tripId) as Array<{ id: string }>;
+  return new Set(rows.map(r => r.id));
+}
+
+/**
+ * For images that failed optimization, set category='other' so they are
+ * effectively skipped by classify (which only processes images without category
+ * or re-processes all). We mark them before classifyTrip runs.
+ */
+function markOptimizeFailedAsOther(tripId: string, failedIds: Set<string>): void {
+  if (failedIds.size === 0) return;
+  const db = getDb();
+  const stmt = db.prepare('UPDATE media_items SET category = ? WHERE id = ?');
+  for (const id of failedIds) {
+    stmt.run('other', id);
+  }
 }
 
 // POST /api/trips/:id/process — Trigger full processing pipeline and return summary
@@ -31,57 +73,75 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   }
 
   // Parse optional query parameters
-  const hardThreshold = req.query.hardThreshold ? Number(req.query.hardThreshold) : undefined;
-  const softThreshold = req.query.softThreshold ? Number(req.query.softThreshold) : undefined;
-  const maxResolution = req.query.maxResolution ? Number(req.query.maxResolution) : undefined;
-  const jpegQuality = req.query.jpegQuality ? Number(req.query.jpegQuality) : undefined;
+  const blurThreshold = req.query.blurThreshold ? Number(req.query.blurThreshold) : undefined;
+  const windowSize = req.query.windowSize ? Number(req.query.windowSize) : undefined;
+  const hammingThreshold = req.query.hammingThreshold ? Number(req.query.hammingThreshold) : undefined;
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
 
   let failedCount = 0;
 
-  // Query all image media_items for this trip
-  const rows = db.prepare(
-    "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'image'"
-  ).all(tripId) as MediaItemRow[];
-  const imageItems = rows.map(rowToMediaItem);
+  // Count total images before processing (some will be deleted by blur/dedup)
+  const totalImages = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
+  ).get(tripId) as { cnt: number }).cnt;
 
-  // Step 1: Dedup
-  const groups = await deduplicate(imageItems);
+  // Step 1: Blur detection — permanently deletes blurry images
+  const blurOptions = blurThreshold !== undefined ? { threshold: blurThreshold } : undefined;
+  const blurResult = await detectBlurry(tripId, blurOptions);
+  const blurryDeletedCount = blurResult.blurryCount;
 
-  // Step 2: Blur detection (computes sharpness_score for quality reuse)
-  const blurOptions: Record<string, number> = {};
-  if (hardThreshold !== undefined) blurOptions.hardThreshold = hardThreshold;
-  if (softThreshold !== undefined) blurOptions.softThreshold = softThreshold;
-  const blurResult = await detectBlurry(tripId, Object.keys(blurOptions).length > 0 ? blurOptions : undefined);
-  const blurryCount = blurResult.blurryCount;
-  const suspectCount = blurResult.suspectCount;
+  // Step 2: Dedup — permanently deletes duplicate images
+  const dedupOptions: { windowSize?: number; hammingThreshold?: number } = {};
+  if (windowSize !== undefined) dedupOptions.windowSize = windowSize;
+  if (hammingThreshold !== undefined) dedupOptions.hammingThreshold = hammingThreshold;
+  const dedupResult = await deduplicate(tripId, Object.keys(dedupOptions).length > 0 ? dedupOptions : undefined);
+  const dedupDeletedCount = dedupResult.removedCount;
 
-  // Step 3: Quality scoring (reuses sharpness_score from blur detection)
-  await processTrip(tripId);
+  // Step 3: Analyze — compute image characteristics
+  await analyzeTrip(tripId);
+  const analyzedCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND avg_brightness IS NOT NULL"
+  ).get(tripId) as { cnt: number }).cnt;
 
-  // Step 4: Trashed duplicate count
-  const trashedDuplicateCount = getTrashedDuplicateCount(tripId);
-
-  // Step 5: Image optimization
-  const optimizeResults = await optimizeTrip(tripId, { maxResolution, jpegQuality });
+  // Step 4: Optimize — adaptive image optimization
+  const optimizeResults = await optimizeTrip(tripId);
   const optimizedCount = optimizeResults.filter(r => r.optimizedPath !== null).length;
   failedCount += optimizeResults.filter(r => r.error).length;
 
-  // Step 6: Thumbnails
+  // Track optimize-failed images and mark them as 'other' category
+  const failedOptimizeIds = getOptimizeFailedIds(tripId);
+  markOptimizeFailedAsOther(tripId, failedOptimizeIds);
+
+  // Step 5: Classify — AWS Rekognition classification (skips optimize-failed images via category='other' pre-set)
+  await classifyTrip(tripId);
+  const classifiedCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
+  ).get(tripId) as { cnt: number }).cnt;
+
+  // Step 6: Thumbnails — generate for all active images/videos
+  // Skip thumbnail generation for optimize-failed images
   await generateThumbnailsForTrip(tripId);
 
   // Step 7 & 8: Video analysis and editing
   const videoRows = db.prepare(
     "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'video' AND status = 'active'"
   ).all(tripId) as MediaItemRow[];
+  const totalVideos = videoRows.length;
 
-  // Filter out already-processed videos (those with compiled_path or thumbnail_path set)
+  // Filter out already-processed videos
   const unprocessedVideos = videoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
-  const alreadyProcessedCount = videoRows.length - unprocessedVideos.length;
+  const alreadyProcessedCount = totalVideos - unprocessedVideos.length;
 
   let compiledCount = alreadyProcessedCount;
   const updateCompiledStmt = db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?');
-  const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
+  const updateErrorStmt = db.prepare(
+    `UPDATE media_items
+     SET processing_error = CASE
+       WHEN processing_error IS NULL THEN ?
+       ELSE processing_error || char(10) || ?
+     END
+     WHERE id = ?`
+  );
 
   for (const videoRow of unprocessedVideos) {
     const storageProvider = getStorageProvider();
@@ -93,33 +153,35 @@ router.post('/:id/process', async (req: Request, res: Response) => {
         updateCompiledStmt.run(editResult.compiledPath, videoRow.id);
         compiledCount++;
       } else if (editResult.error) {
-        updateErrorStmt.run(editResult.error, videoRow.id);
+        const errorText = `[videoEdit] ${editResult.error}`;
+        updateErrorStmt.run(errorText, errorText, videoRow.id);
         failedCount++;
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      updateErrorStmt.run(errorMsg, videoRow.id);
+      const errorText = `[videoEdit] ${errorMsg}`;
+      updateErrorStmt.run(errorText, errorText, videoRow.id);
       failedCount++;
     }
   }
 
-  // Step 9: Cover
+  // Step 9: Cover selection
   const coverImageId = await selectCoverImage(tripId);
+
+  // Build category stats
+  const categoryStats = getCategoryStats(tripId);
 
   // Build summary response
   return res.json({
     tripId,
-    totalImages: imageItems.length,
-    totalVideos: videoRows.length,
-    duplicateGroups: groups.map((g) => ({
-      groupId: g.id,
-      imageCount: g.imageCount,
-    })),
-    totalGroups: groups.length,
-    blurryCount,
-    suspectCount,
-    trashedDuplicateCount,
+    totalImages,
+    totalVideos,
+    blurryDeletedCount,
+    dedupDeletedCount,
+    analyzedCount,
     optimizedCount,
+    classifiedCount,
+    categoryStats,
     compiledCount,
     failedCount,
     coverImageId,
@@ -138,10 +200,9 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   }
 
   // Parse optional query parameters
-  const hardThreshold = req.query.hardThreshold ? Number(req.query.hardThreshold) : undefined;
-  const softThreshold = req.query.softThreshold ? Number(req.query.softThreshold) : undefined;
-  const maxResolution = req.query.maxResolution ? Number(req.query.maxResolution) : undefined;
-  const jpegQuality = req.query.jpegQuality ? Number(req.query.jpegQuality) : undefined;
+  const blurThreshold = req.query.blurThreshold ? Number(req.query.blurThreshold) : undefined;
+  const windowSize = req.query.windowSize ? Number(req.query.windowSize) : undefined;
+  const hammingThreshold = req.query.hammingThreshold ? Number(req.query.hammingThreshold) : undefined;
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
 
   // Track client disconnect
@@ -157,71 +218,100 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   try {
     let failedCount = 0;
 
-    // Query all image media_items for this trip
-    const rows = db.prepare(
-      "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'image'"
-    ).all(tripId) as MediaItemRow[];
-    const imageItems = rows.map(rowToMediaItem);
+    // Count total images before processing
+    const totalImages = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
+    ).get(tripId) as { cnt: number }).cnt;
 
     // Query videos for this trip
     const allVideoRows = db.prepare(
       "SELECT * FROM media_items WHERE trip_id = ? AND media_type = 'video' AND status = 'active'"
     ).all(tripId) as MediaItemRow[];
     const totalVideos = allVideoRows.length;
-    const totalItems = imageItems.length + totalVideos;
 
-    // Filter out already-processed videos (those with compiled_path or thumbnail_path set)
+    // Filter out already-processed videos
     const videoRows = allVideoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
     const alreadyProcessedCount = totalVideos - videoRows.length;
 
-    // Step 1: Dedup
+    // Step 1: Blur detection
     if (clientDisconnected) return;
-    reporter.sendStepStart('dedup', { processed: 0, total: imageItems.length });
-    const groups = await deduplicate(imageItems);
+    reporter.sendStepStart('blurDetect', { processed: 0, total: totalImages });
+    const blurOptions = blurThreshold !== undefined ? { threshold: blurThreshold } : undefined;
+    const blurResult = await detectBlurry(tripId, blurOptions);
+    const blurryDeletedCount = blurResult.blurryCount;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('dedup', { processed: imageItems.length, total: imageItems.length });
+    reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-    // Step 2: Blur detection (computes sharpness_score for quality reuse)
+    // Step 2: Dedup
     if (clientDisconnected) return;
-    reporter.sendStepStart('blurDetect', { processed: 0, total: imageItems.length });
-    const blurOptions: Record<string, number> = {};
-    if (hardThreshold !== undefined) blurOptions.hardThreshold = hardThreshold;
-    if (softThreshold !== undefined) blurOptions.softThreshold = softThreshold;
-    const blurResult = await detectBlurry(tripId, Object.keys(blurOptions).length > 0 ? blurOptions : undefined);
-    const blurryCount = blurResult.blurryCount;
-    const suspectCount = blurResult.suspectCount;
+    const activeImageCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+    ).get(tripId) as { cnt: number }).cnt;
+    reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
+    const dedupOptions: { windowSize?: number; hammingThreshold?: number } = {};
+    if (windowSize !== undefined) dedupOptions.windowSize = windowSize;
+    if (hammingThreshold !== undefined) dedupOptions.hammingThreshold = hammingThreshold;
+    const dedupResult = await deduplicate(tripId, Object.keys(dedupOptions).length > 0 ? dedupOptions : undefined);
+    const dedupDeletedCount = dedupResult.removedCount;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('blurDetect', { processed: imageItems.length, total: imageItems.length });
+    reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
 
-    // Step 3: Quality scoring (reuses sharpness_score from blur detection)
+    // Step 3: Analyze
     if (clientDisconnected) return;
-    reporter.sendStepStart('quality', { processed: 0, total: imageItems.length });
-    await processTrip(tripId);
-    const trashedDuplicateCount = getTrashedDuplicateCount(tripId);
+    const postDedupCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+    ).get(tripId) as { cnt: number }).cnt;
+    reporter.sendStepStart('analyze', { processed: 0, total: postDedupCount });
+    await analyzeTrip(tripId);
+    const analyzedCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND avg_brightness IS NOT NULL"
+    ).get(tripId) as { cnt: number }).cnt;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('quality', { processed: imageItems.length, total: imageItems.length });
+    reporter.sendStepComplete('analyze', { processed: postDedupCount, total: postDedupCount });
 
-    // Step 4: Image optimization
+    // Step 4: Optimize
     if (clientDisconnected) return;
-    reporter.sendStepStart('imageOptimize', { processed: 0, total: imageItems.length });
-    const optimizeResults = await optimizeTrip(tripId, { maxResolution, jpegQuality });
+    reporter.sendStepStart('optimize', { processed: 0, total: postDedupCount });
+    const optimizeResults = await optimizeTrip(tripId);
     const optimizedCount = optimizeResults.filter(r => r.optimizedPath !== null).length;
     failedCount += optimizeResults.filter(r => r.error).length;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('imageOptimize', { processed: imageItems.length, total: imageItems.length });
+    reporter.sendStepComplete('optimize', { processed: postDedupCount, total: postDedupCount });
 
-    // Step 5: Thumbnail
+    // Track optimize-failed images and mark as 'other'
+    const failedOptimizeIds = getOptimizeFailedIds(tripId);
+    markOptimizeFailedAsOther(tripId, failedOptimizeIds);
+
+    // Step 5: Classify
     if (clientDisconnected) return;
-    reporter.sendStepStart('thumbnail', { processed: 0, total: totalItems });
+    reporter.sendStepStart('classify', { processed: 0, total: postDedupCount });
+    await classifyTrip(tripId);
+    const classifiedCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
+    ).get(tripId) as { cnt: number }).cnt;
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('classify', { processed: postDedupCount, total: postDedupCount });
+
+    // Step 6: Thumbnail
+    if (clientDisconnected) return;
+    const totalItemsForThumb = postDedupCount + totalVideos;
+    reporter.sendStepStart('thumbnail', { processed: 0, total: totalItemsForThumb });
     await generateThumbnailsForTrip(tripId);
     if (clientDisconnected) return;
-    reporter.sendStepComplete('thumbnail', { processed: totalItems, total: totalItems });
+    reporter.sendStepComplete('thumbnail', { processed: totalItemsForThumb, total: totalItemsForThumb });
 
-    // Step 6: Video analysis
+    // Step 7: Video analysis
     if (clientDisconnected) return;
     reporter.sendStepStart('videoAnalysis', { processed: 0, total: videoRows.length });
     const analysisResults: Map<string, Awaited<ReturnType<typeof analyzeVideo>>> = new Map();
-    const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
+    const updateErrorStmt = db.prepare(
+      `UPDATE media_items
+       SET processing_error = CASE
+         WHEN processing_error IS NULL THEN ?
+         ELSE processing_error || char(10) || ?
+       END
+       WHERE id = ?`
+    );
     const storageProvider = getStorageProvider();
 
     for (const videoRow of videoRows) {
@@ -232,14 +322,15 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
         analysisResults.set(videoRow.id, analysis);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        updateErrorStmt.run(errorMsg, videoRow.id);
+        const errorText = `[videoAnalysis] ${errorMsg}`;
+        updateErrorStmt.run(errorText, errorText, videoRow.id);
         failedCount++;
       }
     }
     if (clientDisconnected) return;
     reporter.sendStepComplete('videoAnalysis', { processed: videoRows.length, total: videoRows.length });
 
-    // Step 7: Video editing
+    // Step 8: Video editing
     if (clientDisconnected) return;
     reporter.sendStepStart('videoEdit', { processed: 0, total: analysisResults.size });
     let compiledCount = alreadyProcessedCount;
@@ -257,39 +348,41 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
           updateCompiledStmt.run(editResult.compiledPath, videoRow.id);
           compiledCount++;
         } else if (editResult.error) {
-          updateErrorStmt.run(editResult.error, videoRow.id);
+          const errorText = `[videoEdit] ${editResult.error}`;
+          updateErrorStmt.run(errorText, errorText, videoRow.id);
           failedCount++;
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        updateErrorStmt.run(errorMsg, videoRow.id);
+        const errorText = `[videoEdit] ${errorMsg}`;
+        updateErrorStmt.run(errorText, errorText, videoRow.id);
         failedCount++;
       }
     }
     if (clientDisconnected) return;
     reporter.sendStepComplete('videoEdit', { processed: analysisResults.size, total: analysisResults.size });
 
-    // Step 8: Cover
+    // Step 9: Cover
     if (clientDisconnected) return;
     reporter.sendStepStart('cover', { processed: 0, total: 1 });
     const coverImageId = await selectCoverImage(tripId);
     if (clientDisconnected) return;
     reporter.sendStepComplete('cover', { processed: 1, total: 1 });
 
+    // Build category stats
+    const categoryStats = getCategoryStats(tripId);
+
     // All steps complete
     reporter.sendComplete({
       tripId,
-      totalImages: imageItems.length,
+      totalImages,
       totalVideos,
-      duplicateGroups: groups.map((g) => ({
-        groupId: g.id,
-        imageCount: g.imageCount,
-      })),
-      totalGroups: groups.length,
-      blurryCount,
-      suspectCount,
-      trashedDuplicateCount,
+      blurryDeletedCount,
+      dedupDeletedCount,
+      analyzedCount,
       optimizedCount,
+      classifiedCount,
+      categoryStats,
       compiledCount,
       failedCount,
       coverImageId,

@@ -61,14 +61,17 @@ const mockResult: ProcessResult = {
   tripId: 'trip-1',
   totalImages: 10,
   totalVideos: 2,
-  duplicateGroups: [
-    { groupId: 'g1', imageCount: 3 },
-    { groupId: 'g2', imageCount: 2 },
-  ],
-  totalGroups: 2,
-  blurryCount: 0,
-  trashedDuplicateCount: 0,
-  optimizedCount: 0,
+  blurryDeletedCount: 1,
+  dedupDeletedCount: 2,
+  analyzedCount: 7,
+  optimizedCount: 7,
+  classifiedCount: 7,
+  categoryStats: {
+    people: 3,
+    animal: 1,
+    landscape: 2,
+    other: 1,
+  },
   compiledCount: 0,
   failedCount: 0,
   coverImageId: 'img-1',
@@ -130,7 +133,7 @@ describe('ProcessTrigger', () => {
     expect(screen.getByText('0%')).toBeDefined();
   });
 
-  it('displays dedup summary after complete event', async () => {
+  it('displays processing summary after complete event', async () => {
     const user = userEvent.setup();
     render(<ProcessTrigger tripId="trip-1" />);
     await user.click(screen.getByRole('button', { name: '开始处理' }));
@@ -139,9 +142,8 @@ describe('ProcessTrigger', () => {
       latestES().emit('complete', mockResult);
     });
 
-    expect(screen.getByText('共检测到 2 个重复组')).toBeDefined();
-    expect(screen.getByText(/组 g1：3 张图片/)).toBeDefined();
-    expect(screen.getByText(/组 g2：2 张图片/)).toBeDefined();
+    expect(screen.getByText(/模糊删除：1 张/)).toBeDefined();
+    expect(screen.getByText(/去重删除：2 张/)).toBeDefined();
   });
 
   it('closes EventSource on complete event', async () => {
@@ -219,16 +221,22 @@ describe('ProcessTrigger', () => {
     expect(screen.getByRole('button', { name: '开始处理' })).not.toBeDisabled();
   });
 
-  it('shows zero groups summary when no duplicates found', async () => {
-    const noDupsResult: ProcessResult = {
+  it('shows zero counts summary when nothing deleted', async () => {
+    const cleanResult: ProcessResult = {
       tripId: 'trip-2',
       totalImages: 5,
       totalVideos: 0,
-      duplicateGroups: [],
-      totalGroups: 0,
-      blurryCount: 0,
-      trashedDuplicateCount: 0,
-      optimizedCount: 0,
+      blurryDeletedCount: 0,
+      dedupDeletedCount: 0,
+      analyzedCount: 5,
+      optimizedCount: 5,
+      classifiedCount: 5,
+      categoryStats: {
+        people: 0,
+        animal: 0,
+        landscape: 3,
+        other: 2,
+      },
       compiledCount: 0,
       failedCount: 0,
     };
@@ -237,10 +245,11 @@ describe('ProcessTrigger', () => {
     await user.click(screen.getByRole('button', { name: '开始处理' }));
 
     await act(() => {
-      latestES().emit('complete', noDupsResult);
+      latestES().emit('complete', cleanResult);
     });
 
-    expect(screen.getByText('共检测到 0 个重复组')).toBeDefined();
+    expect(screen.getByText(/模糊删除：0 张/)).toBeDefined();
+    expect(screen.getByText(/去重删除：0 张/)).toBeDefined();
   });
 
   it('closes EventSource on component unmount', async () => {

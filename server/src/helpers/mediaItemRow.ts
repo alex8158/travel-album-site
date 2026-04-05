@@ -27,6 +27,13 @@ export interface MediaItemRow {
   contrast_score: number | null;
   noise_score: number | null;
   phash: string | null;
+  avg_brightness: number | null;
+  contrast_level: number | null;
+  color_cast_r: number | null;
+  color_cast_g: number | null;
+  color_cast_b: number | null;
+  noise_level: number | null;
+  category: string | null;
   created_at: string;
 }
 
@@ -63,6 +70,13 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     compiledPath: row.compiled_path ?? undefined,
     userId: row.user_id ?? undefined,
     visibility: (row.visibility || 'public') as MediaItem['visibility'],
+    avgBrightness: row.avg_brightness ?? undefined,
+    contrastLevel: row.contrast_level ?? undefined,
+    colorCastR: row.color_cast_r ?? undefined,
+    colorCastG: row.color_cast_g ?? undefined,
+    colorCastB: row.color_cast_b ?? undefined,
+    noiseLevel: row.noise_level ?? undefined,
+    category: row.category ?? undefined,
     createdAt: row.created_at,
   };
 }

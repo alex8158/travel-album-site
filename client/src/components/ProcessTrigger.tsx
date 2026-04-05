@@ -6,14 +6,20 @@ export interface ProcessResult {
   tripId: string;
   totalImages: number;
   totalVideos: number;
-  duplicateGroups: { groupId: string; imageCount: number }[];
-  totalGroups: number;
-  blurryCount: number;
-  trashedDuplicateCount: number;
+  blurryDeletedCount: number;
+  dedupDeletedCount: number;
+  analyzedCount: number;
   optimizedCount: number;
+  classifiedCount: number;
+  categoryStats: {
+    people: number;
+    animal: number;
+    landscape: number;
+    other: number;
+  };
   compiledCount: number;
   failedCount: number;
-  coverImageId?: string;
+  coverImageId?: string | null;
 }
 
 export interface ProcessTriggerProps {
@@ -137,13 +143,18 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
       )}
 
       {result && (
-        <div aria-label="去重摘要">
-          <p>共检测到 {result.totalGroups} 个重复组</p>
-          {result.duplicateGroups.length > 0 && (
+        <div aria-label="处理摘要">
+          <p>模糊删除：{result.blurryDeletedCount} 张</p>
+          <p>去重删除：{result.dedupDeletedCount} 张</p>
+          <p>分析成功：{result.analyzedCount} 张</p>
+          <p>优化成功：{result.optimizedCount} 张</p>
+          <p>分类成功：{result.classifiedCount} 张</p>
+          {result.categoryStats && (
             <ul>
-              {result.duplicateGroups.map((g) => (
-                <li key={g.groupId}>组 {g.groupId}：{g.imageCount} 张图片</li>
-              ))}
+              <li>人物：{result.categoryStats.people} 张</li>
+              <li>动物：{result.categoryStats.animal} 张</li>
+              <li>风景：{result.categoryStats.landscape} 张</li>
+              <li>其他：{result.categoryStats.other} 张</li>
             </ul>
           )}
         </div>

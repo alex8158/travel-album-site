@@ -1,8 +1,20 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import Lightbox from '../components/Lightbox';
 import VideoPlayer from '../components/VideoPlayer';
+
+type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
+
+const CATEGORY_LABELS: Record<CategoryTab, string> = {
+  all: '全部',
+  landscape: '风景',
+  animal: '动物',
+  people: '人物',
+  other: '其他',
+};
+
+const CATEGORY_TABS: CategoryTab[] = ['all', 'landscape', 'animal', 'people', 'other'];
 
 export interface GalleryTrip {
   id: string;
@@ -31,6 +43,7 @@ export interface GalleryImageItem {
   status?: string;
   trashedReason?: string;
   processingError?: string;
+  category?: string;
 }
 
 export interface GalleryImage {
@@ -84,6 +97,34 @@ export default function GalleryPage() {
   const [error, setError] = useState('');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
+
+  const images = data?.images ?? [];
+  const videos = data?.videos ?? [];
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
+    for (const img of images) {
+      const cat = img.item.category as CategoryTab | undefined;
+      if (cat && cat in counts) {
+        counts[cat]++;
+      } else {
+        counts.other++;
+      }
+    }
+    return counts;
+  }, [images]);
+
+  const filteredImages = useMemo(() => {
+    if (activeCategory === 'all') return images;
+    return images.filter((img) => {
+      const cat = img.item.category;
+      if (activeCategory === 'other') {
+        return !cat || cat === 'other';
+      }
+      return cat === activeCategory;
+    });
+  }, [images, activeCategory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +167,7 @@ export default function GalleryPage() {
     );
   }
 
-  const { trip, images, videos } = data;
+  const { trip } = data;
 
   return (
     <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -142,42 +183,67 @@ export default function GalleryPage() {
       {images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
-          <div
-            data-testid="image-grid"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: '12px',
-            }}
-          >
-            {images.map((img, idx) => (
-              <div
-                key={img.item.id}
-                data-testid={`image-${img.item.id}`}
+          <div data-testid="category-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            {CATEGORY_TABS.map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveCategory(tab)}
+                data-testid={`category-tab-${tab}`}
                 style={{
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  border: trip.coverImageId === img.item.id ? '3px solid #4a90d9' : '1px solid #eee',
-                  position: 'relative',
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: activeCategory === tab ? '2px solid #4a90d9' : '1px solid #ccc',
+                  background: activeCategory === tab ? '#e8f0fe' : '#fff',
+                  fontWeight: activeCategory === tab ? 'bold' : 'normal',
+                  cursor: 'pointer',
                 }}
               >
-                <div
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setLightboxIndex(idx)}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`查看 ${img.item.originalFilename}`}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
-                >
-                  <img
-                    src={img.thumbnailUrl}
-                    alt={img.item.originalFilename}
-                    style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
-                  />
-                </div>
-              </div>
+                {CATEGORY_LABELS[tab]} ({categoryCounts[tab]})
+              </button>
             ))}
           </div>
+          {filteredImages.length > 0 ? (
+            <div
+              data-testid="image-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '12px',
+              }}
+            >
+              {filteredImages.map((img, idx) => (
+                <div
+                  key={img.item.id}
+                  data-testid={`image-${img.item.id}`}
+                  style={{
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    border: trip.coverImageId === img.item.id ? '3px solid #4a90d9' : '1px solid #eee',
+                    position: 'relative',
+                  }}
+                >
+                  <div
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setLightboxIndex(idx)}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`查看 ${img.item.originalFilename}`}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
+                  >
+                    <img
+                      src={img.thumbnailUrl}
+                      alt={img.item.originalFilename}
+                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div data-testid="empty-category" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
+              该分类下暂无图片
+            </div>
+          )}
         </section>
       )}
 
@@ -286,14 +352,14 @@ export default function GalleryPage() {
 
       {lightboxIndex !== null && (
         <Lightbox
-          images={images.map((img) => ({
+          images={filteredImages.map((img) => ({
             originalUrl: img.originalUrl,
             alt: img.item.originalFilename,
           }))}
           currentIndex={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onPrev={() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
-          onNext={() => setLightboxIndex((i) => (i !== null && i < images.length - 1 ? i + 1 : i))}
+          onNext={() => setLightboxIndex((i) => (i !== null && i < filteredImages.length - 1 ? i + 1 : i))}
         />
       )}
     </div>

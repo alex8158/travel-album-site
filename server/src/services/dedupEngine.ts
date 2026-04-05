@@ -1,7 +1,5 @@
 import sharp from 'sharp';
-import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
-import type { MediaItem, DuplicateGroup } from '../types';
 import { getStorageProvider } from '../storage/factory';
 
 /**
@@ -93,175 +91,142 @@ export function hammingDistance(hash1: string, hash2: string): number {
   return distance;
 }
 
-export interface DedupOptions {
-  dHashThreshold?: number;  // default 5
-  pHashThreshold?: number;  // default 8
+export interface SlidingWindowDedupOptions {
+  windowSize?: number;         // default 10
+  hammingThreshold?: number;   // default 5 (Hamming distance, 0-64)
+}
+
+export interface DedupResult {
+  kept: string[];              // kept mediaId list
+  removed: string[];           // removed mediaId list
+  removedCount: number;
 }
 
 /**
- * Compute a bucket key for pre-bucketing: groups images by aspect ratio
- * (rounded to 0.1) and resolution tier (floor(log2(w*h))).
- */
-function computeBucketKey(width: number, height: number): string {
-  const aspectRatio = Math.round((width / height) * 10) / 10;
-  const resTier = Math.floor(Math.log2(width * height));
-  return `${aspectRatio}:${resTier}`;
-}
-
-/**
- * Deduplicate a batch of image MediaItems using dual perceptual hashing
- * (dHash + pHash) with exemplar clustering and pre-bucketing.
- * Creates DuplicateGroup records in DB and updates media_items.
- * Does NOT delete any files.
+ * Deduplicate images for a trip using a sliding window approach.
+ * Queries all active images ordered by created_at, computes pHash,
+ * and compares each image with the next windowSize images.
+ * Duplicates are permanently deleted (DB first, then storage).
  */
 export async function deduplicate(
-  imageItems: MediaItem[],
-  options?: DedupOptions
-): Promise<DuplicateGroup[]> {
-  if (imageItems.length === 0) return [];
+  tripId: string,
+  options?: SlidingWindowDedupOptions
+): Promise<DedupResult> {
+  const windowSize = options?.windowSize ?? 10;
+  const hammingThreshold = options?.hammingThreshold ?? 5;
 
-  const dHashThreshold = options?.dHashThreshold ?? 5;
-  const pHashThreshold = options?.pHashThreshold ?? 8;
-
-  // 1. Compute dHash and pHash for all images
-  const dHashes: string[] = [];
-  const pHashes: string[] = [];
+  const db = getDb();
   const storageProvider = getStorageProvider();
 
-  for (const item of imageItems) {
+  // 1. Query all active images for the trip, ordered by created_at
+  const rows = db.prepare(
+    `SELECT id, file_path, sharpness_score, width, height, created_at
+     FROM media_items
+     WHERE trip_id = ? AND status = 'active' AND media_type = 'image'
+     ORDER BY created_at ASC`
+  ).all(tripId) as Array<{
+    id: string;
+    file_path: string;
+    sharpness_score: number | null;
+    width: number | null;
+    height: number | null;
+    created_at: string;
+  }>;
+
+  if (rows.length === 0) {
+    return { kept: [], removed: [], removedCount: 0 };
+  }
+
+  // 2. Compute pHash for each image
+  const pHashes: (string | null)[] = [];
+  for (const row of rows) {
     try {
-      const localPath = await storageProvider.downloadToTemp(item.filePath);
-      const [dHash, pHash] = await Promise.all([
-        computeHash(localPath),
-        computePHash(localPath),
-      ]);
-      dHashes.push(dHash);
+      const localPath = await storageProvider.downloadToTemp(row.file_path);
+      const pHash = await computePHash(localPath);
       pHashes.push(pHash);
     } catch {
-      // If hash computation fails, use empty string (won't match anything)
-      dHashes.push('');
-      pHashes.push('');
+      // If hash computation fails, mark as null (won't participate in dedup)
+      pHashes.push(null);
     }
   }
 
-  // 2. Store both dHash and pHash in DB
-  const db = getDb();
-  const updateHash = db.prepare('UPDATE media_items SET perceptual_hash = ?, phash = ? WHERE id = ?');
-  for (let i = 0; i < imageItems.length; i++) {
-    if (dHashes[i] || pHashes[i]) {
-      updateHash.run(dHashes[i] || null, pHashes[i] || null, imageItems[i].id);
-    }
-  }
+  // 3. Track removed set so already-removed images are skipped
+  const removedSet = new Set<number>();
 
-  // 3. Pre-bucketing: group images by aspect ratio and resolution tier
-  const buckets = new Map<string, number[]>();
-  for (let i = 0; i < imageItems.length; i++) {
-    if (!dHashes[i] || !pHashes[i]) continue;
-    const w = imageItems[i].width;
-    const h = imageItems[i].height;
-    // If dimensions are missing, use a fallback bucket
-    const key = (w && h) ? computeBucketKey(w, h) : '__unknown__';
-    if (!buckets.has(key)) {
-      buckets.set(key, []);
-    }
-    buckets.get(key)!.push(i);
-  }
+  const deleteFromDb = db.prepare('DELETE FROM media_items WHERE id = ?');
 
-  // 4. Compare pairs within each bucket and build exemplar groups
-  // exemplarGroups: key = exemplar index, value = array of member indices (including exemplar)
-  const exemplarGroups = new Map<number, number[]>();
-  // memberOf: maps each index to its exemplar (for quick lookup)
-  const memberOf = new Map<number, number>();
+  // 4. Sliding window comparison
+  for (let i = 0; i < rows.length; i++) {
+    if (removedSet.has(i)) continue;
+    if (pHashes[i] === null) continue;
 
-  for (const [, indices] of buckets) {
-    for (let a = 0; a < indices.length; a++) {
-      const i = indices[a];
-      for (let b = a + 1; b < indices.length; b++) {
-        const j = indices[b];
+    const end = Math.min(i + windowSize, rows.length - 1);
+    for (let j = i + 1; j <= end; j++) {
+      if (removedSet.has(j)) continue;
+      if (pHashes[j] === null) continue;
 
-        // Require both dHash AND pHash within thresholds
-        if (
-          hammingDistance(dHashes[i], dHashes[j]) > dHashThreshold ||
-          hammingDistance(pHashes[i], pHashes[j]) > pHashThreshold
-        ) {
-          continue;
+      const dist = hammingDistance(pHashes[i]!, pHashes[j]!);
+      if (dist <= hammingThreshold) {
+        // They're duplicates — decide who to remove
+        const loserIdx = pickLoser(rows, i, j);
+        removedSet.add(loserIdx);
+
+        // Permanently delete the loser: DB first, then storage
+        const loserId = rows[loserIdx].id;
+        const loserPath = rows[loserIdx].file_path;
+        deleteFromDb.run(loserId);
+        try {
+          await storageProvider.delete(loserPath);
+        } catch {
+          // Storage delete failure is acceptable (orphan file)
         }
-
-        const iExemplar = memberOf.get(i);
-        const jExemplar = memberOf.get(j);
-
-        if (iExemplar === undefined && jExemplar === undefined) {
-          // Neither in any group → create new group with i as exemplar
-          exemplarGroups.set(i, [i, j]);
-          memberOf.set(i, i);
-          memberOf.set(j, i);
-        } else if (iExemplar !== undefined && exemplarGroups.has(i) && jExemplar === undefined) {
-          // i is an exemplar → add j to i's group
-          exemplarGroups.get(i)!.push(j);
-          memberOf.set(j, i);
-        } else if (jExemplar !== undefined && exemplarGroups.has(j) && iExemplar === undefined) {
-          // j is an exemplar → add i to j's group
-          exemplarGroups.get(j)!.push(i);
-          memberOf.set(i, j);
-        }
-        // If both are in different groups → do not merge (prevents chain drift)
-        // If i is a non-exemplar member and j is unassigned (or vice versa), also check exemplar
-        else if (iExemplar !== undefined && !exemplarGroups.has(i) && jExemplar === undefined) {
-          // i is a member (not exemplar) — check j against i's exemplar
-          if (
-            hammingDistance(dHashes[iExemplar], dHashes[j]) <= dHashThreshold &&
-            hammingDistance(pHashes[iExemplar], pHashes[j]) <= pHashThreshold
-          ) {
-            exemplarGroups.get(iExemplar)!.push(j);
-            memberOf.set(j, iExemplar);
-          }
-        } else if (jExemplar !== undefined && !exemplarGroups.has(j) && iExemplar === undefined) {
-          // j is a member (not exemplar) — check i against j's exemplar
-          if (
-            hammingDistance(dHashes[jExemplar], dHashes[i]) <= dHashThreshold &&
-            hammingDistance(pHashes[jExemplar], pHashes[i]) <= pHashThreshold
-          ) {
-            exemplarGroups.get(jExemplar)!.push(i);
-            memberOf.set(i, jExemplar);
-          }
-        }
-        // Both in groups (same or different) → skip
       }
     }
   }
 
-  // 5. Create DuplicateGroup records in DB (only groups with 2+ members)
-  const insertGroup = db.prepare(
-    'INSERT INTO duplicate_groups (id, trip_id, default_image_id, image_count, created_at) VALUES (?, ?, ?, ?, ?)'
-  );
-  const updateMediaGroup = db.prepare(
-    'UPDATE media_items SET duplicate_group_id = ? WHERE id = ?'
-  );
-
-  const createdGroups: DuplicateGroup[] = [];
-
-  for (const [, members] of exemplarGroups) {
-    if (members.length < 2) continue;
-
-    const groupId = uuidv4();
-    const tripId = imageItems[members[0]].tripId;
-    const defaultImageId = imageItems[members[0]].id;
-    const now = new Date().toISOString();
-
-    insertGroup.run(groupId, tripId, defaultImageId, members.length, now);
-
-    for (const idx of members) {
-      updateMediaGroup.run(groupId, imageItems[idx].id);
+  // 5. Build result
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (removedSet.has(i)) {
+      removed.push(rows[i].id);
+    } else {
+      kept.push(rows[i].id);
     }
-
-    createdGroups.push({
-      id: groupId,
-      tripId,
-      defaultImageId,
-      imageCount: members.length,
-      createdAt: now,
-    });
   }
 
-  return createdGroups;
+  return { kept, removed, removedCount: removed.length };
+}
+
+/**
+ * Retention priority to pick the loser between two duplicate images:
+ * ① higher sharpness_score wins
+ * ② if sharpness diff < 10, higher resolution (w*h) wins
+ * ③ earlier in sequence wins (lower index)
+ * Returns the index of the loser (the one to remove).
+ */
+function pickLoser(
+  rows: Array<{ sharpness_score: number | null; width: number | null; height: number | null }>,
+  i: number,
+  j: number
+): number {
+  const sharpI = rows[i].sharpness_score ?? 0;
+  const sharpJ = rows[j].sharpness_score ?? 0;
+  const sharpDiff = Math.abs(sharpI - sharpJ);
+
+  if (sharpDiff >= 10) {
+    // Clear winner by sharpness
+    return sharpI >= sharpJ ? j : i;
+  }
+
+  // Sharpness is close (diff < 10), compare resolution
+  const resI = (rows[i].width ?? 0) * (rows[i].height ?? 0);
+  const resJ = (rows[j].width ?? 0) * (rows[j].height ?? 0);
+
+  if (resI !== resJ) {
+    return resI >= resJ ? j : i;
+  }
+
+  // Same resolution — keep earlier in sequence (lower index)
+  return j;
 }

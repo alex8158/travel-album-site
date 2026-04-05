@@ -38,6 +38,13 @@ export interface MediaItem {
   compiledPath?: string;
   userId?: string;
   visibility: 'public' | 'private';
+  avgBrightness?: number;
+  contrastLevel?: number;
+  colorCastR?: number;
+  colorCastG?: number;
+  colorCastB?: number;
+  noiseLevel?: number;
+  category?: string;
   createdAt: string;
 }
 
@@ -87,12 +94,17 @@ export interface ProcessResult {
   tripId: string;
   totalImages: number;
   totalVideos: number;
-  duplicateGroups: { groupId: string; imageCount: number }[];
-  totalGroups: number;
-  blurryCount: number;
-  suspectCount: number;
-  trashedDuplicateCount: number;
+  blurryDeletedCount: number;
+  dedupDeletedCount: number;
+  analyzedCount: number;
   optimizedCount: number;
+  classifiedCount: number;
+  categoryStats: {
+    people: number;
+    animal: number;
+    landscape: number;
+    other: number;
+  };
   compiledCount: number;
   failedCount: number;
   coverImageId: string | null;

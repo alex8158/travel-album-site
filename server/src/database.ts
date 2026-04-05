@@ -184,6 +184,55 @@ function initTables(db: Database.Database): void {
   } catch {
     // Column already exists — ignore for idempotency
   }
+
+  // Migration: add avg_brightness column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN avg_brightness REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add contrast_level column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN contrast_level REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add color_cast_r column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN color_cast_r REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add color_cast_g column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN color_cast_g REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add color_cast_b column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN color_cast_b REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add noise_level column to media_items table (image analysis)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN noise_level REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add category column to media_items table (image classification)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN category TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
 }
 
 export function closeDb(): void {

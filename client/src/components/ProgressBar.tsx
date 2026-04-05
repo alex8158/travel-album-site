@@ -10,9 +10,14 @@ export interface ProgressBarProps {
 }
 
 const STEP_LABELS: Record<string, string> = {
+  blurDetect: '模糊检测',
   dedup: '图片去重',
-  quality: '质量评分',
+  analyze: '图片分析',
+  optimize: '自动修图',
+  classify: '自动分类',
   thumbnail: '缩略图生成',
+  videoAnalysis: '视频分析',
+  videoEdit: '视频编辑',
   cover: '封面图选择',
 };
 

@@ -300,6 +300,98 @@ describe('GET /api/trips/:id/gallery', () => {
     });
   });
 
+  describe('category filtering', () => {
+    function setCategory(mediaId: string, category: string): void {
+      const db = getDb();
+      db.prepare('UPDATE media_items SET category = ? WHERE id = ?').run(category, mediaId);
+    }
+
+    it('should return only images matching the specified category', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      const img2 = createMediaItem(tripId, 'image');
+      const img3 = createMediaItem(tripId, 'image');
+      setCategory(img1, 'landscape');
+      setCategory(img2, 'people');
+      setCategory(img3, 'landscape');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=landscape`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(2);
+      const ids = res.body.images.map((i: any) => i.item.id);
+      expect(ids).toContain(img1);
+      expect(ids).toContain(img3);
+    });
+
+    it('should return all media when no category parameter is provided', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      const img2 = createMediaItem(tripId, 'image');
+      setCategory(img1, 'landscape');
+      setCategory(img2, 'people');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(2);
+    });
+
+    it('should return empty results when no media matches the category', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image');
+      setCategory(createMediaItem(tripId, 'image'), 'landscape');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=animal`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(0);
+    });
+
+    it('should ignore invalid category values and return all media', async () => {
+      const tripId = createTrip(owner.userId);
+
+      createMediaItem(tripId, 'image');
+      createMediaItem(tripId, 'image');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=invalid`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(2);
+    });
+
+    it('should include category field in image items', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const img1 = createMediaItem(tripId, 'image');
+      setCategory(img1, 'people');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.category).toBe('people');
+    });
+
+    it('should filter videos by category too', async () => {
+      const tripId = createTrip(owner.userId);
+
+      const vid1 = createMediaItem(tripId, 'video');
+      const vid2 = createMediaItem(tripId, 'video');
+      setCategory(vid1, 'animal');
+      setCategory(vid2, 'landscape');
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=animal`);
+      expect(res.status).toBe(200);
+
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(vid1);
+    });
+  });
+
   describe('tag filtering', () => {
     it('should return only images with the specified tag', async () => {
       const tripId = createTrip(owner.userId);

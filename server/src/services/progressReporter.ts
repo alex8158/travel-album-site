@@ -1,9 +1,9 @@
 import { Response } from 'express';
 
-export type StepName = 'dedup' | 'blurDetect' | 'quality' | 'imageOptimize' | 'thumbnail' | 'videoAnalysis' | 'videoEdit' | 'cover';
+export type StepName = 'blurDetect' | 'dedup' | 'analyze' | 'optimize' | 'classify' | 'thumbnail' | 'videoAnalysis' | 'videoEdit' | 'cover';
 
-const STEPS: StepName[] = ['dedup', 'blurDetect', 'quality', 'imageOptimize', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
-const TOTAL_STEPS = 8;
+const STEPS: StepName[] = ['blurDetect', 'dedup', 'analyze', 'optimize', 'classify', 'thumbnail', 'videoAnalysis', 'videoEdit', 'cover'];
+const TOTAL_STEPS = 9;
 
 export interface ProgressEvent {
   step: StepName;
@@ -18,12 +18,17 @@ export interface CompleteEvent {
   tripId: string;
   totalImages: number;
   totalVideos: number;
-  duplicateGroups: { groupId: string; imageCount: number }[];
-  totalGroups: number;
-  blurryCount?: number;
-  suspectCount?: number;
-  trashedDuplicateCount?: number;
+  blurryDeletedCount: number;
+  dedupDeletedCount: number;
+  analyzedCount: number;
   optimizedCount?: number;
+  classifiedCount: number;
+  categoryStats: {
+    people: number;
+    animal: number;
+    landscape: number;
+    other: number;
+  };
   compiledCount?: number;
   failedCount?: number;
   coverImageId: string | null;

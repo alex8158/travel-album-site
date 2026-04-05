@@ -29,15 +29,23 @@ function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string
 
 // Mock services to avoid needing real image/video files
 vi.mock('../services/dedupEngine', () => ({
-  deduplicate: vi.fn().mockResolvedValue([]),
+  deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
 }));
 
 vi.mock('../services/blurDetector', () => ({
-  detectBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, suspectCount: 0, results: [] }),
+  detectBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, suspectCount: 0, deleteLogs: [], results: [] }),
+}));
+
+vi.mock('../services/imageAnalyzer', () => ({
+  analyzeTrip: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../services/imageOptimizer', () => ({
   optimizeTrip: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('../services/imageClassifier', () => ({
+  classifyTrip: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../services/videoAnalyzer', () => ({
@@ -49,7 +57,12 @@ vi.mock('../services/videoEditor', () => ({
 }));
 
 import { deduplicate } from '../services/dedupEngine';
+import { detectBlurry } from '../services/blurDetector';
+import { optimizeTrip } from '../services/imageOptimizer';
+
 const mockDeduplicate = vi.mocked(deduplicate);
+const mockDetectBlurry = vi.mocked(detectBlurry);
+const mockOptimizeTrip = vi.mocked(optimizeTrip);
 
 describe('POST /api/trips/:id/process', () => {
   let authToken: string;
@@ -62,7 +75,11 @@ describe('POST /api/trips/:id/process', () => {
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
     mockDeduplicate.mockReset();
-    mockDeduplicate.mockResolvedValue([]);
+    mockDeduplicate.mockResolvedValue({ kept: [], removed: [], removedCount: 0 });
+    mockDetectBlurry.mockReset();
+    mockDetectBlurry.mockResolvedValue({ blurryCount: 0, suspectCount: 0, deleteLogs: [], results: [] });
+    mockOptimizeTrip.mockReset();
+    mockOptimizeTrip.mockResolvedValue([]);
     const user = createTestUser('regular');
     authToken = user.token;
     testUserId = user.userId;
@@ -90,19 +107,19 @@ describe('POST /api/trips/:id/process', () => {
       tripId: trip.body.id,
       totalImages: 0,
       totalVideos: 0,
-      duplicateGroups: [],
-      totalGroups: 0,
-      blurryCount: 0,
-      suspectCount: 0,
-      trashedDuplicateCount: 0,
+      blurryDeletedCount: 0,
+      dedupDeletedCount: 0,
+      analyzedCount: 0,
       optimizedCount: 0,
+      classifiedCount: 0,
+      categoryStats: { people: 0, animal: 0, landscape: 0, other: 0 },
       compiledCount: 0,
       failedCount: 0,
       coverImageId: null,
     });
   });
 
-  it('should return summary with duplicate groups', async () => {
+  it('should return summary with correct counts for images', async () => {
     // Create trip
     const trip = await request(app)
       .post('/api/trips')
@@ -120,31 +137,25 @@ describe('POST /api/trips/:id/process', () => {
     insertMedia.run('img-1', tripId, `${tripId}/originals/a.jpg`, 'image', 'image/jpeg', 'a.jpg', 1000, testUserId, 'public', now);
     insertMedia.run('img-2', tripId, `${tripId}/originals/b.jpg`, 'image', 'image/jpeg', 'b.jpg', 2000, testUserId, 'public', now);
     insertMedia.run('img-3', tripId, `${tripId}/originals/c.jpg`, 'image', 'image/jpeg', 'c.jpg', 3000, testUserId, 'public', now);
-    // Also insert a video — should NOT be included
+    // Also insert a video — should NOT be included in image count
     insertMedia.run('vid-1', tripId, `${tripId}/originals/v.mp4`, 'video', 'video/mp4', 'v.mp4', 5000, testUserId, 'public', now);
 
-    // Mock deduplicate to return groups
-    mockDeduplicate.mockResolvedValue([
-      { id: 'group-1', tripId, defaultImageId: 'img-1', imageCount: 2, createdAt: now },
-    ]);
+    // Mock deduplicate to return some removed
+    mockDeduplicate.mockResolvedValue({ kept: ['img-1', 'img-2'], removed: ['img-3'], removedCount: 1 });
 
     const res = await request(app).post(`/api/trips/${tripId}/process`);
     expect(res.status).toBe(200);
     expect(res.body.tripId).toBe(tripId);
     expect(res.body.totalImages).toBe(3);
-    expect(res.body.totalGroups).toBe(1);
-    expect(res.body.duplicateGroups).toEqual([
-      { groupId: 'group-1', imageCount: 2 },
-    ]);
+    expect(res.body.totalVideos).toBe(1);
+    expect(res.body.dedupDeletedCount).toBe(1);
 
-    // Verify deduplicate was called with only image items (not video)
+    // Verify deduplicate was called with tripId (not image items)
     expect(mockDeduplicate).toHaveBeenCalledTimes(1);
-    const calledItems = mockDeduplicate.mock.calls[0][0];
-    expect(calledItems).toHaveLength(3);
-    expect(calledItems.every((item: any) => item.mediaType === 'image')).toBe(true);
+    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
   });
 
-  it('should resolve file paths to absolute paths for deduplicate', async () => {
+  it('should call deduplicate with tripId string', async () => {
     const trip = await request(app)
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
@@ -158,14 +169,13 @@ describe('POST /api/trips/:id/process', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run('img-a', tripId, `${tripId}/originals/photo.jpg`, 'image', 'image/jpeg', 'photo.jpg', 1000, testUserId, 'public', now);
 
-    mockDeduplicate.mockResolvedValue([]);
+    mockDeduplicate.mockResolvedValue({ kept: ['img-a'], removed: [], removedCount: 0 });
 
     await request(app).post(`/api/trips/${tripId}/process`);
 
-    const calledItems = mockDeduplicate.mock.calls[0][0];
-    expect(calledItems).toHaveLength(1);
-    // filePath should be the relative DB path (StorageProvider handles resolution)
-    expect(calledItems[0].filePath).toBe(`${tripId}/originals/photo.jpg`);
-    expect(calledItems[0].filePath).toContain('photo.jpg');
+    // deduplicate now receives tripId as first arg, not image items
+    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
+    expect(typeof mockDeduplicate.mock.calls[0][0]).toBe('string');
+    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
   });
 });

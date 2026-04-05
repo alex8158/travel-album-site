@@ -12,14 +12,12 @@ const LAPLACIAN_KERNEL = {
   kernel: [0, 1, 0, 1, -4, 1, 0, 1, 0],
 };
 
-const DEFAULT_HARD_THRESHOLD = 50;
-const DEFAULT_SOFT_THRESHOLD = 150;
+const DEFAULT_THRESHOLD = 50;
 
 export type BlurStatus = 'clear' | 'suspect' | 'blurry';
 
 export interface BlurDetectOptions {
-  hardThreshold?: number;  // default 50
-  softThreshold?: number;  // default 150
+  threshold?: number;  // default 50 — sharpnessScore < threshold = blurry
 }
 
 export interface BlurResult {
@@ -28,9 +26,18 @@ export interface BlurResult {
   blurStatus: BlurStatus;
 }
 
+export interface BlurDeleteLog {
+  mediaId: string;
+  filename: string;
+  sharpnessScore: number;
+  reason: string;
+  deletedAt: string;
+}
+
 export interface BlurDetectResult {
   blurryCount: number;
   suspectCount: number;
+  deleteLogs: BlurDeleteLog[];
   results: BlurResult[];
 }
 
@@ -57,52 +64,48 @@ export async function computeSharpness(imagePath: string): Promise<number> {
 }
 
 /**
- * Classify blur status based on sharpness variance and dual thresholds.
+ * Classify blur status based on sharpness variance and a single threshold.
+ * sharpnessScore < threshold → blurry
+ * sharpnessScore >= threshold → clear
  */
 export function classifyBlur(
   variance: number,
-  hardThreshold: number,
-  softThreshold: number
+  threshold: number
 ): BlurStatus {
-  if (variance < hardThreshold) return 'blurry';
-  if (variance < softThreshold) return 'suspect';
+  if (variance < threshold) return 'blurry';
   return 'clear';
 }
 
 interface MediaItemRow {
   id: string;
   file_path: string;
+  original_filename: string;
+  processing_error: string | null;
 }
 
 /**
- * Detect blurry images in a trip using dual-threshold tri-state classification.
+ * Detect blurry images in a trip using single-threshold binary classification.
  *
- * - variance < hardThreshold → blurry (trashed with reason 'blur')
- * - hardThreshold ≤ variance < softThreshold → suspect (kept active)
- * - variance ≥ softThreshold → clear
+ * - variance < threshold → blurry (permanently deleted from DB + storage)
+ * - variance >= threshold → clear
  *
- * On computation error: blur_status = 'suspect', processing_error recorded.
+ * On computation error: blur_status = 'suspect', processing_error appended.
  */
 export async function detectBlurry(
   tripId: string,
   options?: BlurDetectOptions
 ): Promise<BlurDetectResult> {
-  const hardThreshold = options?.hardThreshold ?? DEFAULT_HARD_THRESHOLD;
-  const softThreshold = options?.softThreshold ?? DEFAULT_SOFT_THRESHOLD;
-
-  if (hardThreshold >= softThreshold) {
-    throw new Error('hardThreshold must be less than softThreshold');
-  }
+  const threshold = options?.threshold ?? DEFAULT_THRESHOLD;
 
   const db = getDb();
   const storageProvider = getStorageProvider();
 
   const rows = db.prepare(
-    "SELECT id, file_path FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
+    "SELECT id, file_path, original_filename, processing_error FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
   ).all(tripId) as MediaItemRow[];
 
-  const trashStmt = db.prepare(
-    "UPDATE media_items SET status = 'trashed', trashed_reason = 'blur' WHERE id = ?"
+  const deleteDbStmt = db.prepare(
+    'DELETE FROM media_items WHERE id = ?'
   );
   const updateStmt = db.prepare(
     'UPDATE media_items SET sharpness_score = ?, blur_status = ? WHERE id = ?'
@@ -112,6 +115,7 @@ export async function detectBlurry(
   );
 
   const results: BlurResult[] = [];
+  const deleteLogs: BlurDeleteLog[] = [];
   let blurryCount = 0;
   let suspectCount = 0;
 
@@ -122,22 +126,38 @@ export async function detectBlurry(
     try {
       const localPath = await storageProvider.downloadToTemp(row.file_path);
       sharpnessScore = await computeSharpness(localPath);
-      blurStatus = classifyBlur(sharpnessScore, hardThreshold, softThreshold);
-
-      updateStmt.run(sharpnessScore, blurStatus, row.id);
+      blurStatus = classifyBlur(sharpnessScore, threshold);
 
       if (blurStatus === 'blurry') {
-        trashStmt.run(row.id);
+        // Permanently delete: DB first, then storage
+        deleteDbStmt.run(row.id);
+        await storageProvider.delete(row.file_path);
+
+        deleteLogs.push({
+          mediaId: row.id,
+          filename: row.original_filename,
+          sharpnessScore,
+          reason: `sharpness score ${sharpnessScore} below threshold ${threshold}`,
+          deletedAt: new Date().toISOString(),
+        });
         blurryCount++;
-      } else if (blurStatus === 'suspect') {
-        suspectCount++;
+      } else {
+        updateStmt.run(sharpnessScore, blurStatus, row.id);
       }
     } catch (err) {
-      // On error: classify as suspect, record processing error
+      // On error: classify as suspect, append to processing_error
       blurStatus = 'suspect';
       sharpnessScore = 0;
       const errorMsg = err instanceof Error ? err.message : String(err);
-      errorStmt.run('suspect', errorMsg, row.id);
+      const prefixedError = `[blurDetect] ${errorMsg}`;
+
+      // Append to existing processing_error with newline separator
+      const existingError = row.processing_error;
+      const newError = existingError
+        ? `${existingError}\n${prefixedError}`
+        : prefixedError;
+
+      errorStmt.run('suspect', newError, row.id);
       suspectCount++;
     }
 
@@ -148,5 +168,5 @@ export async function detectBlurry(
     });
   }
 
-  return { blurryCount, suspectCount, results };
+  return { blurryCount, suspectCount, deleteLogs, results };
 }
