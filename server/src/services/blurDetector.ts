@@ -45,7 +45,7 @@ export interface BlurDetectResult {
  * Compute the sharpness score of an image using Laplacian variance.
  */
 export async function computeSharpness(imagePath: string): Promise<number> {
-  const { data, info } = await sharp(imagePath)
+  const { data, info } = await sharp(imagePath, { failOn: 'none' })
     .grayscale()
     .convolve(LAPLACIAN_KERNEL)
     .raw()

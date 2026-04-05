@@ -41,7 +41,7 @@ function computeVariance(data: Buffer, pixelCount: number): number {
  * Resizes to 256x256 grayscale, computes Laplacian variance / (original variance + 1).
  */
 async function estimateNoise(imagePath: string): Promise<number> {
-  const { data: origData, info: origInfo } = await sharp(imagePath)
+  const { data: origData, info: origInfo } = await sharp(imagePath, { failOn: 'none' })
     .resize(256, 256, { fit: 'fill' })
     .grayscale()
     .raw()
@@ -50,7 +50,7 @@ async function estimateNoise(imagePath: string): Promise<number> {
   const origPixelCount = origInfo.width * origInfo.height;
   const originalVariance = computeVariance(origData, origPixelCount);
 
-  const { data: lapData, info: lapInfo } = await sharp(imagePath)
+  const { data: lapData, info: lapInfo } = await sharp(imagePath, { failOn: 'none' })
     .resize(256, 256, { fit: 'fill' })
     .grayscale()
     .convolve(LAPLACIAN_KERNEL)
@@ -67,7 +67,7 @@ async function estimateNoise(imagePath: string): Promise<number> {
  * Analyze image characteristics: brightness, contrast, color cast, noise.
  */
 export async function analyzeImage(imagePath: string): Promise<ImageAnalysis> {
-  const stats = await sharp(imagePath).stats();
+  const stats = await sharp(imagePath, { failOn: 'none' }).stats();
 
   // Use first 3 channels (R, G, B)
   const channels = stats.channels.slice(0, 3);

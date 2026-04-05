@@ -109,7 +109,7 @@ export async function optimizeImage(
   const tempPath = path.join(getTempDir(), outputFilename);
 
   try {
-    let pipeline = sharp(imagePath);
+    let pipeline = sharp(imagePath, { failOn: 'none' });
 
     // Median filter (noise reduction) — apply early before sharpening
     if (params.medianFilter != null) {
