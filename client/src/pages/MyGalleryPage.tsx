@@ -354,6 +354,34 @@ export default function MyGalleryPage() {
     }
   }
 
+  // --- Hooks must be called before any conditional returns (React rules of hooks) ---
+  const images = data?.images ?? [];
+  const videos = data?.videos ?? [];
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
+    for (const img of images) {
+      const cat = img.item.category as CategoryTab | undefined;
+      if (cat && cat in counts) {
+        counts[cat]++;
+      } else {
+        counts.other++;
+      }
+    }
+    return counts;
+  }, [images]);
+
+  const filteredImages = useMemo(() => {
+    if (activeCategory === 'all') return images;
+    return images.filter((img) => {
+      const cat = img.item.category;
+      if (activeCategory === 'other') {
+        return !cat || cat === 'other';
+      }
+      return cat === activeCategory;
+    });
+  }, [images, activeCategory]);
+
   // --- Permission check ---
   if (!isLoggedIn || !user) {
     return <div role="alert">请先登录</div>;
@@ -382,38 +410,7 @@ export default function MyGalleryPage() {
     return <div role="alert">未找到相册数据</div>;
   }
 
-  const { trip, images = [], videos = [] } = data;
-
-  // Debug: log data shape to help diagnose render crash
-  console.log('[MyGalleryPage] images count:', images.length, 'videos count:', videos.length);
-  if (images.length > 0) {
-    console.log('[MyGalleryPage] first image item keys:', Object.keys(images[0].item));
-    console.log('[MyGalleryPage] first image item:', JSON.stringify(images[0].item).slice(0, 300));
-  }
-
-  const categoryCounts = useMemo(() => {
-    const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
-    for (const img of images) {
-      const cat = img.item.category as CategoryTab | undefined;
-      if (cat && cat in counts) {
-        counts[cat]++;
-      } else {
-        counts.other++;
-      }
-    }
-    return counts;
-  }, [images]);
-
-  const filteredImages = useMemo(() => {
-    if (activeCategory === 'all') return images;
-    return images.filter((img) => {
-      const cat = img.item.category;
-      if (activeCategory === 'other') {
-        return !cat || cat === 'other';
-      }
-      return cat === activeCategory;
-    });
-  }, [images, activeCategory]);
+  const trip = data!.trip;
 
   return (
     <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
