@@ -46,7 +46,7 @@ export function computeOptimizeParams(analysis: ImageAnalysis): OptimizeParams {
     params.gammaCorrection = 1.1;
     if (analysis.contrastLevel < 40) {
       params.claheEnabled = true;
-      params.claheOptions = { width: 3, height: 3, maxSlope: 1.5 };
+      params.claheOptions = { width: 3, height: 3, maxSlope: 2 };
     }
   } else if (analysis.avgBrightness > 170) {
     params.gammaCorrection = 0.9;
@@ -56,7 +56,7 @@ export function computeOptimizeParams(analysis: ImageAnalysis): OptimizeParams {
   // --- Contrast (only when brightness is normal 90-170) ---
   if (analysis.contrastLevel < 40 && analysis.avgBrightness >= 90 && analysis.avgBrightness <= 170) {
     params.claheEnabled = true;
-    params.claheOptions = { width: 3, height: 3, maxSlope: 1.5 };
+    params.claheOptions = { width: 3, height: 3, maxSlope: 2 };
   }
   // contrast > 80: no special handling; 40-80: skip
 

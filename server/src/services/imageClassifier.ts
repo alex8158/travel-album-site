@@ -96,10 +96,18 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function classifyImage(imageBytes: Buffer): Promise<ClassifyResult> {
+export async function classifyImage(imageBytes: Buffer): Promise<ClassifyResult>;
+export async function classifyImage(s3Bucket: string, s3Key: string): Promise<ClassifyResult>;
+export async function classifyImage(bytesOrBucket: Buffer | string, s3Key?: string): Promise<ClassifyResult> {
   const client = createRekognitionClient();
+
+  // Build Image parameter: S3Object if bucket+key provided, Bytes otherwise
+  const imageParam = typeof bytesOrBucket === 'string' && s3Key
+    ? { S3Object: { Bucket: bytesOrBucket, Name: s3Key } }
+    : { Bytes: bytesOrBucket as Buffer };
+
   const command = new DetectLabelsCommand({
-    Image: { Bytes: imageBytes },
+    Image: imageParam,
     MaxLabels: 20,
     MinConfidence: 70,
   });
@@ -122,7 +130,6 @@ export async function classifyImage(imageBytes: Buffer): Promise<ClassifyResult>
     }
   }
 
-  // Should not reach here, but just in case
   throw lastError;
 }
 
@@ -159,10 +166,20 @@ export async function classifyTrip(tripId: string): Promise<void> {
      WHERE id = ?`
   );
 
+  const s3Bucket = process.env.S3_BUCKET || '';
+  const useS3 = process.env.STORAGE_TYPE === 's3' && s3Bucket;
+
   for (const row of rows) {
     try {
-      const imageBuffer = await storageProvider.read(row.file_path);
-      const result = await classifyImage(imageBuffer);
+      let result: ClassifyResult;
+      if (useS3) {
+        // Use S3Object — no size limit, no download needed
+        result = await classifyImage(s3Bucket, row.file_path);
+      } else {
+        // Fallback: read file and pass as Bytes
+        const imageBuffer = await storageProvider.read(row.file_path);
+        result = await classifyImage(imageBuffer);
+      }
 
       // Update main category on media_items
       updateCategoryStmt.run(result.category, row.id);
