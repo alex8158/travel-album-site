@@ -61,17 +61,16 @@ export function computeOptimizeParams(analysis: ImageAnalysis): OptimizeParams {
   // contrast > 80: no special handling; 40-80: skip
 
   // --- Color cast ---
-  if (
-    Math.abs(analysis.colorCastR) >= 10 ||
-    Math.abs(analysis.colorCastG) >= 10 ||
-    Math.abs(analysis.colorCastB) >= 10
-  ) {
-    params.tintCorrection = {
-      r: -analysis.colorCastR,
-      g: -analysis.colorCastG,
-      b: -analysis.colorCastB,
-    };
-  }
+  // DISABLED in V1: tint() is too aggressive for automated use.
+  // Water/underwater, sunset, neon scenes have natural strong color casts
+  // that should NOT be "corrected". Revisit in V2 with scene-aware logic.
+  // if (
+  //   Math.abs(analysis.colorCastR) >= 10 ||
+  //   Math.abs(analysis.colorCastG) >= 10 ||
+  //   Math.abs(analysis.colorCastB) >= 10
+  // ) {
+  //   params.tintCorrection = { ... };
+  // }
 
   // --- Noise / Sharpen ---
   if (analysis.noiseLevel >= 0.6) {
