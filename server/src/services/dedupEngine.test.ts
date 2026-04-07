@@ -227,6 +227,13 @@ describe('deduplicate', () => {
         FOREIGN KEY (trip_id) REFERENCES trips(id),
         FOREIGN KEY (duplicate_group_id) REFERENCES duplicate_groups(id)
       );
+      CREATE TABLE media_tags (
+        id TEXT PRIMARY KEY,
+        media_id TEXT NOT NULL,
+        tag_name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (media_id) REFERENCES media_items(id)
+      );
     `);
 
     // Insert a test trip

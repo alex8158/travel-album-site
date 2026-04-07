@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
+import { deleteMediaItemFromDb } from '../helpers/deleteMediaItem';
 
 /**
  * Laplacian convolution kernel for sharpness detection.
@@ -104,9 +105,7 @@ export async function detectBlurry(
     "SELECT id, file_path, original_filename, processing_error FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
   ).all(tripId) as MediaItemRow[];
 
-  const deleteDbStmt = db.prepare(
-    'DELETE FROM media_items WHERE id = ?'
-  );
+  const deleteTagsStmt = db.prepare('DELETE FROM media_tags WHERE media_id = ?');
   const updateStmt = db.prepare(
     'UPDATE media_items SET sharpness_score = ?, blur_status = ? WHERE id = ?'
   );
@@ -129,8 +128,8 @@ export async function detectBlurry(
       blurStatus = classifyBlur(sharpnessScore, threshold);
 
       if (blurStatus === 'blurry') {
-        // Permanently delete: DB first, then storage
-        deleteDbStmt.run(row.id);
+        // Permanently delete: clean up FK references, delete from DB, then storage
+        deleteMediaItemFromDb(row.id);
         await storageProvider.delete(row.file_path);
 
         deleteLogs.push({

@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
+import { deleteMediaItemFromDb } from '../helpers/deleteMediaItem';
 
 /**
  * Compute a 64-bit dHash (difference hash) for an image.
@@ -153,8 +154,6 @@ export async function deduplicate(
   // 3. Track removed set so already-removed images are skipped
   const removedSet = new Set<number>();
 
-  const deleteFromDb = db.prepare('DELETE FROM media_items WHERE id = ?');
-
   // 4. Sliding window comparison
   for (let i = 0; i < rows.length; i++) {
     if (removedSet.has(i)) continue;
@@ -174,7 +173,7 @@ export async function deduplicate(
         // Permanently delete the loser: DB first, then storage
         const loserId = rows[loserIdx].id;
         const loserPath = rows[loserIdx].file_path;
-        deleteFromDb.run(loserId);
+        deleteMediaItemFromDb(loserId);
         try {
           await storageProvider.delete(loserPath);
         } catch {
