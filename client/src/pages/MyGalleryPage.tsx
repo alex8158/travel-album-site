@@ -176,6 +176,7 @@ export default function MyGalleryPage() {
           return;
         }
         const json = await res.json() as GalleryData;
+        console.log('[MyGalleryPage] gallery data:', JSON.stringify(json).slice(0, 500));
         setData(json);
       } catch {
         if (!cancelled) setError('加载相册数据失败，请稍后重试');
@@ -381,7 +382,14 @@ export default function MyGalleryPage() {
     return <div role="alert">未找到相册数据</div>;
   }
 
-  const { trip, images, videos } = data;
+  const { trip, images = [], videos = [] } = data;
+
+  // Debug: log data shape to help diagnose render crash
+  console.log('[MyGalleryPage] images count:', images.length, 'videos count:', videos.length);
+  if (images.length > 0) {
+    console.log('[MyGalleryPage] first image item keys:', Object.keys(images[0].item));
+    console.log('[MyGalleryPage] first image item:', JSON.stringify(images[0].item).slice(0, 300));
+  }
 
   const categoryCounts = useMemo(() => {
     const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
