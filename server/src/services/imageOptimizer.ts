@@ -139,13 +139,16 @@ export async function optimizeImage(
       pipeline = pipeline.sharpen({ sigma: params.sharpenSigma });
     }
 
+    // Resize to max 2048px long edge for web display (preserve aspect ratio, no upscale)
+    pipeline = pipeline.resize(2048, 2048, { fit: 'inside', withoutEnlargement: true });
+
     // Preserve EXIF metadata
     pipeline = pipeline.withMetadata();
 
     // JPEG quality handling
     const lowerExt = ext.toLowerCase();
     if (lowerExt === 'jpeg' || lowerExt === 'jpg') {
-      pipeline = pipeline.jpeg({ quality: 90 });
+      pipeline = pipeline.jpeg({ quality: 85 });
     }
 
     await pipeline.toFile(tempPath);

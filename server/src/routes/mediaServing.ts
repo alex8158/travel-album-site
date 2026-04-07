@@ -6,6 +6,8 @@ import { getStorageProvider } from '../storage/factory';
 
 const router = Router();
 
+const usePresignedUrls = process.env.STORAGE_TYPE === 's3';
+
 interface MediaItemRow {
   id: string;
   trip_id: string;
@@ -38,6 +40,12 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     try {
       const exists = await storageProvider.exists(row.thumbnail_path);
       if (exists) {
+        // S3: redirect to presigned URL for cached thumbnails
+        if (usePresignedUrls) {
+          const url = await storageProvider.getUrl(row.thumbnail_path);
+          res.set('Cache-Control', 'public, max-age=86400');
+          return res.redirect(302, url);
+        }
         thumbLocalPath = await storageProvider.downloadToTemp(row.thumbnail_path);
       }
     } catch {
@@ -63,10 +71,12 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     }
   }
 
+  res.set('Cache-Control', 'public, max-age=86400'); // 24h
   return res.sendFile(thumbLocalPath);
 });
 
 // GET /api/media/:id/original — Serve the best available version (optimized/compiled or original)
+// For S3 storage: redirect to presigned URL (bypasses server as middleman)
 router.get('/:id/original', async (req: Request, res: Response) => {
   const db = getDb();
   const row = db.prepare(
@@ -79,38 +89,48 @@ router.get('/:id/original', async (req: Request, res: Response) => {
 
   const storageProvider = getStorageProvider();
 
+  // Determine which file to serve
+  let servePath: string | null = null;
+
   // For videos: serve compiled version by default, unless ?original=true
   if (row.media_type === 'video') {
     const wantOriginal = req.query.original === 'true';
     if (!wantOriginal && row.compiled_path) {
-      try {
-        const compiledLocal = await storageProvider.downloadToTemp(row.compiled_path);
-        if (fs.existsSync(compiledLocal)) {
-          return res.sendFile(compiledLocal);
-        }
-      } catch { /* fall through */ }
+      servePath = row.compiled_path;
     }
   }
 
   // For images: serve optimized version if available
-  if (row.media_type === 'image' && row.optimized_path) {
-    try {
-      const optimizedLocal = await storageProvider.downloadToTemp(row.optimized_path);
-      if (fs.existsSync(optimizedLocal)) {
-        return res.sendFile(optimizedLocal);
-      }
-    } catch { /* fall through */ }
+  if (!servePath && row.media_type === 'image' && row.optimized_path) {
+    servePath = row.optimized_path;
   }
 
-  // Fallback: serve original file
-  try {
-    const localPath = await storageProvider.downloadToTemp(row.file_path);
-    if (!fs.existsSync(localPath)) {
-      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
+  // Fallback: original file
+  if (!servePath) {
+    servePath = row.file_path;
+  }
+
+  // S3: redirect to presigned URL (browser downloads directly from S3)
+  if (usePresignedUrls) {
+    try {
+      const url = await storageProvider.getUrl(servePath);
+      res.set('Cache-Control', 'private, max-age=3600');
+      return res.redirect(302, url);
+    } catch {
+      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
     }
+  }
+
+  // Non-S3: download to temp and sendFile
+  try {
+    const localPath = await storageProvider.downloadToTemp(servePath);
+    if (!fs.existsSync(localPath)) {
+      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
+    }
+    res.set('Cache-Control', 'public, max-age=3600');
     return res.sendFile(localPath);
   } catch {
-    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
   }
 });
 
@@ -125,8 +145,19 @@ router.get('/:id/raw', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
   }
 
+  const storageProvider = getStorageProvider();
+
+  // S3: redirect to presigned URL
+  if (usePresignedUrls) {
+    try {
+      const url = await storageProvider.getUrl(row.file_path);
+      return res.redirect(302, url);
+    } catch {
+      return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
+    }
+  }
+
   try {
-    const storageProvider = getStorageProvider();
     const localPath = await storageProvider.downloadToTemp(row.file_path);
     if (!fs.existsSync(localPath)) {
       return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });

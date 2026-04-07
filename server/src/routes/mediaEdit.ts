@@ -96,11 +96,14 @@ router.post('/:id/edit', authMiddleware, requireAuth, async (req: Request, res: 
       pipeline = pipeline.sharpen({ sigma });
     }
 
+    // Resize to max 2048px for web display (same as auto-optimize)
+    pipeline = pipeline.resize(2048, 2048, { fit: 'inside', withoutEnlargement: true });
+
     pipeline = pipeline.withMetadata();
 
     const lowerExt = ext.toLowerCase();
     if (lowerExt === 'jpeg' || lowerExt === 'jpg') {
-      pipeline = pipeline.jpeg({ quality: 90 });
+      pipeline = pipeline.jpeg({ quality: 85 });
     }
 
     await pipeline.toFile(tempPath);
