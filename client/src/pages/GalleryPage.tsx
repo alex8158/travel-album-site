@@ -44,6 +44,7 @@ export interface GalleryImageItem {
   trashedReason?: string;
   processingError?: string;
   category?: string;
+  avgBrightness?: number;
 }
 
 export interface GalleryImage {

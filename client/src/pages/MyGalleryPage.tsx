@@ -473,7 +473,7 @@ export default function MyGalleryPage() {
 
       {/* Unprocessed media banner */}
       {!showAppend && appendMode !== 'processing' && (() => {
-        const unprocessedImages = images.filter(img => img.item.qualityScore == null);
+        const unprocessedImages = images.filter(img => img.item.category == null && img.item.avgBrightness == null);
         const hasUnprocessed = unprocessedImages.length > 0;
         if (!hasUnprocessed) return null;
         return (
