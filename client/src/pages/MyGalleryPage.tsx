@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import Lightbox from '../components/Lightbox';
+import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
@@ -46,6 +47,7 @@ export default function MyGalleryPage() {
   const [forbidden, setForbidden] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
 
   // Append media state
   const [appendMode, setAppendMode] = useState<AppendMode>('idle');
@@ -648,6 +650,25 @@ export default function MyGalleryPage() {
                     🔄 {img.duplicateGroup.imageCount}张
                   </button>
                 )}
+                {!multiSelectMode && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setEditingMediaId(img.item.id); }}
+                    aria-label={`编辑 ${img.item.originalFilename}`}
+                    style={{
+                      position: 'absolute',
+                      bottom: '4px',
+                      left: '4px',
+                      background: 'rgba(255,255,255,0.9)',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '2px 8px',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✏️ 编辑
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -873,6 +894,20 @@ export default function MyGalleryPage() {
           onNext={() => setLightboxIndex((i) => (i !== null && i < filteredImages.length - 1 ? i + 1 : i))}
         />
       )}
+
+      {/* Image Editor */}
+      {editingMediaId && (() => {
+        const editImg = images.find(img => img.item.id === editingMediaId);
+        if (!editImg) return null;
+        return (
+          <ImageEditor
+            mediaId={editingMediaId}
+            originalUrl={`/api/media/${editingMediaId}/raw`}
+            onClose={() => setEditingMediaId(null)}
+            onSaved={() => { setEditingMediaId(null); fetchGallery(); }}
+          />
+        );
+      })()}
 
       {/* Multi-select bottom action bar */}
       {multiSelectMode && selectedIds.size > 0 && (
