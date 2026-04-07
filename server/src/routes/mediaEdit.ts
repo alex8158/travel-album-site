@@ -69,19 +69,17 @@ router.post('/:id/edit', authMiddleware, requireAuth, async (req: Request, res: 
 
     let pipeline = sharp(localPath, { failOn: 'none' });
 
-    // Brightness: map -100..100 to gamma. brightness > 0 = brighter (gamma < 1), < 0 = darker (gamma > 1)
-    if (params.brightness !== 0) {
-      // Map: -100 → gamma 2.0 (darker), 0 → gamma 1.0, +100 → gamma 0.5 (brighter)
-      const gamma = 1 / (1 + params.brightness / 100);
-      pipeline = pipeline.gamma(Math.max(0.1, Math.min(gamma, 3.0)));
-    }
-
-    // Contrast: use linear for contrast adjustment
-    if (params.contrast !== 0) {
-      // Map: -100 → a=0.5, 0 → a=1.0, +100 → a=2.0
-      const a = 1 + params.contrast / 100;
-      const b = 128 * (1 - a);
-      pipeline = pipeline.linear(Math.max(0.1, a), b);
+    // Brightness + Contrast: combine into a single linear(a, b) call
+    // Contrast: a = 1 + contrast/100 (range 0.0 to 2.0)
+    // Brightness: offset = brightness/100 * 128
+    // Combined: pixel = a * pixel + (128*(1-a) + offset)
+    {
+      const a = Math.max(0.1, 1 + params.contrast / 100);
+      const brightnessOffset = (params.brightness / 100) * 128;
+      const b = 128 * (1 - a) + brightnessOffset;
+      if (params.brightness !== 0 || params.contrast !== 0) {
+        pipeline = pipeline.linear(a, b);
+      }
     }
 
     // Saturation: use modulate
