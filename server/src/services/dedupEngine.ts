@@ -114,7 +114,7 @@ export async function deduplicate(
   options?: SlidingWindowDedupOptions
 ): Promise<DedupResult> {
   const windowSize = options?.windowSize ?? 10;
-  const hammingThreshold = options?.hammingThreshold ?? 5;
+  const hammingThreshold = options?.hammingThreshold ?? 12;
 
   const db = getDb();
   const storageProvider = getStorageProvider();
@@ -141,16 +141,21 @@ export async function deduplicate(
     return { kept: [], removed: [], removedCount: 0 };
   }
 
-  // 2. Compute pHash for each image
+  // 2. Compute pHash AND dHash for each image (dual hash for better accuracy)
   const pHashes: (string | null)[] = [];
+  const dHashes: (string | null)[] = [];
   for (const row of rows) {
     try {
       const localPath = await storageProvider.downloadToTemp(row.file_path);
-      const pHash = await computePHash(localPath);
+      const [pHash, dHash] = await Promise.all([
+        computePHash(localPath),
+        computeHash(localPath),
+      ]);
       pHashes.push(pHash);
+      dHashes.push(dHash);
     } catch {
-      // If hash computation fails, mark as null (won't participate in dedup)
       pHashes.push(null);
+      dHashes.push(null);
     }
   }
 
@@ -160,15 +165,20 @@ export async function deduplicate(
   // 4. Sliding window comparison
   for (let i = 0; i < rows.length; i++) {
     if (removedSet.has(i)) continue;
-    if (pHashes[i] === null) continue;
+    if (pHashes[i] === null && dHashes[i] === null) continue;
 
     const end = Math.min(i + windowSize, rows.length - 1);
     for (let j = i + 1; j <= end; j++) {
       if (removedSet.has(j)) continue;
-      if (pHashes[j] === null) continue;
+      if (pHashes[j] === null && dHashes[j] === null) continue;
 
-      const dist = hammingDistance(pHashes[i]!, pHashes[j]!);
-      if (dist <= hammingThreshold) {
+      // Dual hash verification: consider duplicate if EITHER hash matches
+      // This catches more duplicates — pHash is better for color/tone changes,
+      // dHash is better for slight position shifts
+      const pDist = (pHashes[i] && pHashes[j]) ? hammingDistance(pHashes[i]!, pHashes[j]!) : 999;
+      const dDist = (dHashes[i] && dHashes[j]) ? hammingDistance(dHashes[i]!, dHashes[j]!) : 999;
+      const isDuplicate = pDist <= hammingThreshold || dDist <= hammingThreshold;
+      if (isDuplicate) {
         // They're duplicates — decide who to remove
         const loserIdx = pickLoser(rows, i, j);
         removedSet.add(loserIdx);

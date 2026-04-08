@@ -13,7 +13,7 @@ const LAPLACIAN_KERNEL = {
   kernel: [0, 1, 0, 1, -4, 1, 0, 1, 0],
 };
 
-const DEFAULT_THRESHOLD = 30;
+const DEFAULT_THRESHOLD = 100;
 
 export type BlurStatus = 'clear' | 'suspect' | 'blurry';
 
@@ -44,10 +44,13 @@ export interface BlurDetectResult {
 
 /**
  * Compute the sharpness score of an image using Laplacian variance.
+ * Applies brightness normalization first to prevent dark/bright images
+ * from being falsely classified as blurry.
  */
 export async function computeSharpness(imagePath: string): Promise<number> {
   const { data, info } = await sharp(imagePath, { failOn: 'none' })
     .grayscale()
+    .normalise()  // Stretch histogram to full 0-255 range — eliminates brightness bias
     .convolve(LAPLACIAN_KERNEL)
     .raw()
     .toBuffer({ resolveWithObject: true });
