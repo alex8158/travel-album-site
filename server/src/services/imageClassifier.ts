@@ -17,8 +17,6 @@ export interface ClassifyResult {
   category: ImageCategory;
   allCategories: ImageCategory[];
   labels: string[];
-  /** Confidence scores per category (sum of matching label confidences) */
-  categoryScores?: { people: number; animal: number; landscape: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -61,61 +59,49 @@ export function mapLabelsToCategory(labels: string[] | LabelWithConfidence[]): C
     typeof l === 'string' ? { name: l, confidence: 80 } : l
   );
 
-  let peopleScore = 0;
-  let animalScore = 0;
-  let landscapeScore = 0;
-  let peopleCount = 0;
+  let hasPeople = false;
+  let hasAnimal = false;
+  let hasLandscape = false;
+  let animalMaxConf = 0;
   let animalCount = 0;
-  let landscapeCount = 0;
 
   for (const item of items) {
-    if (matchesAny(item.name, PEOPLE_LABELS)) { peopleScore += item.confidence; peopleCount++; }
-    if (matchesAny(item.name, ANIMAL_LABELS)) { animalScore += item.confidence; animalCount++; }
-    if (matchesAny(item.name, LANDSCAPE_LABELS)) { landscapeScore += item.confidence; landscapeCount++; }
+    if (matchesAny(item.name, PEOPLE_LABELS)) hasPeople = true;
+    if (matchesAny(item.name, ANIMAL_LABELS)) {
+      hasAnimal = true;
+      animalCount++;
+      animalMaxConf = Math.max(animalMaxConf, item.confidence);
+    }
+    if (matchesAny(item.name, LANDSCAPE_LABELS)) hasLandscape = true;
   }
 
   const allCategories: ImageCategory[] = [];
-  if (peopleCount > 0) allCategories.push('people');
-  if (animalCount > 0) allCategories.push('animal');
-  if (landscapeCount > 0) allCategories.push('landscape');
+  if (hasPeople) allCategories.push('people');
+  if (hasAnimal) allCategories.push('animal');
+  if (hasLandscape) allCategories.push('landscape');
 
-  // Determine primary category by weighted score
-  // Priority tiebreaker: people > landscape > animal > other
-  // A category needs either: 2+ matching labels, OR a single label with confidence >= 85
+  // Priority: people > animal > landscape > other
+  // But animal only wins over landscape if it has strong evidence:
+  //   - at least 2 animal labels, OR
+  //   - a single animal label with confidence >= 85
+  // This prevents a stray low-confidence "Bird" from overriding a clear landscape.
   let category: ImageCategory = 'other';
-
-  const candidates: { cat: ImageCategory; score: number; count: number }[] = [];
-  if (peopleCount > 0 && (peopleCount >= 2 || peopleScore / peopleCount >= 85)) {
-    candidates.push({ cat: 'people', score: peopleScore, count: peopleCount });
-  }
-  if (landscapeCount > 0 && (landscapeCount >= 2 || landscapeScore / landscapeCount >= 85)) {
-    candidates.push({ cat: 'landscape', score: landscapeScore, count: landscapeCount });
-  }
-  if (animalCount > 0 && (animalCount >= 2 || animalScore / animalCount >= 85)) {
-    candidates.push({ cat: 'animal', score: animalScore, count: animalCount });
-  }
-
-  if (candidates.length > 0) {
-    // Sort by score descending, then by priority (people > landscape > animal)
-    const priority: Record<ImageCategory, number> = { people: 3, landscape: 2, animal: 1, other: 0 };
-    candidates.sort((a, b) => b.score - a.score || priority[b.cat] - priority[a.cat]);
-    category = candidates[0].cat;
-  } else if (allCategories.length > 0) {
-    // Fallback: if no category meets the threshold, pick the one with highest total score
-    const scores: [ImageCategory, number][] = [
-      ['people', peopleScore], ['landscape', landscapeScore], ['animal', animalScore],
-    ];
-    scores.sort((a, b) => b[1] - a[1]);
-    if (scores[0][1] > 0) category = scores[0][0];
+  if (hasPeople) {
+    category = 'people';
+  } else if (hasAnimal) {
+    const animalIsStrong = animalCount >= 2 || animalMaxConf >= 85;
+    if (hasLandscape && !animalIsStrong) {
+      // Landscape wins when animal evidence is weak
+      category = 'landscape';
+    } else {
+      category = 'animal';
+    }
+  } else if (hasLandscape) {
+    category = 'landscape';
   }
 
   const labelNames = items.map((i) => i.name);
-  return {
-    category,
-    allCategories,
-    labels: labelNames,
-    categoryScores: { people: peopleScore, animal: animalScore, landscape: landscapeScore },
-  };
+  return { category, allCategories, labels: labelNames };
 }
 
 // ---------------------------------------------------------------------------
