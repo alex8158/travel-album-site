@@ -85,17 +85,11 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
   ).get(tripId) as { cnt: number }).cnt;
 
-  // Step 1: Blur detection — permanently deletes blurry images
-  const blurOptions = blurThreshold !== undefined ? { threshold: blurThreshold } : undefined;
-  const blurResult = await detectBlurry(tripId, blurOptions);
-  const blurryDeletedCount = blurResult.blurryCount;
+  // Step 1: Blur detection — TEMPORARILY DISABLED (traditional algorithm unreliable, will be replaced by Bedrock LLM)
+  const blurryDeletedCount = 0;
 
-  // Step 2: Dedup — permanently deletes duplicate images
-  const dedupOptions: { windowSize?: number; hammingThreshold?: number } = {};
-  if (windowSize !== undefined) dedupOptions.windowSize = windowSize;
-  if (hammingThreshold !== undefined) dedupOptions.hammingThreshold = hammingThreshold;
-  const dedupResult = await deduplicate(tripId, Object.keys(dedupOptions).length > 0 ? dedupOptions : undefined);
-  const dedupDeletedCount = dedupResult.removedCount;
+  // Step 2: Dedup — TEMPORARILY DISABLED (traditional algorithm unreliable, will be replaced by Bedrock LLM)
+  const dedupDeletedCount = 0;
 
   // Step 3: Analyze — compute image characteristics
   await analyzeTrip(tripId);
@@ -233,26 +227,20 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const videoRows = allVideoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
     const alreadyProcessedCount = totalVideos - videoRows.length;
 
-    // Step 1: Blur detection
+    // Step 1: Blur detection — TEMPORARILY DISABLED
     if (clientDisconnected) return;
     reporter.sendStepStart('blurDetect', { processed: 0, total: totalImages });
-    const blurOptions = blurThreshold !== undefined ? { threshold: blurThreshold } : undefined;
-    const blurResult = await detectBlurry(tripId, blurOptions);
-    const blurryDeletedCount = blurResult.blurryCount;
+    const blurryDeletedCount = 0;
     if (clientDisconnected) return;
     reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-    // Step 2: Dedup
+    // Step 2: Dedup — TEMPORARILY DISABLED
     if (clientDisconnected) return;
     const activeImageCount = (db.prepare(
       "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
     ).get(tripId) as { cnt: number }).cnt;
     reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-    const dedupOptions: { windowSize?: number; hammingThreshold?: number } = {};
-    if (windowSize !== undefined) dedupOptions.windowSize = windowSize;
-    if (hammingThreshold !== undefined) dedupOptions.hammingThreshold = hammingThreshold;
-    const dedupResult = await deduplicate(tripId, Object.keys(dedupOptions).length > 0 ? dedupOptions : undefined);
-    const dedupDeletedCount = dedupResult.removedCount;
+    const dedupDeletedCount = 0;
     if (clientDisconnected) return;
     reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
 
