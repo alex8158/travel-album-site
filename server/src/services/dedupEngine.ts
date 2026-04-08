@@ -119,11 +119,12 @@ export async function deduplicate(
   const db = getDb();
   const storageProvider = getStorageProvider();
 
-  // 1. Query all active images for the trip, ordered by created_at
+  // 1. Query ALL images for the trip (including trashed), ordered by created_at
+  // We include trashed images so we can detect duplicates across blur-trashed items
   const rows = db.prepare(
-    `SELECT id, file_path, sharpness_score, width, height, created_at
+    `SELECT id, file_path, sharpness_score, width, height, status, trashed_reason, created_at
      FROM media_items
-     WHERE trip_id = ? AND status = 'active' AND media_type = 'image'
+     WHERE trip_id = ? AND media_type = 'image' AND status IN ('active', 'trashed')
      ORDER BY created_at ASC`
   ).all(tripId) as Array<{
     id: string;
@@ -131,6 +132,8 @@ export async function deduplicate(
     sharpness_score: number | null;
     width: number | null;
     height: number | null;
+    status: string;
+    trashed_reason: string | null;
     created_at: string;
   }>;
 
@@ -170,11 +173,21 @@ export async function deduplicate(
         const loserIdx = pickLoser(rows, i, j);
         removedSet.add(loserIdx);
 
-        // Move to trash instead of permanent delete — allows user to review
-        const loserId = rows[loserIdx].id;
-        db.prepare(
-          "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?"
-        ).run(loserId);
+        const loser = rows[loserIdx];
+        if (loser.status === 'trashed') {
+          // Already trashed (e.g. by blur) — append 'duplicate' to reason
+          const newReason = loser.trashed_reason
+            ? `${loser.trashed_reason},duplicate`
+            : 'duplicate';
+          db.prepare(
+            "UPDATE media_items SET trashed_reason = ? WHERE id = ?"
+          ).run(newReason, loser.id);
+        } else {
+          // Move active image to trash
+          db.prepare(
+            "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?"
+          ).run(loser.id);
+        }
       }
     }
   }

@@ -829,7 +829,7 @@ export default function MyGalleryPage() {
                     {item.originalFilename}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#e74c3c', marginTop: '4px' }}>
-                    原因: {TRASHED_REASON_MAP[item.trashedReason] || item.trashedReason}
+                    原因: {item.trashedReason.split(',').map(r => TRASHED_REASON_MAP[r.trim()] || r.trim()).join('、')}
                   </div>
                   <button
                     onClick={() => handleRestore(item.id)}
