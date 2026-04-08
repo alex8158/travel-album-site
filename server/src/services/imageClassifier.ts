@@ -17,6 +17,8 @@ export interface ClassifyResult {
   category: ImageCategory;
   allCategories: ImageCategory[];
   labels: string[];
+  /** Confidence scores per category (sum of matching label confidences) */
+  categoryScores?: { people: number; animal: number; landscape: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -46,29 +48,74 @@ function matchesAny(label: string, knownLabels: string[]): boolean {
   return knownLabels.some((k) => k.toLowerCase() === lower);
 }
 
-export function mapLabelsToCategory(labels: string[]): ClassifyResult {
-  let hasPeople = false;
-  let hasAnimal = false;
-  let hasLandscape = false;
+export interface LabelWithConfidence {
+  name: string;
+  confidence: number;
+}
 
-  for (const label of labels) {
-    if (matchesAny(label, PEOPLE_LABELS)) hasPeople = true;
-    if (matchesAny(label, ANIMAL_LABELS)) hasAnimal = true;
-    if (matchesAny(label, LANDSCAPE_LABELS)) hasLandscape = true;
+export function mapLabelsToCategory(labels: string[]): ClassifyResult;
+export function mapLabelsToCategory(labels: LabelWithConfidence[]): ClassifyResult;
+export function mapLabelsToCategory(labels: string[] | LabelWithConfidence[]): ClassifyResult {
+  // Normalize to LabelWithConfidence
+  const items: LabelWithConfidence[] = labels.map((l) =>
+    typeof l === 'string' ? { name: l, confidence: 80 } : l
+  );
+
+  let peopleScore = 0;
+  let animalScore = 0;
+  let landscapeScore = 0;
+  let peopleCount = 0;
+  let animalCount = 0;
+  let landscapeCount = 0;
+
+  for (const item of items) {
+    if (matchesAny(item.name, PEOPLE_LABELS)) { peopleScore += item.confidence; peopleCount++; }
+    if (matchesAny(item.name, ANIMAL_LABELS)) { animalScore += item.confidence; animalCount++; }
+    if (matchesAny(item.name, LANDSCAPE_LABELS)) { landscapeScore += item.confidence; landscapeCount++; }
   }
 
   const allCategories: ImageCategory[] = [];
-  if (hasPeople) allCategories.push('people');
-  if (hasAnimal) allCategories.push('animal');
-  if (hasLandscape) allCategories.push('landscape');
+  if (peopleCount > 0) allCategories.push('people');
+  if (animalCount > 0) allCategories.push('animal');
+  if (landscapeCount > 0) allCategories.push('landscape');
 
-  // Priority: people > animal > landscape > other
+  // Determine primary category by weighted score
+  // Priority tiebreaker: people > landscape > animal > other
+  // A category needs either: 2+ matching labels, OR a single label with confidence >= 85
   let category: ImageCategory = 'other';
-  if (hasPeople) category = 'people';
-  else if (hasAnimal) category = 'animal';
-  else if (hasLandscape) category = 'landscape';
 
-  return { category, allCategories, labels };
+  const candidates: { cat: ImageCategory; score: number; count: number }[] = [];
+  if (peopleCount > 0 && (peopleCount >= 2 || peopleScore / peopleCount >= 85)) {
+    candidates.push({ cat: 'people', score: peopleScore, count: peopleCount });
+  }
+  if (landscapeCount > 0 && (landscapeCount >= 2 || landscapeScore / landscapeCount >= 85)) {
+    candidates.push({ cat: 'landscape', score: landscapeScore, count: landscapeCount });
+  }
+  if (animalCount > 0 && (animalCount >= 2 || animalScore / animalCount >= 85)) {
+    candidates.push({ cat: 'animal', score: animalScore, count: animalCount });
+  }
+
+  if (candidates.length > 0) {
+    // Sort by score descending, then by priority (people > landscape > animal)
+    const priority: Record<ImageCategory, number> = { people: 3, landscape: 2, animal: 1, other: 0 };
+    candidates.sort((a, b) => b.score - a.score || priority[b.cat] - priority[a.cat]);
+    category = candidates[0].cat;
+  } else if (allCategories.length > 0) {
+    // Fallback: if no category meets the threshold, pick the one with highest total score
+    const scores: [ImageCategory, number][] = [
+      ['people', peopleScore], ['landscape', landscapeScore], ['animal', animalScore],
+    ];
+    scores.sort((a, b) => b[1] - a[1]);
+    if (scores[0][1] > 0) category = scores[0][0];
+  }
+
+  const labelNames = items.map((i) => i.name);
+  return {
+    category,
+    allCategories,
+    labels: labelNames,
+    categoryScores: { people: peopleScore, animal: animalScore, landscape: landscapeScore },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -116,8 +163,10 @@ export async function classifyImage(bytesOrBucket: Buffer | string, s3Key?: stri
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await client.send(command);
-      const labelNames = (response.Labels ?? []).map((l) => l.Name ?? '').filter(Boolean);
-      return mapLabelsToCategory(labelNames);
+      const labelsWithConf: LabelWithConfidence[] = (response.Labels ?? [])
+        .filter((l) => l.Name)
+        .map((l) => ({ name: l.Name!, confidence: l.Confidence ?? 0 }));
+      return mapLabelsToCategory(labelsWithConf);
     } catch (err: unknown) {
       lastError = err;
       const isThrottling =
