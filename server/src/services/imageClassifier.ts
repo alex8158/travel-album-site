@@ -64,9 +64,15 @@ export function mapLabelsToCategory(labels: string[] | LabelWithConfidence[]): C
   let hasLandscape = false;
   let animalMaxConf = 0;
   let animalCount = 0;
+  let peopleMaxConf = 0;
+  let peopleCount = 0;
 
   for (const item of items) {
-    if (matchesAny(item.name, PEOPLE_LABELS)) hasPeople = true;
+    if (matchesAny(item.name, PEOPLE_LABELS)) {
+      hasPeople = true;
+      peopleCount++;
+      peopleMaxConf = Math.max(peopleMaxConf, item.confidence);
+    }
     if (matchesAny(item.name, ANIMAL_LABELS)) {
       hasAnimal = true;
       animalCount++;
@@ -80,18 +86,28 @@ export function mapLabelsToCategory(labels: string[] | LabelWithConfidence[]): C
   if (hasAnimal) allCategories.push('animal');
   if (hasLandscape) allCategories.push('landscape');
 
-  // Priority: people > animal > landscape > other
-  // But animal only wins over landscape if it has strong evidence:
-  //   - at least 2 animal labels, OR
-  //   - a single animal label with confidence >= 85
-  // This prevents a stray low-confidence "Bird" from overriding a clear landscape.
+  // Classification rules:
+  // 1. When both people AND animal are detected:
+  //    - If animal has more labels OR higher max confidence → animal
+  //    - Otherwise → people
+  //    (This handles underwater photos with divers + marine life)
+  // 2. people only → people
+  // 3. animal vs landscape: animal needs strong evidence (2+ labels or conf >= 85)
+  // 4. landscape only → landscape
   let category: ImageCategory = 'other';
-  if (hasPeople) {
+
+  if (hasPeople && hasAnimal) {
+    // Both detected — compare strength
+    if (animalCount > peopleCount || (animalCount === peopleCount && animalMaxConf > peopleMaxConf)) {
+      category = 'animal';
+    } else {
+      category = 'people';
+    }
+  } else if (hasPeople) {
     category = 'people';
   } else if (hasAnimal) {
     const animalIsStrong = animalCount >= 2 || animalMaxConf >= 85;
     if (hasLandscape && !animalIsStrong) {
-      // Landscape wins when animal evidence is weak
       category = 'landscape';
     } else {
       category = 'animal';
