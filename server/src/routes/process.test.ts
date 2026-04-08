@@ -32,7 +32,15 @@ vi.mock('../services/dedupEngine', () => ({
   deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
 }));
 
+vi.mock('../services/bedrockClient', () => ({
+  createBedrockClient: vi.fn().mockReturnValue({
+    invokeModel: vi.fn().mockResolvedValue('{}'),
+  }),
+  analyzeImageWithBedrock: vi.fn().mockResolvedValue({ blur_status: 'clear', category: 'other' }),
+}));
+
 vi.mock('../services/blurDetector', () => ({
+  applyBlurResult: vi.fn(),
   detectBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, suspectCount: 0, deleteLogs: [], results: [] }),
 }));
 
@@ -45,6 +53,7 @@ vi.mock('../services/imageOptimizer', () => ({
 }));
 
 vi.mock('../services/imageClassifier', () => ({
+  applyClassifyResult: vi.fn(),
   classifyTrip: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -56,12 +65,21 @@ vi.mock('../services/videoEditor', () => ({
   editVideo: vi.fn().mockResolvedValue({ mediaId: '', compiledPath: null, selectedSegments: [] }),
 }));
 
+vi.mock('../storage/factory', () => ({
+  getStorageProvider: vi.fn().mockReturnValue({
+    downloadToTemp: vi.fn().mockResolvedValue('/tmp/fake-image.jpg'),
+    uploadFromPath: vi.fn().mockResolvedValue('uploaded/path'),
+    deleteFile: vi.fn().mockResolvedValue(undefined),
+    getSignedUrl: vi.fn().mockResolvedValue('https://example.com/signed'),
+  }),
+}));
+
 import { deduplicate } from '../services/dedupEngine';
-import { detectBlurry } from '../services/blurDetector';
+import { analyzeImageWithBedrock } from '../services/bedrockClient';
 import { optimizeTrip } from '../services/imageOptimizer';
 
 const mockDeduplicate = vi.mocked(deduplicate);
-const mockDetectBlurry = vi.mocked(detectBlurry);
+const mockAnalyzeImage = vi.mocked(analyzeImageWithBedrock);
 const mockOptimizeTrip = vi.mocked(optimizeTrip);
 
 describe('POST /api/trips/:id/process', () => {
@@ -76,8 +94,8 @@ describe('POST /api/trips/:id/process', () => {
     db.exec('DELETE FROM trips');
     mockDeduplicate.mockReset();
     mockDeduplicate.mockResolvedValue({ kept: [], removed: [], removedCount: 0 });
-    mockDetectBlurry.mockReset();
-    mockDetectBlurry.mockResolvedValue({ blurryCount: 0, suspectCount: 0, deleteLogs: [], results: [] });
+    mockAnalyzeImage.mockReset();
+    mockAnalyzeImage.mockResolvedValue({ blur_status: 'clear', category: 'other' });
     mockOptimizeTrip.mockReset();
     mockOptimizeTrip.mockResolvedValue([]);
     const user = createTestUser('regular');

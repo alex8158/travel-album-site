@@ -268,3 +268,22 @@ export async function classifyTrip(tripId: string): Promise<void> {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Apply Bedrock classification result to database
+// ---------------------------------------------------------------------------
+
+/**
+ * Update a media item's category based on Bedrock analysis result.
+ * Updates the category field on media_items and replaces category tags in media_tags.
+ */
+export function applyClassifyResult(mediaId: string, category: ImageCategory): void {
+  const db = getDb();
+  // Update category on media_items
+  db.prepare('UPDATE media_items SET category = ? WHERE id = ?').run(category, mediaId);
+  // Delete old category tags, insert new one
+  db.prepare("DELETE FROM media_tags WHERE media_id = ? AND tag_name LIKE 'category:%'").run(mediaId);
+  db.prepare('INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)').run(
+    uuidv4(), mediaId, `category:${category}`, new Date().toISOString()
+  );
+}

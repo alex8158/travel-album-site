@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
-import { deleteMediaItemFromDb } from '../helpers/deleteMediaItem';
+import { createBedrockClient, resizeForAnalysis, extractJSON, type BedrockClient } from './bedrockClient';
 
 /**
  * Compute a 64-bit dHash (difference hash) for an image.
@@ -93,8 +93,9 @@ export function hammingDistance(hash1: string, hash2: string): number {
 }
 
 export interface SlidingWindowDedupOptions {
-  windowSize?: number;         // default 10
-  hammingThreshold?: number;   // default 5 (Hamming distance, 0-64)
+  windowSize?: number;         // default 5, max 10
+  hammingThreshold?: number;   // kept for backward compat, not used by Bedrock
+  bedrockClient?: BedrockClient; // optional, created internally if not provided
 }
 
 export interface DedupResult {
@@ -104,23 +105,21 @@ export interface DedupResult {
 }
 
 /**
- * Deduplicate images for a trip using a sliding window approach.
- * Queries all active images ordered by created_at, computes pHash,
- * and compares each image with the next windowSize images.
- * Duplicates are permanently deleted (DB first, then storage).
+ * Deduplicate images for a trip using Bedrock vision model with sliding windows.
+ * Queries all images (active + trashed) ordered by created_at, sends each window
+ * to Bedrock for duplicate detection, and trashes duplicates keeping the best.
  */
 export async function deduplicate(
   tripId: string,
   options?: SlidingWindowDedupOptions
 ): Promise<DedupResult> {
-  const windowSize = options?.windowSize ?? 10;
-  const hammingThreshold = options?.hammingThreshold ?? 12;
+  const windowSize = Math.min(options?.windowSize ?? 5, 10);
+  const bedrockClient = options?.bedrockClient ?? createBedrockClient();
 
   const db = getDb();
   const storageProvider = getStorageProvider();
 
-  // 1. Query ALL images for the trip (including trashed), ordered by created_at
-  // We include trashed images so we can detect duplicates across blur-trashed items
+  // Query ALL images (active + trashed) ordered by created_at
   const rows = db.prepare(
     `SELECT id, file_path, sharpness_score, width, height, status, trashed_reason, created_at
      FROM media_items
@@ -137,72 +136,89 @@ export async function deduplicate(
     created_at: string;
   }>;
 
-  if (rows.length === 0) {
-    return { kept: [], removed: [], removedCount: 0 };
-  }
+  if (rows.length === 0) return { kept: [], removed: [], removedCount: 0 };
 
-  // 2. Compute pHash AND dHash for each image (dual hash for better accuracy)
-  const pHashes: (string | null)[] = [];
-  const dHashes: (string | null)[] = [];
-  for (const row of rows) {
-    try {
-      const localPath = await storageProvider.downloadToTemp(row.file_path);
-      const [pHash, dHash] = await Promise.all([
-        computePHash(localPath),
-        computeHash(localPath),
-      ]);
-      pHashes.push(pHash);
-      dHashes.push(dHash);
-    } catch {
-      pHashes.push(null);
-      dHashes.push(null);
-    }
-  }
-
-  // 3. Track removed set so already-removed images are skipped
   const removedSet = new Set<number>();
 
-  // 4. Sliding window comparison
-  for (let i = 0; i < rows.length; i++) {
-    if (removedSet.has(i)) continue;
-    if (pHashes[i] === null && dHashes[i] === null) continue;
+  // Sliding window — step by windowSize
+  for (let start = 0; start < rows.length - 1; start += windowSize) {
+    const end = Math.min(start + windowSize, rows.length);
+    const windowRows = rows.slice(start, end);
 
-    const end = Math.min(i + windowSize, rows.length - 1);
-    for (let j = i + 1; j <= end; j++) {
-      if (removedSet.has(j)) continue;
-      if (pHashes[j] === null && dHashes[j] === null) continue;
+    // Skip windows with only 1 image
+    if (windowRows.length < 2) continue;
 
-      // Dual hash verification: consider duplicate if EITHER hash matches
-      // This catches more duplicates — pHash is better for color/tone changes,
-      // dHash is better for slight position shifts
-      const pDist = (pHashes[i] && pHashes[j]) ? hammingDistance(pHashes[i]!, pHashes[j]!) : 999;
-      const dDist = (dHashes[i] && dHashes[j]) ? hammingDistance(dHashes[i]!, dHashes[j]!) : 999;
-      const isDuplicate = pDist <= hammingThreshold || dDist <= hammingThreshold;
-      if (isDuplicate) {
-        // They're duplicates — decide who to remove
-        const loserIdx = pickLoser(rows, i, j);
-        removedSet.add(loserIdx);
+    // Skip if all images in window are already removed
+    const activeIndices = windowRows.map((_, i) => start + i).filter(i => !removedSet.has(i));
+    if (activeIndices.length < 2) continue;
 
-        const loser = rows[loserIdx];
-        if (loser.status === 'trashed') {
-          // Already trashed (e.g. by blur) — append 'duplicate' to reason
-          const newReason = loser.trashed_reason
-            ? `${loser.trashed_reason},duplicate`
-            : 'duplicate';
-          db.prepare(
-            "UPDATE media_items SET trashed_reason = ? WHERE id = ?"
-          ).run(newReason, loser.id);
-        } else {
-          // Move active image to trash
-          db.prepare(
-            "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?"
-          ).run(loser.id);
+    try {
+      // Resize all images in window to 512px base64
+      const images: Array<{ base64: string; mediaType: string }> = [];
+      for (const row of windowRows) {
+        const localPath = await storageProvider.downloadToTemp(row.file_path);
+        const base64 = await resizeForAnalysis(localPath);
+        images.push({ base64, mediaType: 'image/jpeg' });
+      }
+
+      const prompt = `I'm showing you ${windowRows.length} images from a photo sequence. Identify which images are duplicate shots of the same scene (same location, same subject, just slightly different angle, timing, or framing).
+
+Return a JSON object with a "duplicate_groups" field containing arrays of image indices (0-based) that are duplicates of each other. Only include groups with 2 or more images. Images that are unique should not appear in any group.
+
+Return ONLY a JSON object, no other text:
+{"duplicate_groups": [[0, 2], [3, 4, 5]]}
+
+If no duplicates are found, return:
+{"duplicate_groups": []}`;
+
+      const response = await bedrockClient.invokeModel({ images, prompt });
+      const result = extractJSON<{ duplicate_groups: number[][] }>(response);
+
+      if (!Array.isArray(result.duplicate_groups)) continue;
+
+      // Process each duplicate group
+      for (const group of result.duplicate_groups) {
+        if (!Array.isArray(group) || group.length < 2) continue;
+
+        // Map window-local indices to global indices
+        const globalIndices = group
+          .filter(i => i >= 0 && i < windowRows.length)
+          .map(i => start + i)
+          .filter(i => !removedSet.has(i));
+
+        if (globalIndices.length < 2) continue;
+
+        // Pick winner using existing pickLoser logic (keep best, trash rest)
+        let winnerIdx = globalIndices[0];
+        for (let k = 1; k < globalIndices.length; k++) {
+          const loserIdx = pickLoser(rows, winnerIdx, globalIndices[k]);
+          if (loserIdx === winnerIdx) {
+            winnerIdx = globalIndices[k];
+          }
+        }
+
+        // Trash all except winner
+        for (const idx of globalIndices) {
+          if (idx === winnerIdx) continue;
+          removedSet.add(idx);
+          const loser = rows[idx];
+          if (loser.status === 'trashed') {
+            const newReason = loser.trashed_reason
+              ? `${loser.trashed_reason},duplicate`
+              : 'duplicate';
+            db.prepare("UPDATE media_items SET trashed_reason = ? WHERE id = ?").run(newReason, loser.id);
+          } else {
+            db.prepare("UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?").run(loser.id);
+          }
         }
       }
+    } catch (err) {
+      console.error(`[bedrockDedup] Window ${start}-${end} failed:`, err);
+      // Skip this window on error
     }
   }
 
-  // 5. Build result
+  // Build result
   const kept: string[] = [];
   const removed: string[] = [];
   for (let i = 0; i < rows.length; i++) {

@@ -173,3 +173,25 @@ export async function detectBlurry(
 
   return { blurryCount, suspectCount, deleteLogs, results };
 }
+
+// ---------------------------------------------------------------------------
+// Apply Bedrock blur result to database
+// ---------------------------------------------------------------------------
+
+/**
+ * Update a media item's blur status based on Bedrock analysis result.
+ * - blurry → status='trashed', trashed_reason='blur', blur_status='blurry'
+ * - clear  → blur_status='clear' (status remains unchanged)
+ */
+export function applyBlurResult(mediaId: string, blurStatus: 'clear' | 'blurry'): void {
+  const db = getDb();
+  if (blurStatus === 'blurry') {
+    db.prepare(
+      "UPDATE media_items SET status = 'trashed', trashed_reason = 'blur', blur_status = 'blurry' WHERE id = ?"
+    ).run(mediaId);
+  } else {
+    db.prepare(
+      "UPDATE media_items SET blur_status = 'clear' WHERE id = ?"
+    ).run(mediaId);
+  }
+}

@@ -5,6 +5,7 @@ import os from 'os';
 import sharp from 'sharp';
 import Database from 'better-sqlite3';
 import { computeHash, computePHash, hammingDistance, deduplicate, type SlidingWindowDedupOptions } from './dedupEngine';
+import type { BedrockClient } from './bedrockClient';
 import type { MediaItem } from '../types';
 
 // Mock the database module
@@ -23,6 +24,29 @@ vi.mock('../storage/factory', () => ({
     delete: vi.fn(async () => {}),
   }),
 }));
+
+// Mock resizeForAnalysis to return a dummy base64 string
+vi.mock('./bedrockClient', async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    resizeForAnalysis: vi.fn(async () => 'dummyBase64'),
+  };
+});
+
+/** Create a mock BedrockClient that returns the given duplicate_groups */
+function createMockBedrockClient(duplicateGroups: number[][]): BedrockClient {
+  return {
+    invokeModel: vi.fn(async () => JSON.stringify({ duplicate_groups: duplicateGroups })),
+  };
+}
+
+/** Create a mock BedrockClient that returns no duplicates */
+function createNoDupBedrockClient(): BedrockClient {
+  return {
+    invokeModel: vi.fn(async () => JSON.stringify({ duplicate_groups: [] })),
+  };
+}
 
 // --- Helpers ---
 
@@ -270,7 +294,7 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const result = await deduplicate('trip-1');
+    const result = await deduplicate('trip-1', { bedrockClient: createMockBedrockClient([[0, 1]]) });
     // Identical images: one kept, one removed
     expect(result.removedCount).toBe(1);
     expect(result.kept).toHaveLength(1);
@@ -303,7 +327,7 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const result = await deduplicate('trip-1', { hammingThreshold: 5 });
+    const result = await deduplicate('trip-1', { bedrockClient: createNoDupBedrockClient() });
     expect(result.removedCount).toBe(0);
     expect(result.kept).toHaveLength(2);
   });
@@ -320,7 +344,7 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const result = await deduplicate('trip-1');
+    const result = await deduplicate('trip-1', { bedrockClient: createMockBedrockClient([[0, 1]]) });
     // The removed item should be trashed, not deleted
     const removedId = result.removed[0];
     const row = testDb.prepare('SELECT id, status, trashed_reason FROM media_items WHERE id = ?').get(removedId) as any;
@@ -344,13 +368,13 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const result = await deduplicate('trip-1');
+    const result = await deduplicate('trip-1', { bedrockClient: createMockBedrockClient([[0, 1, 2]]) });
     // All identical: keep 1, remove 2
     expect(result.kept).toHaveLength(1);
     expect(result.removedCount).toBe(2);
   });
 
-  it('should not group distinct images — sliding window prevents false matches', async () => {
+  it('should not group distinct images — Bedrock returns no duplicates', async () => {
     const dir = makeTmpDir();
     const size = 64;
 
@@ -408,7 +432,7 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const result = await deduplicate('trip-1', { hammingThreshold: 5 });
+    const result = await deduplicate('trip-1', { bedrockClient: createNoDupBedrockClient() });
     expect(result.removedCount).toBe(0);
     expect(result.kept).toHaveLength(3);
   });
@@ -432,9 +456,9 @@ describe('deduplicate', () => {
     ];
     items.forEach(insertMediaItem);
 
-    const opts: SlidingWindowDedupOptions = { hammingThreshold: 0 };
+    const opts: SlidingWindowDedupOptions = { windowSize: 3, bedrockClient: createMockBedrockClient([[0, 1]]) };
     const result = await deduplicate('trip-1', opts);
-    // Identical images have distance 0, so threshold 0 should still match
+    // Mock returns duplicates, so one should be removed
     expect(result.removedCount).toBe(1);
   });
 });
