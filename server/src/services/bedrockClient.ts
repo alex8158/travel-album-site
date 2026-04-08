@@ -27,6 +27,92 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Model configuration — fallback chain for vision-capable models
+// ---------------------------------------------------------------------------
+
+const MODEL_FALLBACK_CHAIN = [
+  'anthropic.claude-sonnet-4-20250514',
+  'amazon.nova-pro-v1:0',
+  'amazon.nova-lite-v1:0',
+];
+
+function isClaudeModel(modelId: string): boolean {
+  return modelId.startsWith('anthropic.');
+}
+
+function isNovaModel(modelId: string): boolean {
+  return modelId.startsWith('amazon.nova');
+}
+
+function buildRequestBody(
+  modelId: string,
+  images: Array<{ base64: string; mediaType: string }>,
+  prompt: string,
+  maxTokens: number,
+): string {
+  if (isClaudeModel(modelId)) {
+    // Claude Messages API format
+    const content: unknown[] = [];
+    for (const img of images) {
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+      });
+    }
+    content.push({ type: 'text', text: prompt });
+    return JSON.stringify({
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content }],
+    });
+  }
+
+  if (isNovaModel(modelId)) {
+    // Amazon Nova format
+    const content: unknown[] = [];
+    for (const img of images) {
+      content.push({
+        image: { format: 'jpeg', source: { bytes: img.base64 } },
+      });
+    }
+    content.push({ text: prompt });
+    return JSON.stringify({
+      messages: [{ role: 'user', content }],
+      inferenceConfig: { maxNewTokens: maxTokens },
+    });
+  }
+
+  // Default: try Claude format
+  const content: unknown[] = [];
+  for (const img of images) {
+    content.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+    });
+  }
+  content.push({ type: 'text', text: prompt });
+  return JSON.stringify({
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content }],
+  });
+}
+
+function extractResponseText(modelId: string, responseBody: Record<string, unknown>): string {
+  if (isClaudeModel(modelId)) {
+    const content = responseBody.content as Array<{ text?: string }> | undefined;
+    return content?.[0]?.text ?? '';
+  }
+  if (isNovaModel(modelId)) {
+    const output = responseBody.output as { message?: { content?: Array<{ text?: string }> } } | undefined;
+    return output?.message?.content?.[0]?.text ?? '';
+  }
+  // Default: try Claude format
+  const content = responseBody.content as Array<{ text?: string }> | undefined;
+  return content?.[0]?.text ?? '';
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -34,7 +120,7 @@ export function createBedrockClient(): BedrockClient {
   const region = process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1';
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  const modelId = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-sonnet-4-20250514';
+  const configuredModelId = process.env.BEDROCK_MODEL_ID || '';
 
   const client = new BedrockRuntimeClient({
     region,
@@ -43,56 +129,59 @@ export function createBedrockClient(): BedrockClient {
       : {}),
   });
 
+  // If user specified a model, use only that; otherwise try fallback chain
+  const modelsToTry = configuredModelId
+    ? [configuredModelId]
+    : MODEL_FALLBACK_CHAIN;
+
+  // Track which model works (sticky after first success)
+  let activeModelId: string | null = null;
+
   return {
     async invokeModel(options: BedrockInvokeOptions): Promise<string> {
-      const content: unknown[] = [];
+      const models = activeModelId ? [activeModelId] : modelsToTry;
 
-      for (const img of options.images) {
-        content.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: img.mediaType,
-            data: img.base64,
-          },
+      for (const modelId of models) {
+        const body = buildRequestBody(modelId, options.images, options.prompt, options.maxTokens ?? 1024);
+        const command = new InvokeModelCommand({
+          modelId,
+          contentType: 'application/json',
+          accept: 'application/json',
+          body: new TextEncoder().encode(body),
         });
-      }
 
-      content.push({ type: 'text', text: options.prompt });
-
-      const body = JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: options.maxTokens ?? 1024,
-        messages: [{ role: 'user', content }],
-      });
-
-      const command = new InvokeModelCommand({
-        modelId,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: new TextEncoder().encode(body),
-      });
-
-      let lastError: unknown;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const response = await client.send(command);
-          const responseBody = JSON.parse(new TextDecoder().decode(response.body));
-          const text = responseBody.content?.[0]?.text ?? '';
-          return text;
-        } catch (err: unknown) {
-          lastError = err;
-          const isThrottling =
-            err instanceof Error && err.name === 'ThrottlingException';
-          if (isThrottling && attempt < 2) {
-            await sleep(Math.pow(2, attempt) * 1000);
-            continue;
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const response = await client.send(command);
+            const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+            const text = extractResponseText(modelId, responseBody);
+            activeModelId = modelId; // Sticky — use this model for future calls
+            console.log(`[BedrockClient] Using model: ${modelId}`);
+            return text;
+          } catch (err: unknown) {
+            lastError = err;
+            const isThrottling = err instanceof Error && err.name === 'ThrottlingException';
+            if (isThrottling && attempt < 2) {
+              await sleep(Math.pow(2, attempt) * 1000);
+              continue;
+            }
+            // Model access denied or not available — try next model
+            const isAccessDenied = err instanceof Error && (
+              err.name === 'AccessDeniedException' ||
+              err.name === 'ValidationException' ||
+              err.name === 'ResourceNotFoundException'
+            );
+            if (isAccessDenied) {
+              console.warn(`[BedrockClient] Model ${modelId} not available, trying next...`);
+              break; // Break retry loop, try next model
+            }
+            throw err;
           }
-          throw err;
         }
       }
 
-      throw lastError;
+      throw new Error(`All Bedrock models failed. Tried: ${models.join(', ')}`);
     },
   };
 }
