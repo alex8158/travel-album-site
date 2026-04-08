@@ -31,9 +31,10 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const MODEL_FALLBACK_CHAIN = [
-  'anthropic.claude-sonnet-4-20250514',
   'amazon.nova-pro-v1:0',
+  'amazon.nova-2-lite-v1:0',
   'amazon.nova-lite-v1:0',
+  'anthropic.claude-sonnet-4-20250514',
 ];
 
 function isClaudeModel(modelId: string): boolean {
@@ -78,7 +79,7 @@ function buildRequestBody(
     content.push({ text: prompt });
     return JSON.stringify({
       messages: [{ role: 'user', content }],
-      inferenceConfig: { maxNewTokens: maxTokens },
+      inferenceConfig: { max_new_tokens: maxTokens },
     });
   }
 
@@ -169,7 +170,6 @@ export function createBedrockClient(): BedrockClient {
             // Model access denied or not available — try next model
             const isAccessDenied = err instanceof Error && (
               err.name === 'AccessDeniedException' ||
-              err.name === 'ValidationException' ||
               err.name === 'ResourceNotFoundException'
             );
             if (isAccessDenied) {
