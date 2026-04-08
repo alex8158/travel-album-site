@@ -128,9 +128,10 @@ export async function detectBlurry(
       blurStatus = classifyBlur(sharpnessScore, threshold);
 
       if (blurStatus === 'blurry') {
-        // Permanently delete: clean up FK references, delete from DB, then storage
-        deleteMediaItemFromDb(row.id);
-        await storageProvider.delete(row.file_path);
+        // Move to trash instead of permanent delete — allows user to review
+        db.prepare(
+          "UPDATE media_items SET status = 'trashed', trashed_reason = 'blur', sharpness_score = ?, blur_status = ? WHERE id = ?"
+        ).run(sharpnessScore, blurStatus, row.id);
 
         deleteLogs.push({
           mediaId: row.id,

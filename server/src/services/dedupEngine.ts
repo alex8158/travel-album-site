@@ -170,15 +170,11 @@ export async function deduplicate(
         const loserIdx = pickLoser(rows, i, j);
         removedSet.add(loserIdx);
 
-        // Permanently delete the loser: DB first, then storage
+        // Move to trash instead of permanent delete — allows user to review
         const loserId = rows[loserIdx].id;
-        const loserPath = rows[loserIdx].file_path;
-        deleteMediaItemFromDb(loserId);
-        try {
-          await storageProvider.delete(loserPath);
-        } catch {
-          // Storage delete failure is acceptable (orphan file)
-        }
+        db.prepare(
+          "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?"
+        ).run(loserId);
       }
     }
   }

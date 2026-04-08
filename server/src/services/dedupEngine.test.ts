@@ -223,6 +223,7 @@ describe('deduplicate', () => {
         contrast_score REAL,
         noise_score REAL,
         status TEXT NOT NULL DEFAULT 'active',
+        trashed_reason TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (trip_id) REFERENCES trips(id),
         FOREIGN KEY (duplicate_group_id) REFERENCES duplicate_groups(id)
@@ -307,7 +308,7 @@ describe('deduplicate', () => {
     expect(result.kept).toHaveLength(2);
   });
 
-  it('should permanently delete duplicate from DB', async () => {
+  it('should move duplicate to trash instead of permanent delete', async () => {
     const dir = makeTmpDir();
     const img1 = await createTestImage(dir, 'a.jpg', { r: 100, g: 100, b: 100 });
     const img2 = path.join(dir, 'b.jpg');
@@ -320,10 +321,12 @@ describe('deduplicate', () => {
     items.forEach(insertMediaItem);
 
     const result = await deduplicate('trip-1');
-    // The removed item should be deleted from DB
+    // The removed item should be trashed, not deleted
     const removedId = result.removed[0];
-    const row = testDb.prepare('SELECT id FROM media_items WHERE id = ?').get(removedId);
-    expect(row).toBeUndefined();
+    const row = testDb.prepare('SELECT id, status, trashed_reason FROM media_items WHERE id = ?').get(removedId) as any;
+    expect(row).toBeDefined();
+    expect(row.status).toBe('trashed');
+    expect(row.trashed_reason).toBe('duplicate');
   });
 
   it('should remove all but one when multiple identical images exist', async () => {
