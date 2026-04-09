@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
 import { createBedrockClient, analyzeImageWithBedrock } from '../services/bedrockClient';
@@ -76,6 +77,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     try {
       const localPath = await storageProvider.downloadToTemp(img.file_path);
       const analysis = await analyzeImageWithBedrock(localPath, bedrockClient);
+      try { fs.unlinkSync(localPath); } catch { /* ignore */ }
       applyBlurResult(img.id, analysis.blur_status);
       applyClassifyResult(img.id, analysis.category);
       if (analysis.blur_status === 'blurry') blurryDeletedCount++;
@@ -239,6 +241,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
       try {
         const localPath = await storageProvider.downloadToTemp(img.file_path);
         const analysis = await analyzeImageWithBedrock(localPath, bedrockClient);
+        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
         applyBlurResult(img.id, analysis.blur_status);
         applyClassifyResult(img.id, analysis.category);
         if (analysis.blur_status === 'blurry') blurryDeletedCount++;

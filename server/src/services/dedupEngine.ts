@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import fs from 'fs';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 import { createBedrockClient, resizeForAnalysis, extractJSON, type BedrockClient } from './bedrockClient';
@@ -159,6 +160,7 @@ export async function deduplicate(
         const localPath = await storageProvider.downloadToTemp(row.file_path);
         const base64 = await resizeForAnalysis(localPath);
         images.push({ base64, mediaType: 'image/jpeg' });
+        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
       }
 
       const prompt = `I'm showing you ${windowRows.length} images from a photo sequence. Identify which images are duplicate shots of the same scene (same location, same subject, just slightly different angle, timing, or framing).
