@@ -268,7 +268,7 @@ export async function dedupImages(
   options?: { threshold?: number; modelDir?: string }
 ): Promise<PythonDedupResult> {
   const modelDir = options?.modelDir ?? getDefaultModelDir();
-  const threshold = options?.threshold ?? 0.9;
+  const threshold = options?.threshold ?? 0.95;
 
   await mutex.acquire();
   try {
