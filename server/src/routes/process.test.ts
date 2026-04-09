@@ -33,7 +33,7 @@ vi.mock('../services/dedupEngine', () => ({
 }));
 
 vi.mock('../services/bedrockClient', () => ({
-  createBedrockClient: vi.fn().mockReturnValue({
+  createAIClient: vi.fn().mockReturnValue({
     invokeModel: vi.fn().mockResolvedValue('{}'),
   }),
   analyzeImageWithBedrock: vi.fn().mockResolvedValue({ blur_status: 'clear', category: 'other' }),

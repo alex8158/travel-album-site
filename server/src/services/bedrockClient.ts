@@ -2,6 +2,7 @@ import {
   BedrockRuntimeClient,
   InvokeModelCommand,
 } from '@aws-sdk/client-bedrock-runtime';
+import OpenAI from 'openai';
 import sharp from 'sharp';
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,64 @@ export function createBedrockClient(): BedrockClient {
       throw new Error(`All Bedrock models failed. Tried: ${models.join(', ')}`);
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI client factory
+// ---------------------------------------------------------------------------
+
+function createOpenAIClient(): BedrockClient {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is required');
+
+  const openai = new OpenAI({ apiKey });
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+  return {
+    async invokeModel(options: BedrockInvokeOptions): Promise<string> {
+      const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+
+      for (const img of options.images) {
+        content.push({
+          type: 'image_url',
+          image_url: { url: `data:${img.mediaType};base64,${img.base64}`, detail: 'low' },
+        });
+      }
+      content.push({ type: 'text', text: options.prompt });
+
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const response = await openai.chat.completions.create({
+            model,
+            max_tokens: options.maxTokens ?? 1024,
+            messages: [{ role: 'user', content }],
+          });
+          const text = response.choices[0]?.message?.content ?? '';
+          console.log(`[OpenAIClient] Using model: ${model}`);
+          return text;
+        } catch (err: unknown) {
+          lastError = err;
+          if (err instanceof Error && err.message.includes('Rate limit')) {
+            await sleep(Math.pow(2, attempt) * 1000);
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastError;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Unified client factory — picks provider based on AI_PROVIDER env var
+// ---------------------------------------------------------------------------
+
+export function createAIClient(): BedrockClient {
+  const provider = process.env.AI_PROVIDER || 'bedrock';
+  if (provider === 'openai') return createOpenAIClient();
+  return createBedrockClient();
 }
 
 // ---------------------------------------------------------------------------

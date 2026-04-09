@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import fs from 'fs';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
-import { createBedrockClient, resizeForAnalysis, extractJSON, type BedrockClient } from './bedrockClient';
+import { createAIClient, resizeForAnalysis, extractJSON, type BedrockClient } from './bedrockClient';
 
 /**
  * Compute a 64-bit dHash (difference hash) for an image.
@@ -115,7 +115,7 @@ export async function deduplicate(
   options?: SlidingWindowDedupOptions
 ): Promise<DedupResult> {
   const windowSize = Math.min(options?.windowSize ?? 5, 10);
-  const bedrockClient = options?.bedrockClient ?? createBedrockClient();
+  const bedrockClient = options?.bedrockClient ?? createAIClient();
 
   const db = getDb();
   const storageProvider = getStorageProvider();

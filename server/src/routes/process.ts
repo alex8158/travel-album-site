@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
-import { createBedrockClient, analyzeImageWithBedrock } from '../services/bedrockClient';
+import { createAIClient, analyzeImageWithBedrock } from '../services/bedrockClient';
 import { applyBlurResult } from '../services/blurDetector';
 import { applyClassifyResult } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
@@ -65,7 +65,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   ).get(tripId) as { cnt: number }).cnt;
 
   // Step 1: Single-image analysis (blur + classify combined via Bedrock)
-  const bedrockClient = createBedrockClient();
+  const bedrockClient = createAIClient();
   const storageProvider = getStorageProvider();
   let blurryDeletedCount = 0;
 
@@ -225,7 +225,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
 
     // Step 1: Single-image analysis (blur + classify via Bedrock)
     if (clientDisconnected) return;
-    const bedrockClient = createBedrockClient();
+    const bedrockClient = createAIClient();
     const storageProvider = getStorageProvider();
     let blurryDeletedCount = 0;
 
