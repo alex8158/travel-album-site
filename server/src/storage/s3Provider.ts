@@ -28,6 +28,8 @@ export class S3StorageProvider implements StorageProvider {
 
     this.client = new S3Client({
       region: region || 'us-east-1',
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
       ...(accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {}),
