@@ -163,37 +163,66 @@ export async function deduplicate(
 
       const prompt = `I'm showing you ${windowRows.length} images from a photo sequence. Identify which images are duplicate shots of the same scene (same location, same subject, just slightly different angle, timing, or framing).
 
-Return a JSON object with a "duplicate_groups" field containing arrays of image indices (0-based) that are duplicates of each other. Only include groups with 2 or more images. Images that are unique should not appear in any group.
+For each duplicate group, also tell me which image is the BEST one to keep (sharpest, best composition, best exposure).
+
+Return a JSON object with a "duplicate_groups" field. Each group is an object with:
+- "indices": array of image indices (0-based) that are duplicates
+- "keep": the index of the best image to keep
 
 Return ONLY a JSON object, no other text:
-{"duplicate_groups": [[0, 2], [3, 4, 5]]}
+{"duplicate_groups": [{"indices": [0, 2, 5], "keep": 5}, {"indices": [3, 4], "keep": 3}]}
 
 If no duplicates are found, return:
 {"duplicate_groups": []}`;
 
       const response = await bedrockClient.invokeModel({ images, prompt });
-      const result = extractJSON<{ duplicate_groups: number[][] }>(response);
+      const result = extractJSON<{ duplicate_groups: Array<{ indices: number[]; keep: number } | number[]> }>(response);
 
       if (!Array.isArray(result.duplicate_groups)) continue;
 
       // Process each duplicate group
       for (const group of result.duplicate_groups) {
-        if (!Array.isArray(group) || group.length < 2) continue;
+        // Support both formats: {indices, keep} or plain array
+        let indices: number[];
+        let keepIdx: number | null = null;
+
+        if (Array.isArray(group)) {
+          indices = group;
+        } else if (group && Array.isArray(group.indices)) {
+          indices = group.indices;
+          keepIdx = typeof group.keep === 'number' ? group.keep : null;
+        } else {
+          continue;
+        }
+
+        if (indices.length < 2) continue;
 
         // Map window-local indices to global indices
-        const globalIndices = group
+        const globalIndices = indices
           .filter(i => i >= 0 && i < windowRows.length)
           .map(i => start + i)
           .filter(i => !removedSet.has(i));
 
         if (globalIndices.length < 2) continue;
 
-        // Pick winner using existing pickLoser logic (keep best, trash rest)
-        let winnerIdx = globalIndices[0];
-        for (let k = 1; k < globalIndices.length; k++) {
-          const loserIdx = pickLoser(rows, winnerIdx, globalIndices[k]);
-          if (loserIdx === winnerIdx) {
-            winnerIdx = globalIndices[k];
+        // Determine winner: use model's recommendation if valid, otherwise fallback to pickLoser
+        let winnerIdx: number;
+        if (keepIdx !== null && keepIdx >= 0 && keepIdx < windowRows.length) {
+          const globalKeep = start + keepIdx;
+          if (globalIndices.includes(globalKeep) && !removedSet.has(globalKeep)) {
+            winnerIdx = globalKeep;
+          } else {
+            winnerIdx = globalIndices[0];
+            for (let k = 1; k < globalIndices.length; k++) {
+              const loserIdx = pickLoser(rows, winnerIdx, globalIndices[k]);
+              if (loserIdx === winnerIdx) winnerIdx = globalIndices[k];
+            }
+          }
+        } else {
+          winnerIdx = globalIndices[0];
+          for (let k = 1; k < globalIndices.length; k++) {
+            const loserIdx = pickLoser(rows, winnerIdx, globalIndices[k]);
+            if (loserIdx === winnerIdx) winnerIdx = globalIndices[k];
           }
         }
 
