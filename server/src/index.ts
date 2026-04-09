@@ -5,7 +5,6 @@ import path from 'path';
 import fs from 'fs';
 import { getDb } from './database';
 import { getStorageProvider, createStorageProviderForType } from './storage/factory';
-import { migrateStorage } from './services/migrationTool';
 import type { StorageType } from './storage/types';
 import authRouter from './routes/auth';
 import tripsRouter from './routes/trips';
@@ -59,29 +58,10 @@ async function checkAndAutoMigrate(): Promise<void> {
     return;
   }
 
-  console.log(`[Storage] 检测到存储类型变更: ${previousType} → ${currentType}，开始自动迁移 ...`);
-
-  try {
-    const sourceProvider = createStorageProviderForType(previousType);
-    const targetProvider = createStorageProviderForType(currentType);
-    const result = await migrateStorage(sourceProvider, targetProvider);
-
-    console.log(`[Storage] 自动迁移完成: 成功 ${result.successCount} 个, 失败 ${result.failedCount} 个`);
-    if (result.failedCount > 0) {
-      console.warn(`[Storage] 以下文件迁移失败:`);
-      for (const f of result.failedFiles) {
-        console.warn(`  - ${f.path}: ${f.error}`);
-      }
-      console.warn(`[Storage] 请在管理后台手动重试迁移，或参考 README.md 中的迁移指南`);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[Storage] 自动迁移失败: ${msg}`);
-    console.error(`[Storage] 旧存储类型 (${previousType}) 的凭证可能已失效，无法读取源文件`);
-    console.error(`[Storage] 请在管理后台手动迁移，或参考 README.md 中的迁移指南`);
-    // Revert the saved type so next restart will retry
-    fs.writeFileSync(STORAGE_TYPE_FILE, previousType);
-  }
+  console.warn(`[Storage] 检测到存储类型变更: ${previousType} → ${currentType}`);
+  console.warn(`[Storage] 不会自动迁移文件。如需迁移，请在管理后台手动触发，或参考 README.md 中的迁移指南`);
+  // Update saved type so this warning only shows once
+  // (if the change was intentional, no need to warn every restart)
 }
 
 checkAndAutoMigrate().catch(console.error);
