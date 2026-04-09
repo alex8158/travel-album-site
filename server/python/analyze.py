@@ -30,6 +30,10 @@ CATEGORY_PROMPTS = {
         "a photo of birds in the sky",
         "a photo of elephants",
         "a photo of a giraffe",
+        "a photo of marine life underwater",
+        "a photo of coral reef creatures",
+        "a photo of a sea slug nudibranch",
+        "a photo of a diver with marine animals",
     ],
     "landscape": [
         "a photo of natural scenery",
@@ -42,7 +46,7 @@ CATEGORY_PROMPTS = {
         "a photo of a person",
         "a photo of people",
         "a portrait photo",
-        "a photo of a diver underwater",
+        "a group photo of people",
     ],
     "other": [
         "a photo of food",
