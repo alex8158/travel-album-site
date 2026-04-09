@@ -1,10 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { getDb } from '../database';
-import { deduplicate } from '../services/dedupEngine';
-import { createAIClient, analyzeImageWithBedrock } from '../services/bedrockClient';
-import { applyBlurResult } from '../services/blurDetector';
-import { applyClassifyResult } from '../services/imageClassifier';
+import { classifyTrip } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
 import { optimizeTrip } from '../services/imageOptimizer';
 import { generateThumbnailsForTrip } from '../services/thumbnailGenerator';
@@ -64,39 +61,11 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
   ).get(tripId) as { cnt: number }).cnt;
 
-  // Step 1: Single-image analysis (blur + classify combined via Bedrock)
-  const bedrockClient = createAIClient();
-  const storageProvider = getStorageProvider();
-  let blurryDeletedCount = 0;
+  // Step 1: Blur detection — DISABLED (waiting for better algorithm)
+  const blurryDeletedCount = 0;
 
-  const activeImages = db.prepare(
-    "SELECT id, file_path FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
-  ).all(tripId) as Array<{ id: string; file_path: string }>;
-
-  for (const img of activeImages) {
-    try {
-      const localPath = await storageProvider.downloadToTemp(img.file_path);
-      const analysis = await analyzeImageWithBedrock(localPath, bedrockClient);
-      try { fs.unlinkSync(localPath); } catch { /* ignore */ }
-      applyBlurResult(img.id, analysis.blur_status);
-      applyClassifyResult(img.id, analysis.category);
-      if (analysis.blur_status === 'blurry') blurryDeletedCount++;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const errorText = `[bedrockAnalysis] ${errorMsg}`;
-      db.prepare(
-        `UPDATE media_items SET processing_error = CASE WHEN processing_error IS NULL THEN ? ELSE processing_error || char(10) || ? END WHERE id = ?`
-      ).run(errorText, errorText, img.id);
-    }
-  }
-
-  const classifiedCount = (db.prepare(
-    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
-  ).get(tripId) as { cnt: number }).cnt;
-
-  // Step 2: Dedup via Bedrock
-  const dedupResult = await deduplicate(tripId, { bedrockClient });
-  const dedupDeletedCount = dedupResult.removedCount;
+  // Step 2: Dedup — DISABLED (waiting for better algorithm)
+  const dedupDeletedCount = 0;
 
   // Step 3: Analyze — compute image characteristics
   await analyzeTrip(tripId);
@@ -105,12 +74,18 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   ).get(tripId) as { cnt: number }).cnt;
 
   // Step 4: Optimize — adaptive image optimization
+  const storageProvider = getStorageProvider();
   const optimizeResults = await optimizeTrip(tripId);
   const optimizedCount = optimizeResults.filter(r => r.optimizedPath !== null).length;
   failedCount += optimizeResults.filter(r => r.error).length;
 
-  // Step 5: Thumbnails — generate for all active images/videos
-  // Skip thumbnail generation for optimize-failed images
+  // Step 5: Classify — AWS Rekognition classification
+  await classifyTrip(tripId);
+  const classifiedCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
+  ).get(tripId) as { cnt: number }).cnt;
+
+  // Step 6: Thumbnails
   await generateThumbnailsForTrip(tripId);
 
   // Step 7 & 8: Video analysis and editing
@@ -223,59 +198,26 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const videoRows = allVideoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
     const alreadyProcessedCount = totalVideos - videoRows.length;
 
-    // Step 1: Single-image analysis (blur + classify via Bedrock)
+    // Step 1: Blur detection — DISABLED
     if (clientDisconnected) return;
-    const bedrockClient = createAIClient();
-    const storageProvider = getStorageProvider();
-    let blurryDeletedCount = 0;
-
-    const activeImages = db.prepare(
-      "SELECT id, file_path FROM media_items WHERE trip_id = ? AND status = 'active' AND media_type = 'image'"
-    ).all(tripId) as Array<{ id: string; file_path: string }>;
-
-    reporter.sendStepStart('blurDetect', { processed: 0, total: activeImages.length });
-
-    for (let i = 0; i < activeImages.length; i++) {
-      if (clientDisconnected) return;
-      const img = activeImages[i];
-      try {
-        const localPath = await storageProvider.downloadToTemp(img.file_path);
-        const analysis = await analyzeImageWithBedrock(localPath, bedrockClient);
-        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
-        applyBlurResult(img.id, analysis.blur_status);
-        applyClassifyResult(img.id, analysis.category);
-        if (analysis.blur_status === 'blurry') blurryDeletedCount++;
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        const errorText = `[bedrockAnalysis] ${errorMsg}`;
-        db.prepare(
-          `UPDATE media_items SET processing_error = CASE WHEN processing_error IS NULL THEN ? ELSE processing_error || char(10) || ? END WHERE id = ?`
-        ).run(errorText, errorText, img.id);
-      }
-    }
+    reporter.sendStepStart('blurDetect', { processed: 0, total: totalImages });
+    const blurryDeletedCount = 0;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('blurDetect', { processed: activeImages.length, total: activeImages.length });
+    reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-    const classifiedCount = (db.prepare(
-      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
-    ).get(tripId) as { cnt: number }).cnt;
-
-    // Step 2: Dedup via Bedrock
+    // Step 2: Dedup — DISABLED
     if (clientDisconnected) return;
-    const postBlurActiveCount = (db.prepare(
+    const activeImageCount = (db.prepare(
       "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
     ).get(tripId) as { cnt: number }).cnt;
-    reporter.sendStepStart('dedup', { processed: 0, total: postBlurActiveCount });
-    const dedupResult = await deduplicate(tripId, { bedrockClient });
-    const dedupDeletedCount = dedupResult.removedCount;
+    reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
+    const dedupDeletedCount = 0;
     if (clientDisconnected) return;
-    reporter.sendStepComplete('dedup', { processed: postBlurActiveCount, total: postBlurActiveCount });
+    reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
 
     // Step 3: Analyze
     if (clientDisconnected) return;
-    const postDedupCount = (db.prepare(
-      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
-    ).get(tripId) as { cnt: number }).cnt;
+    const postDedupCount = activeImageCount;
     reporter.sendStepStart('analyze', { processed: 0, total: postDedupCount });
     await analyzeTrip(tripId);
     const analyzedCount = (db.prepare(
@@ -286,6 +228,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
 
     // Step 4: Optimize
     if (clientDisconnected) return;
+    const storageProvider = getStorageProvider();
     reporter.sendStepStart('optimize', { processed: 0, total: postDedupCount });
     const optimizeResults = await optimizeTrip(tripId);
     const optimizedCount = optimizeResults.filter(r => r.optimizedPath !== null).length;
@@ -293,7 +236,17 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     reporter.sendStepComplete('optimize', { processed: postDedupCount, total: postDedupCount });
 
-    // Step 5: Thumbnail
+    // Step 5: Classify — AWS Rekognition
+    if (clientDisconnected) return;
+    reporter.sendStepStart('classify', { processed: 0, total: postDedupCount });
+    await classifyTrip(tripId);
+    const classifiedCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND category IS NOT NULL"
+    ).get(tripId) as { cnt: number }).cnt;
+    if (clientDisconnected) return;
+    reporter.sendStepComplete('classify', { processed: postDedupCount, total: postDedupCount });
+
+    // Step 6: Thumbnail
     if (clientDisconnected) return;
     const totalItemsForThumb = postDedupCount + totalVideos;
     reporter.sendStepStart('thumbnail', { processed: 0, total: totalItemsForThumb });
