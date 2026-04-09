@@ -67,7 +67,17 @@ const mutex = new PythonMutex();
 const PYTHON_DIR = path.resolve(__dirname, '../../python');
 const ANALYZE_SCRIPT = path.join(PYTHON_DIR, 'analyze.py');
 const MODEL_CONFIG_PATH = path.join(PYTHON_DIR, 'model_config.json');
-const DEFAULT_MODEL_DIR = path.join(PYTHON_DIR, 'models');
+
+/** Resolve the actual model directory from model_config.json's onnx_dir field */
+function getDefaultModelDir(): string {
+  try {
+    const config = JSON.parse(fs.readFileSync(MODEL_CONFIG_PATH, 'utf-8'));
+    if (config.onnx_dir) {
+      return path.resolve(PYTHON_DIR, config.onnx_dir);
+    }
+  } catch { /* fall through */ }
+  return path.join(PYTHON_DIR, 'models');
+}
 
 // ---------------------------------------------------------------------------
 // isPythonAvailable — cached at process startup, exit code 2 = permanent false
@@ -178,7 +188,7 @@ export async function analyzeImages(
   imagePaths: string[],
   options?: { blurThreshold?: number; modelDir?: string }
 ): Promise<PythonAnalyzeResult[]> {
-  const modelDir = options?.modelDir ?? DEFAULT_MODEL_DIR;
+  const modelDir = options?.modelDir ?? getDefaultModelDir();
   const blurThreshold = options?.blurThreshold ?? 100;
 
   if (imagePaths.length <= ANALYZE_BATCH_SIZE) {
@@ -257,7 +267,7 @@ export async function dedupImages(
   metadata: Record<number, { blur_score: number; width: number; height: number; file_size: number }>,
   options?: { threshold?: number; modelDir?: string }
 ): Promise<PythonDedupResult> {
-  const modelDir = options?.modelDir ?? DEFAULT_MODEL_DIR;
+  const modelDir = options?.modelDir ?? getDefaultModelDir();
   const threshold = options?.threshold ?? 0.9;
 
   await mutex.acquire();
