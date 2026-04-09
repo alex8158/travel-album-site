@@ -226,7 +226,7 @@ export function extractJSON<T = unknown>(text: string): T {
 export async function resizeForAnalysis(imagePath: string): Promise<string> {
   try {
     const buffer = await sharp(imagePath, { failOn: 'none' })
-      .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+      .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 80 })
       .toBuffer();
     return buffer.toString('base64');
@@ -247,16 +247,20 @@ export interface SingleImageAnalysis {
   category: ImageCategory;
 }
 
-const SINGLE_IMAGE_PROMPT = `Analyze this image and return a JSON object with exactly two fields:
-1. "blur_status": "blurry" if the image is out of focus or has motion blur, "clear" otherwise. Note: dark or low-light images are NOT blurry unless they are actually out of focus.
-2. "category": classify the main subject as one of: "people", "animal", "landscape", "other".
-   - "people": humans are the main subject
-   - "animal": animals are the main subject (including underwater marine life, even if divers are present)
-   - "landscape": natural scenery, cityscapes, architecture with no prominent living subjects
-   - "other": food, objects, abstract, etc.
+const SINGLE_IMAGE_PROMPT = `Look at this image carefully and return a JSON object with exactly two fields:
 
-Return ONLY a JSON object, no other text:
-{"blur_status": "clear", "category": "landscape"}`;
+1. "blur_status": "blurry" if the image is out of focus or has motion blur, "clear" otherwise. Dark or low-light images are NOT blurry.
+
+2. "category": What is the MAIN SUBJECT of this photo? Choose one:
+   - "animal": if ANY animal is visible (lion, elephant, giraffe, bird, fish, dog, cat, whale, turtle, etc.) — even if there is also scenery in the background. Safari/wildlife photos are ALWAYS "animal".
+   - "people": if humans are the main subject (portraits, group photos, selfies)
+   - "landscape": ONLY if there are NO animals and NO people — pure scenery, buildings, mountains, ocean without creatures
+   - "other": food, objects, abstract art, etc.
+
+IMPORTANT: If you can see ANY animal in the photo, even small or in the background, classify as "animal". A photo of a lion in grassland is "animal", NOT "landscape".
+
+Return ONLY a JSON object:
+{"blur_status": "clear", "category": "animal"}`;
 
 export async function analyzeImageWithBedrock(
   imagePath: string,
