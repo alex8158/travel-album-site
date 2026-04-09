@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { getDb } from '../database';
+import { deduplicate } from '../services/dedupEngine';
+import { detectBlurry } from '../services/blurDetector';
 import { classifyTrip } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
 import { optimizeTrip } from '../services/imageOptimizer';
@@ -61,11 +63,13 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
   ).get(tripId) as { cnt: number }).cnt;
 
-  // Step 1: Blur detection — DISABLED (waiting for better algorithm)
-  const blurryDeletedCount = 0;
+  // Step 1: Blur detection — moves blurry images to trash
+  const blurResult = await detectBlurry(tripId);
+  const blurryDeletedCount = blurResult.blurryCount;
 
-  // Step 2: Dedup — DISABLED (waiting for better algorithm)
-  const dedupDeletedCount = 0;
+  // Step 2: Dedup — moves duplicate images to trash (keeps best)
+  const dedupResult = await deduplicate(tripId);
+  const dedupDeletedCount = dedupResult.removedCount;
 
   // Step 3: Analyze — compute image characteristics
   await analyzeTrip(tripId);
@@ -198,26 +202,30 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const videoRows = allVideoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
     const alreadyProcessedCount = totalVideos - videoRows.length;
 
-    // Step 1: Blur detection — DISABLED
+    // Step 1: Blur detection
     if (clientDisconnected) return;
     reporter.sendStepStart('blurDetect', { processed: 0, total: totalImages });
-    const blurryDeletedCount = 0;
+    const blurResult = await detectBlurry(tripId);
+    const blurryDeletedCount = blurResult.blurryCount;
     if (clientDisconnected) return;
     reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-    // Step 2: Dedup — DISABLED
+    // Step 2: Dedup
     if (clientDisconnected) return;
     const activeImageCount = (db.prepare(
       "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
     ).get(tripId) as { cnt: number }).cnt;
     reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-    const dedupDeletedCount = 0;
+    const dedupResult = await deduplicate(tripId);
+    const dedupDeletedCount = dedupResult.removedCount;
     if (clientDisconnected) return;
     reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
 
     // Step 3: Analyze
     if (clientDisconnected) return;
-    const postDedupCount = activeImageCount;
+    const postDedupCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+    ).get(tripId) as { cnt: number }).cnt;
     reporter.sendStepStart('analyze', { processed: 0, total: postDedupCount });
     await analyzeTrip(tripId);
     const analyzedCount = (db.prepare(

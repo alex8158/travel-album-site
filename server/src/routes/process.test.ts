@@ -32,6 +32,10 @@ vi.mock('../services/dedupEngine', () => ({
   deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
 }));
 
+vi.mock('../services/dedupEngine', () => ({
+  deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
+}));
+
 vi.mock('../services/bedrockClient', () => ({
   createAIClient: vi.fn().mockReturnValue({
     invokeModel: vi.fn().mockResolvedValue('{}'),
@@ -165,12 +169,14 @@ describe('POST /api/trips/:id/process', () => {
     expect(res.body.tripId).toBe(tripId);
     expect(res.body.totalImages).toBe(3);
     expect(res.body.totalVideos).toBe(1);
-    expect(res.body.dedupDeletedCount).toBe(0);
+    expect(res.body.dedupDeletedCount).toBe(1);
 
-    // deduplicate is disabled, should not be called
+    // Verify deduplicate was called with tripId
+    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
+    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
   });
 
-  it('should not call deduplicate when dedup is disabled', async () => {
+  it('should call deduplicate with tripId string', async () => {
     const trip = await request(app)
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
@@ -188,7 +194,9 @@ describe('POST /api/trips/:id/process', () => {
 
     await request(app).post(`/api/trips/${tripId}/process`);
 
-    // deduplicate is disabled
-    expect(mockDeduplicate).toHaveBeenCalledTimes(0);
+    // deduplicate receives tripId as first arg
+    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
+    expect(typeof mockDeduplicate.mock.calls[0][0]).toBe('string');
+    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
   });
 });
