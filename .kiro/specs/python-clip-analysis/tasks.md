@@ -1,0 +1,195 @@
+# 实施计划：Python CLIP 图片分析
+
+## 概述
+
+将 Python CLIP（ONNX Runtime）和 OpenCV 集成到现有 Node.js 处理流水线中，替代 AWS Rekognition 分类、pHash 去重和 Node.js Laplacian 模糊检测。按照 Python 环境 → Python 脚本 → Node.js 封装 → 流水线集成 → 部署脚本 → 测试的顺序递进实现。
+
+## Tasks
+
+- [x] 1. Python 环境配置与模型管理基础文件
+  - [x] 1.1 创建 server/python/requirements.txt
+    - 包含依赖：transformers, optimum[onnxruntime], onnxruntime, Pillow, opencv-python-headless, numpy, hypothesis（测试用）
+    - _Requirements: 1.4_
+  - [x] 1.2 创建 server/python/model_config.json
+    - 包含 model_name（openai/clip-vit-base-patch32）、revision（固定 commit hash）、onnx_dir、checksums 字段
+    - _Requirements: 1.7_
+  - [x] 1.3 创建 server/python/prepare_model.py
+    - 从 HuggingFace 下载指定 revision 的 CLIP 模型
+    - 使用 optimum 导出为 ONNX 格式到 model_config.json 中指定的 onnx_dir
+    - 导出后验证 sha256 校验和并写入 model_config.json
+    - 模型目录不存在时自动创建
+    - _Requirements: 1.5, 1.6, 1.7, 1.8_
+  - [x] 1.4 将 server/python/models/ 添加到 .gitignore
+    - _Requirements: 1.5_
+
+- [x] 2. Python CLI 核心脚本（analyze.py）
+  - [x] 2.1 实现 analyze.py 基础框架和 argparse 子命令解析
+    - 支持 analyze 和 dedup 两个子命令
+    - 支持 --images、--model-dir、--blur-threshold、--threshold、--metadata 参数
+    - 模型目录不存在时 exit code 2，运行时错误 exit code 1
+    - 错误信息写入 stderr，结果 JSON 写入 stdout
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.6, 1.9_
+  - [x] 2.2 实现 CLIP 模型加载和分类评分逻辑
+    - 从本地 ONNX 模型目录加载 CLIP ViT-B/32
+    - 实现 CATEGORY_PROMPTS 配置（people/animal/landscape/other 各多条 prompt）
+    - 提取图片 embedding 和所有 prompt 的 text embedding
+    - 类内 max 聚合 + 跨类 softmax 归一化 → category_scores
+    - argmax → category
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 1.6_
+  - [x] 2.3 实现 OpenCV CLAHE + Laplacian 模糊检测逻辑
+    - CLAHE 亮度归一化（clipLimit=2.0, tileGridSize=(8,8)）
+    - Laplacian 方差计算 blur_score
+    - blur_score < threshold → blurry，>= threshold → clear
+    - OpenCV 失败时 blur_status='unknown'，blur_score=null
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+  - [x] 2.4 实现 analyze 子命令完整流程
+    - 加载模型一次，批量处理所有输入图片
+    - 每张图片：CLIP 分类 + OpenCV 模糊检测
+    - 单张图片失败时标记 error=true，不影响其他图片
+    - 输出完整 JSON（results 数组 + model_load_time_ms + total_time_ms）
+    - _Requirements: 5.1, 5.5, 2.5_
+  - [x] 2.5 实现 CLIP Embedding 提取和去重逻辑
+    - 提取所有图片的 512 维 embedding
+    - ≤500 张：全量余弦相似度矩阵（numpy 向量化）
+    - >500 张：逐图 top-k（50）近邻检索
+    - 相似度 > threshold 的图片归入同一连通分量
+    - _Requirements: 4.1, 4.2, 4.3, 4.7_
+  - [x] 2.6 实现 dedup 子命令的保留优先级和完整输出
+    - 解析 --metadata JSON 参数（blur_score, width, height, file_size）
+    - 重复组内按 blur_score → 分辨率 → 文件大小 选择保留图片
+    - 输出 JSON（groups 数组 + embedding_time_ms + total_time_ms）
+    - _Requirements: 4.4, 4.5, 5.2_
+
+- [x] 3. 检查点 - Python 脚本功能验证
+  - 确保 analyze.py 的 analyze 和 dedup 子命令可独立运行并输出正确 JSON，有问题请询问用户。
+
+- [x] 4. Node.js 封装层（pythonAnalyzer.ts）
+  - [x] 4.1 创建 server/src/services/pythonAnalyzer.ts 基础结构
+    - 定义 PythonAnalyzeResult、PythonDedupGroup、PythonDedupResult 接口
+    - 实现 PythonMutex 类（acquire/release，队列排队）
+    - 模块级单例 mutex 实例
+    - _Requirements: 6.1, 6.2_
+  - [x] 4.2 实现 isPythonAvailable() 函数
+    - 检测 Python 3.9+ 可执行（python3 --version）
+    - 检测模型目录存在且关键文件 checksum 校验通过
+    - 进程启动时检测一次并缓存结果
+    - exit code 2 时将缓存置为 false 且不再重试
+    - _Requirements: 6.4, 6.6, 1.9_
+  - [x] 4.3 实现 analyzeImages() 函数
+    - 通过 execFile 调用 python3 analyze.py analyze
+    - 设置 timeout=300s、maxBuffer=50MB
+    - 图片数 > 200 时自动分批（每批 200 张，无重叠），合并结果
+    - 解析 JSON 输出，snake_case → camelCase 字段映射
+    - _Requirements: 6.1, 6.2, 6.5_
+  - [x] 4.4 实现 dedupImages() 函数
+    - 通过 execFile 调用 python3 analyze.py dedup
+    - 设置 timeout=300s、maxBuffer=50MB
+    - 不分批，整个 trip 一次性处理
+    - 解析 JSON 输出
+    - _Requirements: 6.1, 6.2, 6.5_
+  - [x] 4.5 实现错误处理和回退逻辑
+    - execFile 失败（timeout/exit code 1/JSON 解析失败）→ 抛出错误供调用方全量回退
+    - exit code 2 → 标记 isPythonAvailable=false + 抛出错误
+    - analyze 单图 error=true → 在结果中保留 error 标记供调用方单图回退
+    - _Requirements: 6.3, 6.4_
+
+- [x] 5. 处理流水线集成（process.ts）
+  - [x] 5.1 修改 process.ts 集成 Python 分析
+    - 导入 pythonAnalyzer 的 isPythonAvailable、analyzeImages、dedupImages
+    - 在 POST 和 SSE 两个路由中：启动时调用 isPythonAvailable()
+    - Python 可用时：用 analyzeImages 替代 Step 1（blurDetect）+ Step 5（classify），用 dedupImages 替代 Step 2（dedup）
+    - Python 不可用时：保持现有算法不变
+    - _Requirements: 7.1, 7.2, 7.3_
+  - [x] 5.2 实现 Python 结果到数据库的写入逻辑
+    - analyzeImages 结果：写入 blur_status、sharpness_score、category 到 media_items
+    - blurry 图片：status='trashed', trashed_reason='blur'
+    - dedupImages 结果：重复组中非保留图片 status='trashed', trashed_reason='duplicate'
+    - 单图 error=true 时走 Node.js 回退（Rekognition + Laplacian）
+    - _Requirements: 7.4, 6.3, 6.4_
+  - [x] 5.3 保持 SSE 步骤名兼容
+    - 保持 blurDetect、dedup、classify 等步骤名不变
+    - Python 路径下 classify 步骤直接标记完成（已在 analyze 中完成分类）
+    - _Requirements: 7.5_
+
+- [x] 6. 检查点 - Node.js 集成验证
+  - 确保 TypeScript 编译通过，所有现有测试仍然通过，有问题请询问用户。
+
+- [x] 7. 部署脚本更新（deploy/update.sh）
+  - [x] 7.1 修改 deploy/update.sh 添加 Python 环境检测和安装
+    - 检测 python3 是否已安装（python3 --version），未安装时通过系统包管理器安装
+    - 检测 pip 是否可用，未安装时自动安装
+    - 每次部署时执行 pip install -r server/python/requirements.txt
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [x] 7.2 添加模型检测和准备逻辑
+    - 检测 server/python/models/ 目录下 ONNX 模型是否已存在
+    - 不存在时执行 python3 server/python/prepare_model.py
+    - 仅首次部署时触发，后续部署跳过
+    - _Requirements: 1.5, 1.8_
+
+- [ ] 8. 测试
+  - [ ]* 8.1 Python 属性测试：softmax 归一化有效性
+    - 使用 pytest + hypothesis
+    - **Property 1: Softmax 归一化输出有效概率分布**
+    - 生成随机 4 维 raw scores，验证 softmax 输出 sum≈1 且 all>=0
+    - **Validates: Requirements 2.3, 2.4**
+  - [ ]* 8.2 Python 属性测试：模糊阈值分类一致性
+    - **Property 3: 模糊阈值分类一致性**
+    - 生成随机 (blur_score, threshold) 对，验证 blur_score < threshold → blurry，>= threshold → clear
+    - **Validates: Requirements 3.4**
+  - [ ]* 8.3 Python 属性测试：去重分组正确性
+    - **Property 5: 去重分组正确性（连通分量）**
+    - 生成随机 embedding 矩阵和阈值，验证相似图片落在同一连通分量
+    - **Validates: Requirements 4.3**
+  - [ ]* 8.4 Python 属性测试：去重保留优先级
+    - **Property 6: 去重保留优先级**
+    - 生成随机元数据（blur_score, width, height, file_size），验证保留选择正确
+    - **Validates: Requirements 4.5**
+  - [ ]* 8.5 Node.js 属性测试：softmax 归一化有效性
+    - 使用 vitest + fast-check
+    - **Property 1: Softmax 归一化输出有效概率分布**
+    - 生成随机 4 维 raw scores，验证 softmax 输出 sum≈1 且 all>=0
+    - **Validates: Requirements 2.3, 2.4**
+  - [ ]* 8.6 Node.js 属性测试：analyze 输出字段值域有效性
+    - **Property 2: Analyze 输出字段值域有效性**
+    - 生成随机 analyze 结果，验证 category 和 blur_status 字段值域
+    - **Validates: Requirements 2.2, 3.3, 7.4**
+  - [ ]* 8.7 Node.js 属性测试：模糊阈值分类一致性
+    - **Property 3: 模糊阈值分类一致性**
+    - 生成随机 (blur_score, threshold) 对，验证分类一致性
+    - **Validates: Requirements 3.4**
+  - [ ]* 8.8 Node.js 属性测试：去重保留优先级
+    - **Property 6: 去重保留优先级**
+    - 生成随机重复组元数据，验证保留选择
+    - **Validates: Requirements 4.5**
+  - [ ]* 8.9 Node.js 属性测试：JSON 输出完整性
+    - **Property 7: stdout JSON 输出完整性**
+    - 生成随机 analyze/dedup 输出，验证 JSON 可解析
+    - **Validates: Requirements 5.3, 5.4**
+  - [ ]* 8.10 Node.js 属性测试：部分失败隔离
+    - **Property 8: 部分失败隔离**
+    - 生成混合有效/无效路径的批量输入，验证结果数组长度等于输入数
+    - **Validates: Requirements 5.5, 6.4**
+  - [ ]* 8.11 Node.js 属性测试：JSON 解析往返
+    - **Property 9: Python JSON 输出解析往返**
+    - 生成随机 Python JSON 输出，验证 snake_case → camelCase 映射正确
+    - **Validates: Requirements 6.2**
+  - [ ]* 8.12 Node.js 单元测试：pythonAnalyzer 核心逻辑
+    - 测试 isPythonAvailable() 在 Python 不存在时返回 false
+    - 测试 exit code 2 时 isPythonAvailable 缓存置为 false
+    - 测试 timeout/maxBuffer 配置正确
+    - 测试 analyze 批量分片（>200 张时正确分批，无重叠）
+    - 测试互斥锁排队执行
+    - 测试全量回退逻辑
+    - _Requirements: 6.3, 6.4, 6.5, 6.6_
+
+- [x] 9. 最终检查点 - 全部测试通过
+  - 确保所有 Python pytest 和 Node.js vitest 测试通过，有问题请询问用户。
+
+## Notes
+
+- 标记 `*` 的任务为可选，可跳过以加速 MVP
+- 每个任务引用了具体的需求编号以确保可追溯性
+- 检查点确保增量验证
+- 属性测试验证设计文档中定义的正确性属性
+- 单元测试验证具体的边界情况和错误条件
+- Python 侧使用 hypothesis，Node.js 侧使用 fast-check

@@ -7,3 +7,6 @@ uploads/
 .env
 .DS_Store
 *.pem
+server/python/models/
+__pycache__/
+*.pyc
