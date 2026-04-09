@@ -154,10 +154,37 @@ def load_model(model_dir):
     try:
         from transformers import CLIPModel, CLIPProcessor
 
-        processor = CLIPProcessor.from_pretrained(model_dir)
-        model = CLIPModel.from_pretrained(model_dir)
-        model.eval()
-        return model, processor
+        # Try loading as PyTorch model first
+        try:
+            processor = CLIPProcessor.from_pretrained(model_dir)
+            model = CLIPModel.from_pretrained(model_dir)
+            model.eval()
+            return model, processor
+        except Exception:
+            pass
+
+        # If ONNX-only export, download PyTorch model using config info
+        import json
+        config_path = model_path / "config.json"
+        with open(config_path) as f:
+            config_data = json.load(f)
+
+        # Check if this is an ONNX-only directory (has model.onnx but no pytorch_model.bin)
+        has_onnx = (model_path / "model.onnx").exists()
+        has_pytorch = (model_path / "pytorch_model.bin").exists() or (model_path / "model.safetensors").exists()
+
+        if has_onnx and not has_pytorch:
+            # Load from HuggingFace hub using the model type from config
+            model_type = config_data.get("_name_or_path", "openai/clip-vit-base-patch32")
+            print(f"ONNX-only directory, loading PyTorch model from {model_type}", file=sys.stderr)
+            processor = CLIPProcessor.from_pretrained(model_dir)
+            model = CLIPModel.from_pretrained(model_type)
+            model.eval()
+            # Save PyTorch weights locally for next time
+            model.save_pretrained(model_dir)
+            return model, processor
+
+        raise Exception("No loadable model found")
     except Exception as exc:
         print(f"Failed to load model from {model_dir}: {exc}",
               file=sys.stderr)
