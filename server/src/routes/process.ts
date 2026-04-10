@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
 import { detectBlurry } from '../services/blurDetector';
-import { classifyTrip, classifyImage } from '../services/imageClassifier';
+import { classifyTrip } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
 import { optimizeTrip } from '../services/imageOptimizer';
 import { generateThumbnailsForTrip } from '../services/thumbnailGenerator';
@@ -19,7 +19,6 @@ import {
   dedupImages,
   PythonAnalyzeResult,
 } from '../services/pythonAnalyzer';
-import { computeSharpness, classifyBlur } from '../services/blurDetector';
 
 const router = Router();
 
@@ -71,7 +70,6 @@ async function applyPythonAnalyzeResults(
   results: PythonAnalyzeResult[]
 ): Promise<{ blurryCount: number }> {
   const db = getDb();
-  const storageProvider = getStorageProvider();
   let blurryCount = 0;
 
   const updateBlurStmt = db.prepare(
@@ -97,9 +95,6 @@ async function applyPythonAnalyzeResults(
      END
      WHERE id = ?`
   );
-
-  const s3Bucket = process.env.S3_BUCKET || '';
-  const useS3 = process.env.STORAGE_TYPE === 's3' && s3Bucket;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -139,38 +134,15 @@ async function applyPythonAnalyzeResults(
         insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());
       }
     } else {
-      // Python failed for this image — fall back to Node.js
-      console.log(`[process] Python failed for ${row.original_filename}, falling back to Node.js`);
-      try {
-        // Blur detection fallback (Laplacian)
-        const localPath = await storageProvider.downloadToTemp(row.file_path);
-        const sharpness = await computeSharpness(localPath);
-        const blurStatus = classifyBlur(sharpness, 15, 50);
-        if (blurStatus === 'blurry') {
-          trashBlurStmt.run(sharpness, row.id);
-          blurryCount++;
-        } else {
-          updateBlurStmt.run(sharpness, blurStatus, row.id);
-        }
-        // Classification fallback (Rekognition)
-        try {
-          let classResult;
-          if (useS3) {
-            classResult = await classifyImage(s3Bucket, row.file_path);
-          } else {
-            const imageBuffer = await storageProvider.read(row.file_path);
-            classResult = await classifyImage(imageBuffer);
-          }
-          updateCategoryStmt.run(classResult.category, row.id);
-        } catch (classErr) {
-          const msg = classErr instanceof Error ? classErr.message : String(classErr);
-          const errText = `[classify-fallback] ${msg}`;
-          appendErrorStmt.run(errText, errText, row.id);
-          updateCategoryStmt.run('other', row.id);
-        }
-      } catch (fallbackErr) {
-        const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        const errText = `[blur-fallback] ${msg}`;
+      // Python failed for this image — mark as error, no per-image Node fallback
+      // (entire trip will use one engine; if Python fails for some images, mark them)
+      console.log(`[process] Python error for ${row.original_filename}, marking as unknown/other`);
+      updateBlurStmt.run(null, 'unknown', row.id);
+      updateCategoryStmt.run('other', row.id);
+      deleteCategoryTagsStmt.run(row.id);
+      insertTagStmt.run(uuidv4(), row.id, 'category:other', new Date().toISOString());
+      if (result?.errorMessage) {
+        const errText = `[python-analyze] ${result.errorMessage}`;
         appendErrorStmt.run(errText, errText, row.id);
       }
     }

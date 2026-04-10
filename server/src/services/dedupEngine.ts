@@ -173,12 +173,11 @@ export async function deduplicate(
       if (removedSet.has(j)) continue;
       if (pHashes[j] === null && dHashes[j] === null) continue;
 
-      // Dual hash verification: consider duplicate if EITHER hash matches
-      // This catches more duplicates — pHash is better for color/tone changes,
-      // dHash is better for slight position shifts
+      // Conservative dual hash: require BOTH pHash AND dHash to match
+      // This avoids false positives from single-hash coincidence
       const pDist = (pHashes[i] && pHashes[j]) ? hammingDistance(pHashes[i]!, pHashes[j]!) : 999;
       const dDist = (dHashes[i] && dHashes[j]) ? hammingDistance(dHashes[i]!, dHashes[j]!) : 999;
-      const isDuplicate = pDist <= hammingThreshold || dDist <= hammingThreshold;
+      const isDuplicate = pDist <= hammingThreshold && dDist <= hammingThreshold;
       if (isDuplicate) {
         // They're duplicates — decide who to remove
         const loserIdx = pickLoser(rows, i, j);
@@ -219,16 +218,25 @@ export async function deduplicate(
 
 /**
  * Retention priority to pick the loser between two duplicate images:
- * ① higher sharpness_score wins
- * ② if sharpness diff < 10, higher resolution (w*h) wins
- * ③ earlier in sequence wins (lower index)
+ * ① suspect/blurry images always lose to clear images
+ * ② higher sharpness_score wins
+ * ③ if sharpness diff < 10, higher resolution (w*h) wins
+ * ④ earlier in sequence wins (lower index)
  * Returns the index of the loser (the one to remove).
  */
 function pickLoser(
-  rows: Array<{ sharpness_score: number | null; width: number | null; height: number | null }>,
+  rows: Array<{ sharpness_score: number | null; width: number | null; height: number | null; blur_status?: string | null }>,
   i: number,
   j: number
 ): number {
+  // Suspect/blurry images should lose to clear images
+  const blurI = (rows[i] as any).blur_status;
+  const blurJ = (rows[j] as any).blur_status;
+  const iIsClear = !blurI || blurI === 'clear';
+  const jIsClear = !blurJ || blurJ === 'clear';
+  if (iIsClear && !jIsClear) return j;
+  if (!iIsClear && jIsClear) return i;
+
   const sharpI = rows[i].sharpness_score ?? 0;
   const sharpJ = rows[j].sharpness_score ?? 0;
   const sharpDiff = Math.abs(sharpI - sharpJ);
