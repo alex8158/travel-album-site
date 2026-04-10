@@ -108,27 +108,8 @@ async function applyPythonAnalyzeResults(
       } else {
         updateBlurStmt.run(result.blurScore, result.blurStatus, row.id);
       }
-      // Apply classification using categoryScores for rule-based decision
-      if (result.categoryScores) {
-        const scores = result.categoryScores;
-        const ppl = scores.people ?? 0;
-        const ani = scores.animal ?? 0;
-        const lnd = scores.landscape ?? 0;
-        let finalCategory: string;
-        if (ppl >= 0.30 && ppl >= ani - 0.03) {
-          finalCategory = 'people';
-        } else if (ani >= 0.38 && ani - ppl >= 0.05) {
-          finalCategory = 'animal';
-        } else if (lnd >= 0.35) {
-          finalCategory = 'landscape';
-        } else {
-          finalCategory = result.category || 'other';
-        }
-        updateCategoryStmt.run(finalCategory, row.id);
-        // Sync category tags
-        deleteCategoryTagsStmt.run(row.id);
-        insertTagStmt.run(uuidv4(), row.id, `category:${finalCategory}`, new Date().toISOString());
-      } else if (result.category) {
+      // Apply classification: trust Python's category directly (single source of truth)
+      if (result.category) {
         updateCategoryStmt.run(result.category, row.id);
         deleteCategoryTagsStmt.run(row.id);
         insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());

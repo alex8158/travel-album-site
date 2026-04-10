@@ -176,6 +176,7 @@ function markPythonUnavailable(): void {
 // ---------------------------------------------------------------------------
 
 const ANALYZE_BATCH_SIZE = 200;
+const DEDUP_MAX_IMAGES = 1000; // Skip Python dedup for trips larger than this
 const EXEC_TIMEOUT = 300_000; // 300s
 const EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
 
@@ -267,6 +268,12 @@ export async function dedupImages(
   metadata: Record<number, { blur_score: number; width: number; height: number; file_size: number }>,
   options?: { threshold?: number; modelDir?: string }
 ): Promise<PythonDedupResult> {
+  // Hard limit: skip Python dedup for very large trips to avoid OOM/timeout
+  if (imagePaths.length > DEDUP_MAX_IMAGES) {
+    console.log(`[pythonAnalyzer] Trip has ${imagePaths.length} images, exceeds dedup limit ${DEDUP_MAX_IMAGES}, skipping Python dedup`);
+    throw new Error(`Too many images for Python dedup (${imagePaths.length} > ${DEDUP_MAX_IMAGES})`);
+  }
+
   const modelDir = options?.modelDir ?? getDefaultModelDir();
   const threshold = options?.threshold ?? 0.955;
 
