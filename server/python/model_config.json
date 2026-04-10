@@ -2,5 +2,13 @@
   "model_name": "openai/clip-vit-base-patch32",
   "revision": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
   "onnx_dir": "models/clip-vit-base-patch32-onnx",
-  "checksums": {}
+  "checksums": {
+    "config.json": "sha256:fe2f2bd1631d4c9d073c7a82936d53550132d4c37d5d9f6b4cbe59641ef74871",
+    "model.onnx": "sha256:75ba5833675245a35b3e1a7091e117b1470d8d10041e04c4d49a96926fd94046",
+    "preprocessor_config.json": "sha256:8fb547403656e9019b0982d2310b045bef39b9d2a811a0c98756e52d48e25db6",
+    "tokenizer_config.json": "sha256:c3d2a67c48a59ffa8fd92de060608524b12cae93acb4fe83e5eb03147a001f5a",
+    "special_tokens_map.json": "sha256:2cdb3b8331a60c92fc1e55a13e9fd61fd2293c5a51275fdcccd62b780052530e",
+    "vocab.json": "sha256:5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363",
+    "tokenizer.json": "sha256:6d9109cc838977f3ca94a379eec36aecc7c807e1785cd729660ca2fc0171fb35"
+  }
 }
