@@ -114,10 +114,14 @@ def softmax(scores):
 # ---------------------------------------------------------------------------
 
 
-def detect_blur(image_path, threshold=100):
+def detect_blur(image_path, blur_threshold=15, clear_threshold=50):
     """Detect blur using CLAHE-normalized Laplacian variance.
 
-    Returns (blur_status, blur_score).
+    Three-tier classification:
+      blur_score < blur_threshold → blurry
+      blur_threshold <= blur_score < clear_threshold → suspect
+      blur_score >= clear_threshold → clear
+
     On OpenCV failure returns ('unknown', None).
     """
     try:
@@ -129,7 +133,12 @@ def detect_blur(image_path, threshold=100):
         normalized = clahe.apply(gray)
         laplacian = cv2.Laplacian(normalized, cv2.CV_64F)
         blur_score = float(laplacian.var())
-        blur_status = "blurry" if blur_score < threshold else "clear"
+        if blur_score < blur_threshold:
+            blur_status = "blurry"
+        elif blur_score < clear_threshold:
+            blur_status = "suspect"
+        else:
+            blur_status = "clear"
         return blur_status, blur_score
     except Exception as exc:
         print(f"OpenCV blur detection failed for {image_path}: {exc}",
@@ -477,7 +486,9 @@ def cmd_analyze(args):
 
         # Blur detection (independent of classification success)
         blur_status, blur_score = detect_blur(
-            image_path, threshold=args.blur_threshold
+            image_path,
+            blur_threshold=args.blur_threshold,
+            clear_threshold=args.clear_threshold,
         )
         result["blur_status"] = blur_status
         result["blur_score"] = blur_score
@@ -585,8 +596,12 @@ def build_parser():
         help="Local model directory (default: ./models)"
     )
     analyze_parser.add_argument(
-        "--blur-threshold", type=float, default=100.0,
-        help="Blur detection threshold (default: 100)"
+        "--blur-threshold", type=float, default=15.0,
+        help="Blur detection lower threshold (default: 15)"
+    )
+    analyze_parser.add_argument(
+        "--clear-threshold", type=float, default=50.0,
+        help="Blur detection upper threshold (default: 50)"
     )
 
     # --- dedup subcommand ---

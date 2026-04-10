@@ -106,8 +106,7 @@ async function applyPythonAnalyzeResults(
     const result = results[i];
 
     if (result && !result.error) {
-      // Python succeeded for this image
-      // Apply blur result
+      // Apply blur result: only trash clearly blurry, suspect stays active
       if (result.blurStatus === 'blurry' && result.blurScore !== null) {
         trashBlurStmt.run(result.blurScore, row.id);
         blurryCount++;
@@ -146,7 +145,7 @@ async function applyPythonAnalyzeResults(
         // Blur detection fallback (Laplacian)
         const localPath = await storageProvider.downloadToTemp(row.file_path);
         const sharpness = await computeSharpness(localPath);
-        const blurStatus = classifyBlur(sharpness, 100);
+        const blurStatus = classifyBlur(sharpness, 15, 50);
         if (blurStatus === 'blurry') {
           trashBlurStmt.run(sharpness, row.id);
           blurryCount++;
