@@ -8,6 +8,7 @@ import ProcessTrigger from '../components/ProcessTrigger';
 import type { ProcessResult } from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
 import { useAuth, authFetch } from '../contexts/AuthContext';
+import { updateCategory } from '../api';
 import type {
   GalleryData,
   TrashedItem,
@@ -83,6 +84,12 @@ export default function MyGalleryPage() {
 
   // Category filter state
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
+
+  // Category picker state (single image)
+  const [categoryPickerMediaId, setCategoryPickerMediaId] = useState<string | null>(null);
+  // Batch category picker state
+  const [batchCategoryPickerOpen, setBatchCategoryPickerOpen] = useState(false);
+  const [batchCategoryChanging, setBatchCategoryChanging] = useState(false);
 
   async function fetchGallery() {
     if (!id) return;
@@ -354,6 +361,84 @@ export default function MyGalleryPage() {
     } finally {
       setBatchDeleting(false);
     }
+  }
+
+  // --- Single delete handler ---
+  async function handleSingleDelete(mediaId: string) {
+    if (!window.confirm('确定要删除这张图片吗？')) return;
+    try {
+      const res = await authFetch(`/api/trips/${id}/media/trash`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaIds: [mediaId] }),
+      });
+      if (!res.ok) throw new Error('delete failed');
+      await fetchGallery();
+      await fetchTrash();
+    } catch {
+      // keep image in place on failure
+    }
+  }
+
+  // --- Single category change handler ---
+  async function handleCategoryChange(mediaId: string, newCategory: string) {
+    if (!data) return;
+    const img = data.images.find(i => i.item.id === mediaId);
+    if (!img) return;
+    const oldCategory = img.item.category;
+    if (oldCategory === newCategory) {
+      setCategoryPickerMediaId(null);
+      return;
+    }
+    // Optimistic update
+    setData({
+      ...data,
+      images: data.images.map(i =>
+        i.item.id === mediaId ? { ...i, item: { ...i.item, category: newCategory } } : i
+      ),
+    });
+    setCategoryPickerMediaId(null);
+    try {
+      const res = await updateCategory(mediaId, newCategory);
+      if (!res.ok) throw new Error('category update failed');
+    } catch {
+      // Revert on failure
+      setData(prev => prev ? {
+        ...prev,
+        images: prev.images.map(i =>
+          i.item.id === mediaId ? { ...i, item: { ...i.item, category: oldCategory } } : i
+        ),
+      } : prev);
+    }
+  }
+
+  // --- Batch category change handler ---
+  async function handleBatchCategoryChange(newCategory: string) {
+    if (!data || selectedIds.size === 0) return;
+    setBatchCategoryChanging(true);
+    setBatchCategoryPickerOpen(false);
+    const results = await Promise.allSettled(
+      [...selectedIds].map(mediaId => updateCategory(mediaId, newCategory).then(res => {
+        if (!res.ok) throw new Error('failed');
+        return mediaId;
+      }))
+    );
+    const succeeded = results.filter(r => r.status === 'fulfilled').map(r => (r as PromiseFulfilledResult<string>).value);
+    const failedCount = results.filter(r => r.status === 'rejected').length;
+    if (succeeded.length > 0) {
+      setData(prev => prev ? {
+        ...prev,
+        images: prev.images.map(i =>
+          succeeded.includes(i.item.id) ? { ...i, item: { ...i.item, category: newCategory } } : i
+        ),
+      } : prev);
+    }
+    if (failedCount > 0) {
+      alert(`${failedCount} 个素材分类更换失败`);
+    } else {
+      exitMultiSelect();
+    }
+    setBatchCategoryChanging(false);
   }
 
   // --- Hooks must be called before any conditional returns (React rules of hooks) ---
@@ -669,6 +754,84 @@ export default function MyGalleryPage() {
                     ✏️ 编辑
                   </button>
                 )}
+                {!multiSelectMode && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleSingleDelete(img.item.id); }}
+                    aria-label={`删除 ${img.item.originalFilename}`}
+                    data-testid={`delete-btn-${img.item.id}`}
+                    style={{
+                      position: 'absolute',
+                      top: '4px',
+                      right: '4px',
+                      background: 'rgba(255,255,255,0.9)',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '2px 8px',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🗑️
+                  </button>
+                )}
+                {!multiSelectMode && (
+                  <div style={{ position: 'absolute', top: '4px', left: '4px' }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCategoryPickerMediaId(categoryPickerMediaId === img.item.id ? null : img.item.id);
+                      }}
+                      aria-label={`更换分类 ${img.item.originalFilename}`}
+                      data-testid={`category-label-${img.item.id}`}
+                      style={{
+                        background: 'rgba(255,255,255,0.9)',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        padding: '2px 8px',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {CATEGORY_LABELS[(img.item.category as CategoryTab) || 'other']}
+                    </button>
+                    {categoryPickerMediaId === img.item.id && (
+                      <div
+                        data-testid={`category-picker-${img.item.id}`}
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          background: '#fff',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                          zIndex: 10,
+                          minWidth: '80px',
+                        }}
+                      >
+                        {(['people', 'animal', 'landscape', 'other'] as const).map(cat => (
+                          <button
+                            key={cat}
+                            onClick={(e) => { e.stopPropagation(); handleCategoryChange(img.item.id, cat); }}
+                            data-testid={`category-option-${cat}-${img.item.id}`}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              padding: '6px 12px',
+                              border: 'none',
+                              background: img.item.category === cat ? '#e8f0fe' : 'transparent',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                              fontSize: '0.8rem',
+                            }}
+                          >
+                            {CATEGORY_LABELS[cat]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -929,22 +1092,79 @@ export default function MyGalleryPage() {
           }}
         >
           <span style={{ fontSize: '0.95rem' }}>已选 {selectedIds.size} 项</span>
-          <button
-            onClick={handleBatchDelete}
-            disabled={batchDeleting}
-            data-testid="batch-delete-btn"
-            style={{
-              background: '#e74c3c',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              padding: '8px 20px',
-              cursor: batchDeleting ? 'not-allowed' : 'pointer',
-              fontSize: '0.95rem',
-            }}
-          >
-            {batchDeleting ? '删除中...' : '删除选中'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', position: 'relative' }}>
+            <button
+              onClick={handleBatchDelete}
+              disabled={batchDeleting || batchCategoryChanging}
+              data-testid="batch-delete-btn"
+              style={{
+                background: '#e74c3c',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '8px 20px',
+                cursor: batchDeleting ? 'not-allowed' : 'pointer',
+                fontSize: '0.95rem',
+              }}
+            >
+              {batchDeleting ? '删除中...' : '删除选中'}
+            </button>
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setBatchCategoryPickerOpen(!batchCategoryPickerOpen)}
+                disabled={batchCategoryChanging}
+                data-testid="batch-category-btn"
+                style={{
+                  background: '#4a90d9',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 20px',
+                  cursor: batchCategoryChanging ? 'not-allowed' : 'pointer',
+                  fontSize: '0.95rem',
+                }}
+              >
+                {batchCategoryChanging ? '更换中...' : '更换分类'}
+              </button>
+              {batchCategoryPickerOpen && (
+                <div
+                  data-testid="batch-category-picker"
+                  style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    right: 0,
+                    marginBottom: '4px',
+                    background: '#fff',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    zIndex: 10,
+                    minWidth: '100px',
+                  }}
+                >
+                  {(['people', 'animal', 'landscape', 'other'] as const).map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => handleBatchCategoryChange(cat)}
+                      data-testid={`batch-category-option-${cat}`}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        padding: '8px 16px',
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        fontSize: '0.9rem',
+                      }}
+                    >
+                      {CATEGORY_LABELS[cat]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

@@ -150,6 +150,45 @@ router.put('/media/:id/restore', authMiddleware, requireAuth, (req: Request, res
   }
 });
 
+// PUT /api/media/:id/category — Change category of a single media item (owner or admin)
+router.put('/media/:id/category', authMiddleware, requireAuth, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDb();
+    const mediaId = req.params.id;
+    const { category } = req.body;
+
+    const VALID_CATEGORIES = ['people', 'animal', 'landscape', 'other'];
+    if (!VALID_CATEGORIES.includes(category)) {
+      return res.status(400).json({
+        error: { code: 'INVALID_CATEGORY', message: '分类值无效，必须为 people、animal、landscape 或 other' }
+      });
+    }
+
+    const row = db.prepare(
+      'SELECT * FROM media_items WHERE id = ?'
+    ).get(mediaId) as MediaItemRow | undefined;
+
+    if (!row) {
+      throw new AppError(404, 'NOT_FOUND', '媒体文件不存在');
+    }
+
+    // Check ownership: media owner, trip owner, or admin
+    if (req.user!.role !== 'admin') {
+      const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(row.trip_id) as TripRow | undefined;
+      if (row.user_id !== req.user!.userId && (!trip || trip.user_id !== req.user!.userId)) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+      }
+    }
+
+    db.prepare('UPDATE media_items SET category = ? WHERE id = ?').run(category, mediaId);
+
+    const updated = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
+    return res.json(rowToMediaItem(updated));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PUT /api/media/:id/visibility — Change visibility of a single media item (owner or admin)
 router.put('/media/:id/visibility', authMiddleware, requireAuth, (req: Request, res: Response, next: NextFunction) => {
   try {
