@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
 import { detectBlurry } from '../services/blurDetector';
@@ -82,6 +83,12 @@ async function applyPythonAnalyzeResults(
   const updateCategoryStmt = db.prepare(
     'UPDATE media_items SET category = ? WHERE id = ?'
   );
+  const deleteCategoryTagsStmt = db.prepare(
+    "DELETE FROM media_tags WHERE media_id = ? AND tag_name LIKE 'category:%'"
+  );
+  const insertTagStmt = db.prepare(
+    'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
+  );
   const appendErrorStmt = db.prepare(
     `UPDATE media_items
      SET processing_error = CASE
@@ -107,9 +114,30 @@ async function applyPythonAnalyzeResults(
       } else {
         updateBlurStmt.run(result.blurScore, result.blurStatus, row.id);
       }
-      // Apply classification
-      if (result.category) {
+      // Apply classification using categoryScores for rule-based decision
+      if (result.categoryScores) {
+        const scores = result.categoryScores;
+        const ppl = scores.people ?? 0;
+        const ani = scores.animal ?? 0;
+        const lnd = scores.landscape ?? 0;
+        let finalCategory: string;
+        if (ppl >= 0.30 && ppl >= ani - 0.03) {
+          finalCategory = 'people';
+        } else if (ani >= 0.38 && ani - ppl >= 0.05) {
+          finalCategory = 'animal';
+        } else if (lnd >= 0.35) {
+          finalCategory = 'landscape';
+        } else {
+          finalCategory = result.category || 'other';
+        }
+        updateCategoryStmt.run(finalCategory, row.id);
+        // Sync category tags
+        deleteCategoryTagsStmt.run(row.id);
+        insertTagStmt.run(uuidv4(), row.id, `category:${finalCategory}`, new Date().toISOString());
+      } else if (result.category) {
         updateCategoryStmt.run(result.category, row.id);
+        deleteCategoryTagsStmt.run(row.id);
+        insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());
       }
     } else {
       // Python failed for this image — fall back to Node.js

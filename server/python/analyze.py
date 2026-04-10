@@ -22,31 +22,37 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 CATEGORY_PROMPTS = {
-    "animal": [
-        "a photo of an animal",
-        "a photo of wildlife in nature",
-        "a photo of a lion in the grassland",
-        "a photo of fish underwater",
-        "a photo of birds in the sky",
-        "a photo of elephants",
-        "a photo of a giraffe",
-        "a photo of marine life underwater",
-        "a photo of coral reef creatures",
-        "a photo of a sea slug nudibranch",
-        "a photo of a diver with marine animals",
-    ],
-    "landscape": [
-        "a photo of natural scenery",
-        "a photo of mountains and sky",
-        "a photo of ocean and beach",
-        "a photo of a sunset",
-        "a photo of a forest",
-    ],
     "people": [
         "a photo of a person",
         "a photo of people",
         "a portrait photo",
         "a group photo of people",
+        "a photo of a diver underwater",
+        "a photo of a scuba diver",
+        "a photo of a snorkeler in the sea",
+        "a photo of a swimmer underwater",
+        "a photo of a person swimming in the ocean",
+        "an underwater photo of a human",
+    ],
+    "animal": [
+        "a photo of an animal",
+        "a photo of wildlife in nature",
+        "a photo of fish underwater",
+        "a photo of marine life underwater",
+        "a photo of coral reef creatures",
+        "a photo of a sea turtle",
+        "a photo of a shark",
+        "a photo of a nudibranch",
+        "an underwater photo focused on marine animals",
+    ],
+    "landscape": [
+        "a photo of natural scenery",
+        "a photo of mountains and sky",
+        "a photo of ocean and beach",
+        "a photo of underwater scenery without people",
+        "a photo of coral reef scenery",
+        "a photo of a sunset",
+        "a photo of a forest",
     ],
     "other": [
         "a photo of food",
@@ -266,9 +272,21 @@ def classify_image(image_path, model, processor):
     for i, cat_name in enumerate(category_names):
         category_scores[cat_name] = category_scores_list[i]
 
-    # Best category = argmax
-    best_idx = int(np.argmax(category_scores_list))
-    category = category_names[best_idx]
+    # Rule-based decision: people-priority for underwater scenes
+    people_score = category_scores.get("people", 0)
+    animal_score = category_scores.get("animal", 0)
+    landscape_score = category_scores.get("landscape", 0)
+
+    if people_score >= 0.30 and people_score >= animal_score - 0.03:
+        category = "people"
+    elif animal_score >= 0.38 and animal_score - people_score >= 0.05:
+        category = "animal"
+    elif landscape_score >= 0.35:
+        category = "landscape"
+    else:
+        # Fallback to argmax
+        best_idx = int(np.argmax(category_scores_list))
+        category = category_names[best_idx]
 
     return category, category_scores
 

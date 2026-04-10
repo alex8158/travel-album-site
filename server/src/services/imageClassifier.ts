@@ -97,12 +97,11 @@ export function mapLabelsToCategory(labels: string[] | LabelWithConfidence[]): C
   let category: ImageCategory = 'other';
 
   if (hasPeople && hasAnimal) {
-    // Both detected — compare strength
-    if (animalCount > peopleCount || (animalCount === peopleCount && animalMaxConf > peopleMaxConf)) {
-      category = 'animal';
-    } else {
-      category = 'people';
-    }
+    // People-priority: only classify as animal if animal evidence clearly dominates
+    const animalClearlyDominates =
+      animalCount >= peopleCount + 2 ||
+      animalMaxConf >= peopleMaxConf + 8;
+    category = animalClearlyDominates ? 'animal' : 'people';
   } else if (hasPeople) {
     category = 'people';
   } else if (hasAnimal) {
