@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """CLIP image analysis and deduplication CLI tool.
 
-Provides two subcommands:
-  analyze - CLIP classification + OpenCV blur detection for images
-  dedup   - CLIP embedding-based duplicate detection with union-find grouping
+Provides three subcommands:
+  analyze        - CLIP classification + OpenCV blur detection for images
+  dedup          - CLIP embedding-based duplicate detection with union-find grouping
+  clip-neighbors - CLIP embedding top-k neighbor search with three-tier classification
 
 All JSON output goes to stdout. All errors/logs go to stderr.
 Exit codes: 0=success, 1=runtime error, 2=model not found.
@@ -571,6 +572,158 @@ def cmd_dedup(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: clip-neighbors
+# ---------------------------------------------------------------------------
+
+
+def cmd_clip_neighbors(args):
+    """Extract CLIP embeddings and output three-tier candidate pairs.
+
+    Uses top-k nearest neighbor search per image, then classifies each
+    pair into confirmed_pairs or gray_zone_pairs based on CLI thresholds.
+    All thresholds are received via CLI arguments (no hardcoded values).
+    """
+    start_time = time.time()
+
+    # Load model
+    model, processor = load_model(args.model_dir)
+
+    # Parse hash data
+    hash_data = {}
+    if args.hash_data:
+        try:
+            hash_data = json.loads(args.hash_data)
+        except json.JSONDecodeError as exc:
+            print(
+                f"Failed to parse --hash-data JSON: {exc}",
+                file=sys.stderr,
+            )
+
+    # Extract embeddings
+    embedding_start = time.time()
+    embeddings, error_indices = extract_embeddings(
+        args.images, model, processor
+    )
+    embedding_time_ms = int((time.time() - embedding_start) * 1000)
+
+    n = len(embeddings)
+    error_set = set(error_indices)
+    top_k = args.top_k
+
+    confirmed_threshold = args.confirmed_threshold
+    gray_high_threshold = args.gray_high_threshold
+    gray_low_threshold = args.gray_low_threshold
+    gray_low_seq_distance = args.gray_low_seq_distance
+    gray_low_hash_distance = args.gray_low_hash_distance
+
+    # Normalize embeddings (handle zero vectors from errors)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    normalized = embeddings / norms
+
+    confirmed_pairs = []
+    gray_zone_pairs = []
+    seen = set()
+
+    for i in range(n):
+        if i in error_set:
+            continue
+
+        # Compute similarities to all other images
+        sims = normalized[i] @ normalized.T  # (N,)
+
+        # Get top-k+1 indices (including self), then exclude self
+        k_fetch = min(top_k + 1, n)
+        top_indices = np.argpartition(sims, -k_fetch)[-k_fetch:]
+
+        for j_val in top_indices:
+            j = int(j_val)
+            if j == i or j in error_set:
+                continue
+
+            # Deduplicate pairs (i, j) and (j, i)
+            lo, hi = min(i, j), max(i, j)
+            if (lo, hi) in seen:
+                continue
+            seen.add((lo, hi))
+
+            sim = float(sims[j])
+
+            if sim >= confirmed_threshold:
+                confirmed_pairs.append({
+                    "i": lo,
+                    "j": hi,
+                    "similarity": sim,
+                })
+            elif sim >= gray_high_threshold:
+                gray_zone_pairs.append({
+                    "i": lo,
+                    "j": hi,
+                    "similarity": sim,
+                })
+            elif sim >= gray_low_threshold:
+                # Additional conditions for the low gray tier
+                i_data = hash_data.get(str(lo), {})
+                j_data = hash_data.get(str(hi), {})
+                seq_i = i_data.get("seqIndex", lo)
+                seq_j = j_data.get("seqIndex", hi)
+                p_hash_i = i_data.get("pHash")
+                p_hash_j = j_data.get("pHash")
+                d_hash_i = i_data.get("dHash")
+                d_hash_j = j_data.get("dHash")
+
+                seq_dist = abs(seq_i - seq_j)
+                if seq_dist > gray_low_seq_distance:
+                    continue
+
+                p_dist = _hamming_hex(p_hash_i, p_hash_j)
+                d_dist = _hamming_hex(d_hash_i, d_hash_j)
+
+                if (
+                    (p_dist is not None
+                     and p_dist <= gray_low_hash_distance)
+                    or (d_dist is not None
+                        and d_dist <= gray_low_hash_distance)
+                ):
+                    gray_zone_pairs.append({
+                        "i": lo,
+                        "j": hi,
+                        "similarity": sim,
+                    })
+            # else: sim < gray_low_threshold → skip
+
+    total_time_ms = int((time.time() - start_time) * 1000)
+
+    output = {
+        "confirmed_pairs": confirmed_pairs,
+        "gray_zone_pairs": gray_zone_pairs,
+        "embedding_time_ms": embedding_time_ms,
+        "total_time_ms": total_time_ms,
+    }
+
+    json.dump(output, sys.stdout)
+    sys.stdout.write("\n")
+
+
+def _hamming_hex(hex_a, hex_b):
+    """Compute hamming distance between two hex hash strings.
+
+    Returns None if either hash is None or they differ in length.
+    """
+    if hex_a is None or hex_b is None:
+        return None
+    if len(hex_a) != len(hex_b):
+        return None
+    try:
+        val_a = int(hex_a, 16)
+        val_b = int(hex_b, 16)
+    except (ValueError, TypeError):
+        return None
+    xor = val_a ^ val_b
+    return bin(xor).count("1")
+
+
+# ---------------------------------------------------------------------------
 # Argument parsing and main entry point
 # ---------------------------------------------------------------------------
 
@@ -626,6 +779,48 @@ def build_parser():
         help="JSON string with per-image metadata for retention priority"
     )
 
+    # --- clip-neighbors subcommand ---
+    cn_parser = subparsers.add_parser(
+        "clip-neighbors",
+        help="CLIP top-k neighbor search with three-tier classification"
+    )
+    cn_parser.add_argument(
+        "--images", nargs="+", required=True,
+        help="List of image file paths"
+    )
+    cn_parser.add_argument(
+        "--model-dir", default="./models",
+        help="Local model directory (default: ./models)"
+    )
+    cn_parser.add_argument(
+        "--top-k", type=int, default=5,
+        help="Number of nearest neighbors per image (default: 5)"
+    )
+    cn_parser.add_argument(
+        "--confirmed-threshold", type=float, default=0.94,
+        help="Similarity threshold for confirmed pairs (default: 0.94)"
+    )
+    cn_parser.add_argument(
+        "--gray-high-threshold", type=float, default=0.90,
+        help="Upper gray zone threshold (default: 0.90)"
+    )
+    cn_parser.add_argument(
+        "--gray-low-threshold", type=float, default=0.85,
+        help="Lower gray zone threshold (default: 0.85)"
+    )
+    cn_parser.add_argument(
+        "--gray-low-seq-distance", type=int, default=12,
+        help="Max sequence distance for low gray tier (default: 12)"
+    )
+    cn_parser.add_argument(
+        "--gray-low-hash-distance", type=int, default=16,
+        help="Max hash distance for low gray tier (default: 16)"
+    )
+    cn_parser.add_argument(
+        "--hash-data", type=str, default=None,
+        help="JSON with per-image pHash, dHash and seqIndex"
+    )
+
     return parser
 
 
@@ -639,6 +834,8 @@ def main():
             cmd_analyze(args)
         elif args.command == "dedup":
             cmd_dedup(args)
+        elif args.command == "clip-neighbors":
+            cmd_clip_neighbors(args)
     except SystemExit:
         raise
     except Exception as exc:

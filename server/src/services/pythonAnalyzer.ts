@@ -3,6 +3,14 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import {
+  CLIP_CONFIRMED_THRESHOLD,
+  CLIP_GRAY_HIGH_THRESHOLD,
+  CLIP_GRAY_LOW_THRESHOLD,
+  CLIP_TOP_K,
+  GRAY_LOW_SEQ_DISTANCE,
+  GRAY_LOW_HASH_DISTANCE,
+} from './dedupThresholds';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +38,22 @@ export interface PythonDedupGroup {
 
 export interface PythonDedupResult {
   groups: PythonDedupGroup[];
+}
+
+export interface ClipCandidatePair {
+  /** 图片索引 A */
+  i: number;
+  /** 图片索引 B */
+  j: number;
+  /** CLIP 余弦相似度 */
+  similarity: number;
+}
+
+export interface ClipNeighborResult {
+  confirmedPairs: ClipCandidatePair[];
+  grayZonePairs: ClipCandidatePair[];
+  embeddingTimeMs: number;
+  totalTimeMs: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +335,78 @@ export async function dedupImages(
       markPythonUnavailable();
     }
     throw new Error(`Python dedup failed: ${err.message || err}`);
+  } finally {
+    mutex.release();
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// clipNeighborSearch — CLIP top-k neighbor search with three-tier classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Call Python analyze.py clip-neighbors subcommand.
+ * Passes all threshold constants from dedupThresholds.ts as CLI arguments.
+ *
+ * @param imagePaths - List of image file paths
+ * @param hashData - Per-image pHash, dHash and sequence index data
+ * @param options - Optional model directory and top-k override
+ */
+export async function clipNeighborSearch(
+  imagePaths: string[],
+  hashData: Record<number, { pHash: string | null; dHash: string | null; seqIndex: number }>,
+  options?: { modelDir?: string; topK?: number }
+): Promise<ClipNeighborResult> {
+  const modelDir = options?.modelDir ?? getDefaultModelDir();
+  const topK = options?.topK ?? CLIP_TOP_K;
+
+  await mutex.acquire();
+  try {
+    const hashDataStr = JSON.stringify(hashData);
+    const args = [
+      ANALYZE_SCRIPT,
+      'clip-neighbors',
+      '--images', ...imagePaths,
+      '--model-dir', modelDir,
+      '--top-k', String(topK),
+      '--confirmed-threshold', String(CLIP_CONFIRMED_THRESHOLD),
+      '--gray-high-threshold', String(CLIP_GRAY_HIGH_THRESHOLD),
+      '--gray-low-threshold', String(CLIP_GRAY_LOW_THRESHOLD),
+      '--gray-low-seq-distance', String(GRAY_LOW_SEQ_DISTANCE),
+      '--gray-low-hash-distance', String(GRAY_LOW_HASH_DISTANCE),
+      '--hash-data', hashDataStr,
+    ];
+
+    const { stdout, stderr } = await execFileAsync('python3', args, {
+      timeout: EXEC_TIMEOUT,
+      maxBuffer: EXEC_MAX_BUFFER,
+    });
+
+    if (stderr) {
+      console.log(`[pythonAnalyzer] clip-neighbors stderr: ${stderr.slice(0, 500)}`);
+    }
+
+    const output = JSON.parse(stdout);
+    return {
+      confirmedPairs: (output.confirmed_pairs as any[]).map(p => ({
+        i: p.i,
+        j: p.j,
+        similarity: p.similarity,
+      })),
+      grayZonePairs: (output.gray_zone_pairs as any[]).map(p => ({
+        i: p.i,
+        j: p.j,
+        similarity: p.similarity,
+      })),
+      embeddingTimeMs: output.embedding_time_ms,
+      totalTimeMs: output.total_time_ms,
+    };
+  } catch (err: any) {
+    if (err.code === 2 || (err.killed === false && err.code === 2)) {
+      markPythonUnavailable();
+    }
+    throw new Error(`Python clip-neighbors failed: ${err.message || err}`);
   } finally {
     mutex.release();
   }

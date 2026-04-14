@@ -1,0 +1,643 @@
+/**
+ * 四层混合去重引擎
+ *
+ * Layer 0: Hash 预过滤（文件 MD5 + pHash/dHash）
+ * Layer 1: CLIP 三档粗筛（via pythonAnalyzer.clipNeighborSearch）
+ * Layer 2: LLM 逐对精判（有已配置 provider 时）/ Strict Threshold 回退（无 provider 时）
+ * Layer 3: Union-Find 分组 + 质量选择
+ *
+ * 所有阈值从 dedupThresholds.ts 导入，不在本文件定义任何阈值数值。
+ */
+
+import crypto from 'crypto';
+import fs from 'fs';
+import { getDb } from '../database';
+import { getStorageProvider } from '../storage/factory';
+import {
+  HASH_HAMMING_THRESHOLD,
+  applyStrictThreshold,
+} from './dedupThresholds';
+import { computePHash, computeHash, hammingDistance, DedupResult } from './dedupEngine';
+import { clipNeighborSearch, ClipCandidatePair } from './pythonAnalyzer';
+import { computeQualityScore } from './qualitySelector';
+import { detectConfiguredProviders, reviewPairs, PairReviewRequest } from './llmPairReviewer';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type HybridDedupLayer = 'layer0' | 'layer1' | 'layer2' | 'strictThreshold' | 'layer3';
+
+export interface HybridDedupOptions {
+  /** Layer 0: pHash/dHash 汉明距离阈值，默认从 dedupThresholds 导入 */
+  hashHammingThreshold?: number;
+  /** Layer 1: CLIP top-k 近邻数，默认从 dedupThresholds 导入 */
+  clipTopK?: number;
+  /** Layer 2: 首选 LLM provider（Phase B 使用） */
+  preferredProvider?: string;
+  /** 进度回调：每个层级开始/完成时调用 */
+  onProgress?: (layer: HybridDedupLayer, status: 'start' | 'complete', detail?: string) => void;
+}
+
+export interface Layer0Result {
+  /** 文件哈希/pHash/dHash 确认的重复对（索引对） */
+  confirmedPairs: Array<{ i: number; j: number }>;
+  /** 未被 Layer 0 拦截的图片索引列表 */
+  remainingIndices: number[];
+}
+
+export interface Layer1Result {
+  /** CLIP ≥ confirmed threshold 直接确认的重复对 */
+  confirmedPairs: ClipCandidatePair[];
+  /** 灰区候选对（需 Strict Threshold 或 LLM 判定） */
+  grayZonePairs: ClipCandidatePair[];
+}
+
+export interface DedupGroup {
+  /** 组内所有图片索引 */
+  indices: number[];
+  /** 选中保留的图片索引 */
+  keepIndex: number;
+}
+
+export interface ImageRow {
+  id: string;
+  file_path: string;
+  original_filename: string;
+  sharpness_score: number | null;
+  width: number | null;
+  height: number | null;
+  file_size: number;
+  status: string;
+  trashed_reason: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// UnionFind
+// ---------------------------------------------------------------------------
+
+export class UnionFind {
+  private parent: number[];
+  private rank: number[];
+
+  constructor(n: number) {
+    this.parent = Array.from({ length: n }, (_, i) => i);
+    this.rank = new Array(n).fill(0);
+  }
+
+  find(x: number): number {
+    if (this.parent[x] !== x) {
+      this.parent[x] = this.find(this.parent[x]);
+    }
+    return this.parent[x];
+  }
+
+  union(x: number, y: number): void {
+    const px = this.find(x);
+    const py = this.find(y);
+    if (px === py) return;
+    if (this.rank[px] < this.rank[py]) {
+      this.parent[px] = py;
+    } else if (this.rank[px] > this.rank[py]) {
+      this.parent[py] = px;
+    } else {
+      this.parent[py] = px;
+      this.rank[px]++;
+    }
+  }
+
+  /** 返回所有大小 ≥ 2 的连通分量 */
+  getGroups(n: number): number[][] {
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      const root = this.find(i);
+      if (!groups.has(root)) {
+        groups.set(root, []);
+      }
+      groups.get(root)!.push(i);
+    }
+    return Array.from(groups.values()).filter(g => g.length >= 2);
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Layer 0 — Hash 预过滤
+// ---------------------------------------------------------------------------
+
+/**
+ * 计算文件 MD5 哈希。
+ */
+function computeFileMD5(filePath: string): string {
+  const data = fs.readFileSync(filePath);
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
+/**
+ * Layer 0: 文件哈希精确匹配 + pHash/dHash 低距离匹配。
+ *
+ * - 文件 MD5 相同 → confirmedPairs
+ * - pHash ≤ threshold 且 dHash ≤ threshold → confirmedPairs
+ * - 哈希计算失败的图片跳过 Layer 0，传递给 Layer 1
+ */
+export async function runLayer0(
+  rows: ImageRow[],
+  options?: { hashHammingThreshold?: number }
+): Promise<Layer0Result> {
+  const threshold = options?.hashHammingThreshold ?? HASH_HAMMING_THRESHOLD;
+  const storageProvider = getStorageProvider();
+  const n = rows.length;
+
+  // Compute hashes for all images
+  const fileMD5s: (string | null)[] = new Array(n).fill(null);
+  const pHashes: (string | null)[] = new Array(n).fill(null);
+  const dHashes: (string | null)[] = new Array(n).fill(null);
+
+  for (let i = 0; i < n; i++) {
+    try {
+      const localPath = await storageProvider.downloadToTemp(rows[i].file_path);
+      try {
+        fileMD5s[i] = computeFileMD5(localPath);
+        const [pHash, dHash] = await Promise.all([
+          computePHash(localPath),
+          computeHash(localPath),
+        ]);
+        pHashes[i] = pHash;
+        dHashes[i] = dHash;
+      } finally {
+        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.warn(`[hybridDedup] Layer 0: hash computation failed for ${rows[i].id}: ${err}`);
+      // Leave all hashes as null — this image will pass through to Layer 1
+    }
+  }
+
+  const confirmedPairs: Array<{ i: number; j: number }> = [];
+  const confirmedIndices = new Set<number>();
+
+  // Compare all pairs
+  for (let i = 0; i < n; i++) {
+    // Skip images with no hashes at all
+    if (fileMD5s[i] === null && pHashes[i] === null && dHashes[i] === null) continue;
+
+    for (let j = i + 1; j < n; j++) {
+      if (fileMD5s[j] === null && pHashes[j] === null && dHashes[j] === null) continue;
+
+      let isConfirmed = false;
+
+      // Check file MD5 exact match
+      if (fileMD5s[i] !== null && fileMD5s[j] !== null && fileMD5s[i] === fileMD5s[j]) {
+        isConfirmed = true;
+      }
+
+      // Check pHash + dHash dual match
+      if (!isConfirmed && pHashes[i] !== null && pHashes[j] !== null &&
+          dHashes[i] !== null && dHashes[j] !== null) {
+        const pDist = hammingDistance(pHashes[i]!, pHashes[j]!);
+        const dDist = hammingDistance(dHashes[i]!, dHashes[j]!);
+        if (pDist <= threshold && dDist <= threshold) {
+          isConfirmed = true;
+        }
+      }
+
+      if (isConfirmed) {
+        confirmedPairs.push({ i, j });
+        confirmedIndices.add(i);
+        confirmedIndices.add(j);
+      }
+    }
+  }
+
+  // Remaining indices: images NOT involved in any confirmed pair
+  // Plus images whose hashes failed (they should go to Layer 1)
+  const remainingIndices: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (!confirmedIndices.has(i)) {
+      remainingIndices.push(i);
+    }
+  }
+
+  return { confirmedPairs, remainingIndices };
+}
+
+
+// ---------------------------------------------------------------------------
+// Layer 1 — CLIP 三档粗筛
+// ---------------------------------------------------------------------------
+
+/**
+ * Layer 1: 调用 Python CLIP 近邻搜索，返回确认对和灰区对。
+ *
+ * 仅对 Layer 0 剩余图片（remainingIndices）执行 CLIP 搜索。
+ * 返回的索引是相对于原始 rows 数组的全局索引。
+ */
+export async function runLayer1(
+  rows: ImageRow[],
+  remainingIndices: number[],
+  pHashes: (string | null)[],
+  dHashes: (string | null)[],
+  options?: { clipTopK?: number }
+): Promise<Layer1Result> {
+  if (remainingIndices.length < 2) {
+    return { confirmedPairs: [], grayZonePairs: [] };
+  }
+
+  const storageProvider = getStorageProvider();
+
+  // Download remaining images to temp paths for CLIP processing
+  const tempPaths: string[] = [];
+  const validIndices: number[] = [];
+
+  for (const idx of remainingIndices) {
+    try {
+      const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
+      tempPaths.push(localPath);
+      validIndices.push(idx);
+    } catch (err) {
+      console.warn(`[hybridDedup] Layer 1: failed to download ${rows[idx].id}: ${err}`);
+    }
+  }
+
+  if (validIndices.length < 2) {
+    // Clean up temp files
+    for (const p of tempPaths) {
+      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+    return { confirmedPairs: [], grayZonePairs: [] };
+  }
+
+  // Build hash data for Python (local indices → hash info)
+  const hashData: Record<number, { pHash: string | null; dHash: string | null; seqIndex: number }> = {};
+  for (let localIdx = 0; localIdx < validIndices.length; localIdx++) {
+    const globalIdx = validIndices[localIdx];
+    hashData[localIdx] = {
+      pHash: pHashes[globalIdx] ?? null,
+      dHash: dHashes[globalIdx] ?? null,
+      seqIndex: globalIdx,
+    };
+  }
+
+  try {
+    const clipResult = await clipNeighborSearch(tempPaths, hashData, {
+      topK: options?.clipTopK,
+    });
+
+    // Map local indices back to global indices
+    const confirmedPairs: ClipCandidatePair[] = clipResult.confirmedPairs.map(p => ({
+      i: validIndices[p.i],
+      j: validIndices[p.j],
+      similarity: p.similarity,
+    }));
+
+    const grayZonePairs: ClipCandidatePair[] = clipResult.grayZonePairs.map(p => ({
+      i: validIndices[p.i],
+      j: validIndices[p.j],
+      similarity: p.similarity,
+    }));
+
+    return { confirmedPairs, grayZonePairs };
+  } finally {
+    // Clean up temp files
+    for (const p of tempPaths) {
+      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Strict Threshold 回退
+// ---------------------------------------------------------------------------
+
+/**
+ * 对所有灰区对应用严格阈值回退。
+ * similarity ≥ 0.955 → confirmed，否则丢弃。
+ */
+export function applyStrictThresholdToGrayPairs(
+  grayZonePairs: ClipCandidatePair[]
+): Array<{ i: number; j: number }> {
+  const confirmed: Array<{ i: number; j: number }> = [];
+  for (const pair of grayZonePairs) {
+    if (applyStrictThreshold(pair.similarity)) {
+      confirmed.push({ i: pair.i, j: pair.j });
+    }
+  }
+  return confirmed;
+}
+
+
+// ---------------------------------------------------------------------------
+// Layer 3 — Union-Find 分组 + 质量选择
+// ---------------------------------------------------------------------------
+
+/**
+ * Layer 3: 合并所有确认对为重复组，选出每组最佳保留，更新数据库状态。
+ *
+ * @param rows - 所有图片行
+ * @param allConfirmedPairs - 来自 Layer 0 + Layer 1 confirmed + Strict Threshold 确认的所有对
+ * @returns DedupGroup 列表
+ */
+export async function runLayer3(
+  rows: ImageRow[],
+  allConfirmedPairs: Array<{ i: number; j: number }>
+): Promise<{ groups: DedupGroup[]; kept: string[]; removed: string[] }> {
+  const n = rows.length;
+
+  if (allConfirmedPairs.length === 0) {
+    return {
+      groups: [],
+      kept: rows.map(r => r.id),
+      removed: [],
+    };
+  }
+
+  // Union-Find merge
+  const uf = new UnionFind(n);
+  for (const pair of allConfirmedPairs) {
+    uf.union(pair.i, pair.j);
+  }
+
+  const rawGroups = uf.getGroups(n);
+  const storageProvider = getStorageProvider();
+  const db = getDb();
+
+  const dedupGroups: DedupGroup[] = [];
+  const removedSet = new Set<number>();
+
+  for (const groupIndices of rawGroups) {
+    // Compute quality scores for each member
+    const scores: number[] = [];
+    for (const idx of groupIndices) {
+      try {
+        const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
+        try {
+          const score = await computeQualityScore(localPath, rows[idx].id);
+          scores.push(score.overall);
+        } finally {
+          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+        }
+      } catch {
+        scores.push(0);
+      }
+    }
+
+    // Find best (highest quality score)
+    let bestLocalIdx = 0;
+    for (let k = 1; k < groupIndices.length; k++) {
+      if (scores[k] > scores[bestLocalIdx]) {
+        bestLocalIdx = k;
+      } else if (scores[k] === scores[bestLocalIdx]) {
+        // Tie-break: higher resolution
+        const resA = (rows[groupIndices[bestLocalIdx]].width ?? 0) * (rows[groupIndices[bestLocalIdx]].height ?? 0);
+        const resB = (rows[groupIndices[k]].width ?? 0) * (rows[groupIndices[k]].height ?? 0);
+        if (resB > resA) {
+          bestLocalIdx = k;
+        } else if (resB === resA) {
+          // Tie-break: larger file size
+          if (rows[groupIndices[k]].file_size > rows[groupIndices[bestLocalIdx]].file_size) {
+            bestLocalIdx = k;
+          } else if (rows[groupIndices[k]].file_size === rows[groupIndices[bestLocalIdx]].file_size) {
+            // Tie-break: earlier in sequence (lower index)
+            if (groupIndices[k] < groupIndices[bestLocalIdx]) {
+              bestLocalIdx = k;
+            }
+          }
+        }
+      }
+    }
+
+    const keepIndex = groupIndices[bestLocalIdx];
+    dedupGroups.push({ indices: groupIndices, keepIndex });
+
+    // Mark non-best as removed
+    for (let k = 0; k < groupIndices.length; k++) {
+      if (k === bestLocalIdx) continue;
+      const idx = groupIndices[k];
+      removedSet.add(idx);
+
+      const row = rows[idx];
+      if (row.status === 'trashed') {
+        // Already trashed → append ',duplicate' to reason
+        const newReason = row.trashed_reason
+          ? `${row.trashed_reason},duplicate`
+          : 'duplicate';
+        db.prepare(
+          'UPDATE media_items SET trashed_reason = ? WHERE id = ?'
+        ).run(newReason, row.id);
+      } else {
+        // Active → trash with reason 'duplicate'
+        db.prepare(
+          "UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?"
+        ).run(row.id);
+      }
+    }
+  }
+
+  // Build kept/removed lists
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (let i = 0; i < n; i++) {
+    if (removedSet.has(i)) {
+      removed.push(rows[i].id);
+    } else {
+      kept.push(rows[i].id);
+    }
+  }
+
+  return { groups: dedupGroups, kept, removed };
+}
+
+
+// ---------------------------------------------------------------------------
+// Main Entry — hybridDeduplicate
+// ---------------------------------------------------------------------------
+
+/**
+ * 四层混合去重入口。
+ *
+ * Layer 0: Hash 预过滤
+ * Layer 1: CLIP 三档粗筛
+ * Layer 2: LLM 逐对精判（有已配置 provider 时）/ Strict Threshold 回退（无 provider 时）
+ * Layer 3: Union-Find 分组 + 质量选择
+ *
+ * 自动检测已配置的 LLM provider，支持级联回退。
+ * 无 provider 时保持 MVP 行为（Strict Threshold 回退）。
+ * 返回与现有 DedupResult 兼容的结果。
+ */
+export async function hybridDeduplicate(
+  tripId: string,
+  options?: HybridDedupOptions
+): Promise<DedupResult> {
+  const db = getDb();
+
+  // Query all active + trashed images for the trip, ordered by created_at
+  const rows = db.prepare(
+    `SELECT id, file_path, original_filename, sharpness_score, width, height,
+            file_size, status, trashed_reason, created_at
+     FROM media_items
+     WHERE trip_id = ? AND media_type = 'image' AND status IN ('active', 'trashed')
+     ORDER BY created_at ASC`
+  ).all(tripId) as ImageRow[];
+
+  if (rows.length < 2) {
+    return {
+      kept: rows.map(r => r.id),
+      removed: [],
+      removedCount: 0,
+    };
+  }
+
+  const onProgress = options?.onProgress;
+
+  console.log(`[hybridDedup] Starting hybrid dedup for trip ${tripId} with ${rows.length} images`);
+
+  // ---- Layer 0: Hash 预过滤 ----
+  onProgress?.('layer0', 'start');
+  console.log('[hybridDedup] Layer 0: Hash pre-filter...');
+  const layer0Result = await runLayer0(rows, {
+    hashHammingThreshold: options?.hashHammingThreshold,
+  });
+  console.log(`[hybridDedup] Layer 0: ${layer0Result.confirmedPairs.length} confirmed pairs, ${layer0Result.remainingIndices.length} remaining`);
+  onProgress?.('layer0', 'complete', `${layer0Result.confirmedPairs.length} confirmed, ${layer0Result.remainingIndices.length} remaining`);
+
+  // Collect pHash/dHash for Layer 1 (recompute for remaining images)
+  // We need these for the hash_data parameter to clipNeighborSearch
+  const storageProvider = getStorageProvider();
+  const pHashes: (string | null)[] = new Array(rows.length).fill(null);
+  const dHashes: (string | null)[] = new Array(rows.length).fill(null);
+
+  for (const idx of layer0Result.remainingIndices) {
+    try {
+      const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
+      try {
+        const [pHash, dHash] = await Promise.all([
+          computePHash(localPath),
+          computeHash(localPath),
+        ]);
+        pHashes[idx] = pHash;
+        dHashes[idx] = dHash;
+      } finally {
+        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+      }
+    } catch {
+      // Leave as null
+    }
+  }
+
+  // ---- Layer 1: CLIP 三档粗筛 ----
+  onProgress?.('layer1', 'start');
+  console.log('[hybridDedup] Layer 1: CLIP coarse filter...');
+  const layer1Result = await runLayer1(rows, layer0Result.remainingIndices, pHashes, dHashes, {
+    clipTopK: options?.clipTopK,
+  });
+  console.log(`[hybridDedup] Layer 1: ${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+  onProgress?.('layer1', 'complete', `${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+
+  // ---- Layer 2 / Strict Threshold: 灰区对判定 ----
+  let grayConfirmedPairs: Array<{ i: number; j: number }> = [];
+
+  if (layer1Result.grayZonePairs.length > 0) {
+    // Detect configured LLM providers
+    const providers = detectConfiguredProviders(options?.preferredProvider);
+
+    if (providers.length > 0) {
+      // Layer 2: LLM 逐对精判
+      onProgress?.('layer2', 'start');
+      console.log(`[hybridDedup] Layer 2: LLM pair review with ${providers.length} provider(s) [${providers.map(p => p.type).join(', ')}]...`);
+
+      // Build PairReviewRequest list — download images to temp for LLM review
+      const pairRequests: PairReviewRequest[] = [];
+      const tempFilePaths: string[] = [];
+      const pairIndexMap: Array<{ i: number; j: number }> = [];
+
+      for (const grayPair of layer1Result.grayZonePairs) {
+        try {
+          const localPathA = await storageProvider.downloadToTemp(rows[grayPair.i].file_path);
+          const localPathB = await storageProvider.downloadToTemp(rows[grayPair.j].file_path);
+          tempFilePaths.push(localPathA, localPathB);
+
+          pairRequests.push({
+            imageA: { id: rows[grayPair.i].id, filePath: localPathA },
+            imageB: { id: rows[grayPair.j].id, filePath: localPathB },
+            clipSimilarity: grayPair.similarity,
+          });
+          pairIndexMap.push({ i: grayPair.i, j: grayPair.j });
+        } catch (err) {
+          console.warn(`[hybridDedup] Layer 2: failed to download images for pair (${rows[grayPair.i].id}, ${rows[grayPair.j].id}): ${err}`);
+          // Fall back to strict threshold for this pair
+          if (applyStrictThreshold(grayPair.similarity)) {
+            grayConfirmedPairs.push({ i: grayPair.i, j: grayPair.j });
+          }
+        }
+      }
+
+      try {
+        if (pairRequests.length > 0) {
+          const reviewResults = await reviewPairs(pairRequests, providers);
+
+          let llmSuccessCount = 0;
+          let llmFallbackCount = 0;
+
+          for (let k = 0; k < reviewResults.length; k++) {
+            const result = reviewResults[k];
+            if (result.isDuplicate) {
+              grayConfirmedPairs.push(pairIndexMap[k]);
+            }
+            if (result.fellBackToThreshold) {
+              llmFallbackCount++;
+            } else {
+              llmSuccessCount++;
+            }
+          }
+
+          // Check if all LLM calls failed (all fell back to threshold)
+          if (llmSuccessCount === 0 && llmFallbackCount > 0) {
+            console.warn(
+              `[hybridDedup] Layer 2: All LLM providers failed for all ${llmFallbackCount} gray zone pairs. ` +
+              `Results are based on Strict Threshold fallback. LLM dedup is currently unavailable.`
+            );
+          } else {
+            console.log(
+              `[hybridDedup] Layer 2: ${llmSuccessCount} pairs reviewed by LLM, ${llmFallbackCount} fell back to threshold, ` +
+              `${grayConfirmedPairs.length} confirmed as duplicates`
+            );
+          }
+        }
+      } finally {
+        // Clean up temp files
+        for (const p of tempFilePaths) {
+          try { fs.unlinkSync(p); } catch { /* ignore */ }
+        }
+      }
+
+      onProgress?.('layer2', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+    } else {
+      // No providers available — Strict Threshold 回退 (MVP behavior)
+      onProgress?.('strictThreshold', 'start');
+      console.log('[hybridDedup] No LLM providers configured. Strict Threshold fallback for gray zone pairs...');
+      grayConfirmedPairs = applyStrictThresholdToGrayPairs(layer1Result.grayZonePairs);
+      console.log(`[hybridDedup] Strict Threshold: ${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+      onProgress?.('strictThreshold', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+    }
+  }
+
+  // ---- Layer 3: Union-Find 分组 + 质量选择 ----
+  onProgress?.('layer3', 'start');
+  console.log('[hybridDedup] Layer 3: Union-Find grouping + quality selection...');
+  const allConfirmedPairs: Array<{ i: number; j: number }> = [
+    ...layer0Result.confirmedPairs,
+    ...layer1Result.confirmedPairs.map(p => ({ i: p.i, j: p.j })),
+    ...grayConfirmedPairs,
+  ];
+
+  const layer3Result = await runLayer3(rows, allConfirmedPairs);
+  console.log(`[hybridDedup] Layer 3: ${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
+  onProgress?.('layer3', 'complete', `${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
+
+  return {
+    kept: layer3Result.kept,
+    removed: layer3Result.removed,
+    removedCount: layer3Result.removed.length,
+  };
+}

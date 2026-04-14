@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { deduplicate } from '../services/dedupEngine';
+import { hybridDeduplicate, HybridDedupLayer } from '../services/hybridDedupEngine';
 import { detectBlurry } from '../services/blurDetector';
 import { classifyTrip } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
@@ -16,7 +17,6 @@ import { getStorageProvider } from '../storage/factory';
 import {
   isPythonAvailable,
   analyzeImages,
-  dedupImages,
   PythonAnalyzeResult,
 } from '../services/pythonAnalyzer';
 
@@ -132,39 +132,6 @@ async function applyPythonAnalyzeResults(
   return { blurryCount };
 }
 
-/**
- * Apply Python dedup results to the database.
- * Returns { removedCount }.
- */
-function applyPythonDedupResults(
-  rows: ImageRow[],
-  groups: Array<{ indices: number[]; keep: number; similarities: [number, number, number][] }>
-): { removedCount: number } {
-  const db = getDb();
-  let removedCount = 0;
-
-  for (const group of groups) {
-    for (const idx of group.indices) {
-      if (idx === group.keep) continue;
-      const row = rows[idx];
-      if (!row) continue;
-
-      if (row.status === 'trashed') {
-        // Already trashed (e.g. by blur) — append duplicate reason
-        const newReason = row.trashed_reason
-          ? `${row.trashed_reason},duplicate`
-          : 'duplicate';
-        db.prepare("UPDATE media_items SET trashed_reason = ? WHERE id = ?").run(newReason, row.id);
-      } else {
-        db.prepare("UPDATE media_items SET status = 'trashed', trashed_reason = 'duplicate' WHERE id = ?").run(row.id);
-      }
-      removedCount++;
-    }
-  }
-
-  return { removedCount };
-}
-
 // POST /api/trips/:id/process — Trigger full processing pipeline and return summary
 router.post('/:id/process', async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
@@ -211,31 +178,9 @@ router.post('/:id/process', async (req: Request, res: Response) => {
         const blurResult = await applyPythonAnalyzeResults(tripId, imageRows, analyzeResults);
         blurryDeletedCount = blurResult.blurryCount;
 
-        // Step 2: Python dedup (on active images after blur removal)
-        const activeRows = db.prepare(
-          "SELECT id, file_path, original_filename, sharpness_score, width, height, file_size, status, trashed_reason FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
-        ).all(tripId) as ImageRow[];
-
-        if (activeRows.length > 1) {
-          const dedupTempPaths: string[] = [];
-          const metadata: Record<number, { blur_score: number; width: number; height: number; file_size: number }> = {};
-          for (let i = 0; i < activeRows.length; i++) {
-            const localPath = await storageProvider.downloadToTemp(activeRows[i].file_path);
-            dedupTempPaths.push(localPath);
-            metadata[i] = {
-              blur_score: activeRows[i].sharpness_score ?? 0,
-              width: activeRows[i].width ?? 0,
-              height: activeRows[i].height ?? 0,
-              file_size: activeRows[i].file_size ?? 0,
-            };
-          }
-          const dedupResult = await dedupImages(dedupTempPaths, metadata);
-          dedupDeletedCount = applyPythonDedupResults(activeRows, dedupResult.groups).removedCount;
-          // Clean up dedup temp files
-          for (const p of dedupTempPaths) {
-            try { require('fs').unlinkSync(p); } catch { /* ignore */ }
-          }
-        }
+        // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
+        const dedupResult = await hybridDeduplicate(tripId);
+        dedupDeletedCount = dedupResult.removedCount;
       } catch (pythonErr) {
         // Python failed entirely — fall back to Node.js algorithms
         console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
@@ -421,36 +366,41 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
           if (clientDisconnected) return;
           reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-          // Step 2: Python dedup
+          // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
           if (clientDisconnected) return;
           const activeImageCount = (db.prepare(
             "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
           ).get(tripId) as { cnt: number }).cnt;
           reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
 
-          if (activeImageCount > 1) {
-            const activeRows = db.prepare(
-              "SELECT id, file_path, original_filename, sharpness_score, width, height, file_size, status, trashed_reason FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
-            ).all(tripId) as ImageRow[];
+          // Layer-level progress labels for SSE
+          const layerLabels: Record<HybridDedupLayer, string> = {
+            layer0: 'Layer 0: Hash 预过滤',
+            layer1: 'Layer 1: CLIP 三档粗筛',
+            strictThreshold: 'Strict Threshold 回退',
+            layer3: 'Layer 3: Union-Find 分组',
+          };
 
-            const dedupTempPaths: string[] = [];
-            const metadata: Record<number, { blur_score: number; width: number; height: number; file_size: number }> = {};
-            for (let i = 0; i < activeRows.length; i++) {
-              const localPath = await storageProvider.downloadToTemp(activeRows[i].file_path);
-              dedupTempPaths.push(localPath);
-              metadata[i] = {
-                blur_score: activeRows[i].sharpness_score ?? 0,
-                width: activeRows[i].width ?? 0,
-                height: activeRows[i].height ?? 0,
-                file_size: activeRows[i].file_size ?? 0,
-              };
-            }
-            const dedupResult = await dedupImages(dedupTempPaths, metadata);
-            dedupDeletedCount = applyPythonDedupResults(activeRows, dedupResult.groups).removedCount;
-            for (const p of dedupTempPaths) {
-              try { require('fs').unlinkSync(p); } catch { /* ignore */ }
-            }
-          }
+          const dedupResult = await hybridDeduplicate(tripId, {
+            onProgress: (layer, status, detail) => {
+              if (clientDisconnected) return;
+              const label = layerLabels[layer];
+              const message = status === 'start'
+                ? `${label} 开始...`
+                : `${label} 完成${detail ? ` (${detail})` : ''}`;
+              // Send layer progress as a custom SSE event
+              res.write(`event: progress\ndata: ${JSON.stringify({
+                step: 'dedup',
+                stepIndex: 2,
+                totalSteps: 9,
+                percent: Math.round((1 / 9) * 100),
+                layer,
+                layerStatus: status,
+                message,
+              })}\n\n`);
+            },
+          });
+          dedupDeletedCount = dedupResult.removedCount;
 
           if (clientDisconnected) return;
           reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
