@@ -161,7 +161,11 @@ router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), as
       ).run(classification.type, classification.mimeType, mediaId);
     } catch (err) {
       console.error(`[FileClassifier] Error classifying file ${mediaId}:`, err);
-      // Leave as 'unknown' — non-fatal
+      // Fallback: use mime type to determine media_type
+      const fallbackType = effectiveMime.startsWith('image/') ? 'image' 
+        : effectiveMime.startsWith('video/') ? 'video' 
+        : 'unknown';
+      db.prepare('UPDATE media_items SET media_type = ? WHERE id = ?').run(fallbackType, mediaId);
     }
 
     // Generate tags and insert into media_tags table

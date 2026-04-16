@@ -22,6 +22,8 @@ import {
 
 const router = Router();
 
+const processingTrips = new Set<string>();
+
 /**
  * Query category stats for a trip from the database.
  */
@@ -143,9 +145,15 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
+  if (processingTrips.has(tripId)) {
+    return res.status(409).json({ error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中，请稍后再试' } });
+  }
+  processingTrips.add(tripId);
+
   // Parse optional query parameters
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
 
+  try {
   let failedCount = 0;
 
   // Count total images before processing (some will be deleted by blur/dedup)
@@ -315,6 +323,9 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     failedCount,
     coverImageId,
   });
+  } finally {
+    processingTrips.delete(tripId);
+  }
 });
 
 // GET /api/trips/:id/process/stream — SSE streaming processing with progress
@@ -327,6 +338,11 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   if (!trip) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
+
+  if (processingTrips.has(tripId)) {
+    return res.status(409).json({ error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中，请稍后再试' } });
+  }
+  processingTrips.add(tripId);
 
   // Parse optional query parameters
   const videoResolution = req.query.videoResolution ? Number(req.query.videoResolution) : undefined;
@@ -648,6 +664,8 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     if (clientDisconnected) return;
     const message = err instanceof Error ? err.message : String(err);
     reporter.sendError({ message });
+  } finally {
+    processingTrips.delete(tripId);
   }
 });
 

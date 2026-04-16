@@ -501,7 +501,7 @@ export async function hybridDeduplicate(
     `SELECT id, file_path, original_filename, sharpness_score, blur_status, width, height,
             file_size, status, trashed_reason, created_at
      FROM media_items
-     WHERE trip_id = ? AND media_type = 'image' AND status IN ('active', 'trashed')
+     WHERE trip_id = ? AND media_type = 'image' AND status = 'active'
      ORDER BY created_at ASC`
   ).all(tripId) as ImageRow[];
 
