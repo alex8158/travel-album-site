@@ -79,7 +79,7 @@ export default function ProgressBar({
         <div
           data-testid="progress-bar-fill"
           style={{
-            width: `${percent}%`,
+            width: `${Math.max(percent, 2)}%`,
             height: 20,
             backgroundColor: '#4caf50',
             transition: 'width 0.3s ease',
@@ -87,8 +87,8 @@ export default function ProgressBar({
         />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span>{label}</span>
-        <span>步骤 {stepIndex}/{totalSteps}</span>
+        <span>{stepIndex === 0 ? '准备中...' : label}</span>
+        <span>{stepIndex === 0 ? '准备中...' : `步骤 ${stepIndex}/${totalSteps}`}</span>
         <span>{percent}%</span>
       </div>
     </div>
