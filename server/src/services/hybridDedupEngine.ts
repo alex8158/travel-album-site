@@ -581,12 +581,13 @@ export async function hybridDeduplicate(
 
       for (const grayPair of layer1Result.grayZonePairs) {
         try {
+          const sp = getStorageProvider();
           const localPathA = tempCache
             ? await tempCache.get(rows[grayPair.i].file_path)
-            : await storageProvider.downloadToTemp(rows[grayPair.i].file_path);
+            : await sp.downloadToTemp(rows[grayPair.i].file_path);
           const localPathB = tempCache
             ? await tempCache.get(rows[grayPair.j].file_path)
-            : await storageProvider.downloadToTemp(rows[grayPair.j].file_path);
+            : await sp.downloadToTemp(rows[grayPair.j].file_path);
           if (!tempCache) {
             tempFilePaths.push(localPathA, localPathB);
           }
