@@ -27,7 +27,7 @@ export interface PythonAnalyzeResult {
   errorMessage?: string;
   category: ImageCategory | null;
   categoryScores: Record<string, number> | null;
-  blurStatus: 'clear' | 'blurry' | 'unknown';
+  blurStatus: 'clear' | 'suspect' | 'blurry' | 'unknown';
   blurScore: number | null;
 }
 

@@ -12,6 +12,7 @@ import { analyzeVideo } from '../services/videoAnalyzer';
 import { editVideo } from '../services/videoEditor';
 import { ProgressReporter } from '../services/progressReporter';
 import { MediaItemRow } from '../helpers/mediaItemRow';
+import { TempPathCache } from '../helpers/tempPathCache';
 import { getStorageProvider } from '../storage/factory';
 import {
   isPythonAvailable,
@@ -164,35 +165,60 @@ router.post('/:id/process', async (req: Request, res: Response) => {
 
     if (imageRows.length > 0) {
       const storageProvider = getStorageProvider();
-      // Download images to temp for Python processing
-      const tempPaths: string[] = [];
-      for (const row of imageRows) {
-        const localPath = await storageProvider.downloadToTemp(row.file_path);
-        tempPaths.push(localPath);
-      }
-
+      const tempCache = new TempPathCache(storageProvider);
       try {
-        // Step 1+5: Python analyze (blur + classify combined)
-        const analyzeResults = await analyzeImages(tempPaths);
-        const blurResult = await applyPythonAnalyzeResults(tripId, imageRows, analyzeResults);
-        blurryDeletedCount = blurResult.blurryCount;
+        // Download images to temp for Python processing — per-image try/catch
+        const successRows: ImageRow[] = [];
+        const tempPaths: string[] = [];
+        const appendErrorStmt = db.prepare(
+          `UPDATE media_items
+           SET processing_error = CASE
+             WHEN processing_error IS NULL THEN ?
+             ELSE processing_error || char(10) || ?
+           END
+           WHERE id = ?`
+        );
 
-        // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
-        const dedupResult = await hybridDeduplicate(tripId);
-        dedupDeletedCount = dedupResult.removedCount;
-      } catch (pythonErr) {
-        // Python failed entirely — fall back to Node.js algorithms
-        console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
-        const blurResult = await detectBlurry(tripId);
-        blurryDeletedCount = blurResult.blurryCount;
-        const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
-        dedupDeletedCount = dedupResult.removedCount;
-        await classifyTrip(tripId);
-      }
+        for (const row of imageRows) {
+          try {
+            const localPath = await tempCache.get(row.file_path);
+            tempPaths.push(localPath);
+            successRows.push(row);
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            const errText = `[download] ${errorMsg}`;
+            appendErrorStmt.run(errText, errText, row.id);
+            console.log(`[process] Download failed for ${row.original_filename}: ${errorMsg}`);
+          }
+        }
 
-      // Clean up analyze temp files
-      for (const p of tempPaths) {
-        try { require('fs').unlinkSync(p); } catch { /* ignore */ }
+        if (successRows.length > 0) {
+          try {
+            // Step 1+5: Python analyze (blur + classify combined)
+            const analyzeResults = await analyzeImages(tempPaths);
+            const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults);
+            blurryDeletedCount = blurResult.blurryCount;
+
+            // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
+            const dedupResult = await hybridDeduplicate(tripId, { tempCache });
+            dedupDeletedCount = dedupResult.removedCount;
+          } catch (pythonErr) {
+            // Python failed entirely — fall back to Node.js algorithms
+            console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
+            const blurResult = await detectBlurry(tripId);
+            blurryDeletedCount = blurResult.blurryCount;
+            const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false, tempCache });
+            dedupDeletedCount = dedupResult.removedCount;
+            await classifyTrip(tripId);
+          }
+        } else {
+          // All downloads failed — skip Python analysis, continue to subsequent stages
+          console.log(`[process] All image downloads failed for trip ${tripId}, skipping Python analysis`);
+          const dedupResult = await hybridDeduplicate(tripId, { tempCache });
+          dedupDeletedCount = dedupResult.removedCount;
+        }
+      } finally {
+        tempCache.cleanup();
       }
     }
   } else {
@@ -350,84 +376,119 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
 
       if (imageRows.length > 0) {
         const storageProvider = getStorageProvider();
-        const tempPaths: string[] = [];
-        for (const row of imageRows) {
-          const localPath = await storageProvider.downloadToTemp(row.file_path);
-          tempPaths.push(localPath);
-        }
-
+        const tempCache = new TempPathCache(storageProvider);
         try {
-          // Python analyze: blur + classify in one call
-          const analyzeResults = await analyzeImages(tempPaths);
-          const blurResult = await applyPythonAnalyzeResults(tripId, imageRows, analyzeResults);
-          blurryDeletedCount = blurResult.blurryCount;
+          // Download images — per-image try/catch
+          const successRows: ImageRow[] = [];
+          const tempPaths: string[] = [];
+          const appendErrorStmt = db.prepare(
+            `UPDATE media_items
+             SET processing_error = CASE
+               WHEN processing_error IS NULL THEN ?
+               ELSE processing_error || char(10) || ?
+             END
+             WHERE id = ?`
+          );
 
-          if (clientDisconnected) return;
-          reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
+          for (const row of imageRows) {
+            try {
+              const localPath = await tempCache.get(row.file_path);
+              tempPaths.push(localPath);
+              successRows.push(row);
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              const errText = `[download] ${errorMsg}`;
+              appendErrorStmt.run(errText, errText, row.id);
+              console.log(`[process] Download failed for ${row.original_filename}: ${errorMsg}`);
+            }
+          }
 
-          // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
-          if (clientDisconnected) return;
-          const activeImageCount = (db.prepare(
-            "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
-          ).get(tripId) as { cnt: number }).cnt;
-          reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
+          if (successRows.length > 0) {
+            try {
+              // Python analyze: blur + classify in one call
+              const analyzeResults = await analyzeImages(tempPaths);
+              const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults);
+              blurryDeletedCount = blurResult.blurryCount;
 
-          // Layer-level progress labels for SSE
-          const layerLabels: Record<HybridDedupLayer, string> = {
-            layer0: 'Layer 0: Hash 预过滤',
-            layer1: 'Layer 1: CLIP 三档粗筛',
-            layer2: 'Layer 2: LLM 逐对精判',
-            strictThreshold: 'Strict Threshold 回退',
-            layer3: 'Layer 3: Union-Find 分组',
-          };
-
-          const dedupResult = await hybridDeduplicate(tripId, {
-            onProgress: (layer, status, detail) => {
               if (clientDisconnected) return;
-              const label = layerLabels[layer];
-              const message = status === 'start'
-                ? `${label} 开始...`
-                : `${label} 完成${detail ? ` (${detail})` : ''}`;
-              // Send layer progress as a custom SSE event
-              res.write(`event: progress\ndata: ${JSON.stringify({
-                step: 'dedup',
-                stepIndex: 2,
-                totalSteps: 9,
-                percent: Math.round((1 / 9) * 100),
-                layer,
-                layerStatus: status,
-                message,
-              })}\n\n`);
-            },
-          });
-          dedupDeletedCount = dedupResult.removedCount;
+              reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
-          if (clientDisconnected) return;
-          reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
-        } catch (pythonErr) {
-          // Python failed — fall back to Node.js for both blur and dedup
-          console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
-          const blurResult = await detectBlurry(tripId);
-          blurryDeletedCount = blurResult.blurryCount;
-          if (clientDisconnected) return;
-          reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
+              // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
+              if (clientDisconnected) return;
+              const activeImageCount = (db.prepare(
+                "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+              ).get(tripId) as { cnt: number }).cnt;
+              reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
 
-          const activeImageCount = (db.prepare(
-            "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
-          ).get(tripId) as { cnt: number }).cnt;
-          reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-          const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
-          dedupDeletedCount = dedupResult.removedCount;
-          if (clientDisconnected) return;
-          reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
+              // Layer-level progress labels for SSE
+              const layerLabels: Record<HybridDedupLayer, string> = {
+                layer0: 'Layer 0: Hash 预过滤',
+                layer1: 'Layer 1: CLIP 三档粗筛',
+                layer2: 'Layer 2: LLM 逐对精判',
+                strictThreshold: 'Strict Threshold 回退',
+                layer3: 'Layer 3: Union-Find 分组',
+              };
 
-          // Also need to classify via Rekognition since Python failed
-          await classifyTrip(tripId);
-        }
+              const dedupResult = await hybridDeduplicate(tripId, {
+                tempCache,
+                onProgress: (layer, status, detail) => {
+                  if (clientDisconnected) return;
+                  const label = layerLabels[layer];
+                  const message = status === 'start'
+                    ? `${label} 开始...`
+                    : `${label} 完成${detail ? ` (${detail})` : ''}`;
+                  // Send layer progress as a custom SSE event
+                  res.write(`event: progress\ndata: ${JSON.stringify({
+                    step: 'dedup',
+                    stepIndex: 2,
+                    totalSteps: 9,
+                    percent: Math.round((1 / 9) * 100),
+                    layer,
+                    layerStatus: status,
+                    message,
+                  })}\n\n`);
+                },
+              });
+              dedupDeletedCount = dedupResult.removedCount;
 
-        // Clean up analyze temp files
-        for (const p of tempPaths) {
-          try { require('fs').unlinkSync(p); } catch { /* ignore */ }
+              if (clientDisconnected) return;
+              reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
+            } catch (pythonErr) {
+              // Python failed — fall back to Node.js for both blur and dedup
+              console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
+              const blurResult = await detectBlurry(tripId);
+              blurryDeletedCount = blurResult.blurryCount;
+              if (clientDisconnected) return;
+              reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
+
+              const activeImageCount = (db.prepare(
+                "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+              ).get(tripId) as { cnt: number }).cnt;
+              reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
+              const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false, tempCache });
+              dedupDeletedCount = dedupResult.removedCount;
+              if (clientDisconnected) return;
+              reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
+
+              // Also need to classify via Rekognition since Python failed
+              await classifyTrip(tripId);
+            }
+          } else {
+            // All downloads failed — skip Python analysis, continue to subsequent stages
+            console.log(`[process] All image downloads failed for trip ${tripId}, skipping Python analysis`);
+            reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
+
+            const activeImageCount = (db.prepare(
+              "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+            ).get(tripId) as { cnt: number }).cnt;
+            reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
+            const dedupResult = await hybridDeduplicate(tripId, { tempCache });
+            dedupDeletedCount = dedupResult.removedCount;
+            if (clientDisconnected) return;
+            reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
+          }
+        } finally {
+          tempCache.cleanup();
         }
       } else {
         reporter.sendStepComplete('blurDetect', { processed: 0, total: 0 });

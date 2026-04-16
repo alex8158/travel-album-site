@@ -179,12 +179,12 @@ describe('Property Tests — hybridDedupEngine', () => {
      * Feature: hybrid-dedup, Property 2: Layer 0 输出完整性不变量
      *
      * For any set of images processed by Layer 0:
-     * - Union of indices in confirmedPairs and remainingIndices equals original set
-     * - confirmedPairs indices and remainingIndices have no intersection
+     * - confirmedPairs only contains valid index pairs within [0, n)
+     * - All indices in confirmedPairs are distinct pairs (i ≠ j)
      *
      * Validates: Requirements 1.4
      */
-    it('confirmedPairs indices ∪ remainingIndices = original set, no intersection', () => {
+    it('confirmedPairs should contain valid index pairs', () => {
       fc.assert(
         fc.property(
           fc.integer({ min: 2, max: 50 }),
@@ -195,41 +195,16 @@ describe('Property Tests — hybridDedupEngine', () => {
               .map(([a, b]) => ({ i: a % n, j: b % n }))
               .filter(p => p.i !== p.j);
 
-            // Compute confirmed indices
-            const confirmedIndices = new Set<number>();
-            for (const pair of confirmedPairs) {
-              confirmedIndices.add(pair.i);
-              confirmedIndices.add(pair.j);
-            }
+            // Simulate Layer0Result (no remainingIndices — all indices pass to Layer 1)
+            const result: Layer0Result = { confirmedPairs };
 
-            // Remaining = all indices NOT in confirmed
-            const remainingIndices: number[] = [];
-            for (let i = 0; i < n; i++) {
-              if (!confirmedIndices.has(i)) {
-                remainingIndices.push(i);
-              }
-            }
-
-            // Simulate Layer0Result
-            const result: Layer0Result = { confirmedPairs, remainingIndices };
-
-            // Verify: union of confirmed indices and remaining = [0, n)
-            const allFromConfirmed = new Set<number>();
+            // Verify: all indices in confirmed pairs are within [0, n)
             for (const pair of result.confirmedPairs) {
-              allFromConfirmed.add(pair.i);
-              allFromConfirmed.add(pair.j);
-            }
-            const allFromRemaining = new Set(result.remainingIndices);
-
-            const union = new Set([...allFromConfirmed, ...allFromRemaining]);
-            expect(union.size).toBe(n);
-            for (let i = 0; i < n; i++) {
-              expect(union.has(i)).toBe(true);
-            }
-
-            // Verify: no intersection
-            for (const idx of allFromRemaining) {
-              expect(allFromConfirmed.has(idx)).toBe(false);
+              expect(pair.i).toBeGreaterThanOrEqual(0);
+              expect(pair.i).toBeLessThan(n);
+              expect(pair.j).toBeGreaterThanOrEqual(0);
+              expect(pair.j).toBeLessThan(n);
+              expect(pair.i).not.toBe(pair.j);
             }
           },
         ),

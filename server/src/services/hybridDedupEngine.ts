@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
+import { TempPathCache } from '../helpers/tempPathCache';
 import {
   HASH_HAMMING_THRESHOLD,
   applyStrictThreshold,
@@ -39,13 +40,13 @@ export interface HybridDedupOptions {
   onProgress?: (layer: HybridDedupLayer, status: 'start' | 'complete', detail?: string) => void;
   /** 当 false 时跳过 Layer 1 和 Layer 2，仅执行 Layer 0 + Layer 3 */
   pythonAvailable?: boolean;
+  /** Optional per-run temp path cache for reusing downloaded files */
+  tempCache?: TempPathCache;
 }
 
 export interface Layer0Result {
   /** 文件哈希/pHash/dHash 确认的重复对（索引对） */
   confirmedPairs: Array<{ i: number; j: number }>;
-  /** 未被 Layer 0 拦截的图片索引列表 */
-  remainingIndices: number[];
 }
 
 export interface Layer1Result {
@@ -146,10 +147,11 @@ function computeFileMD5(filePath: string): string {
  */
 export async function runLayer0(
   rows: ImageRow[],
-  options?: { hashHammingThreshold?: number }
+  options?: { hashHammingThreshold?: number; tempCache?: TempPathCache }
 ): Promise<Layer0Result> {
   const threshold = options?.hashHammingThreshold ?? HASH_HAMMING_THRESHOLD;
   const storageProvider = getStorageProvider();
+  const tempCache = options?.tempCache;
   const n = rows.length;
 
   // Compute hashes for all images
@@ -159,7 +161,9 @@ export async function runLayer0(
 
   for (let i = 0; i < n; i++) {
     try {
-      const localPath = await storageProvider.downloadToTemp(rows[i].file_path);
+      const localPath = tempCache
+        ? await tempCache.get(rows[i].file_path)
+        : await storageProvider.downloadToTemp(rows[i].file_path);
       try {
         fileMD5s[i] = computeFileMD5(localPath);
         const [pHash, dHash] = await Promise.all([
@@ -169,7 +173,10 @@ export async function runLayer0(
         pHashes[i] = pHash;
         dHashes[i] = dHash;
       } finally {
-        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+        // Only clean up if not using cache (cache handles cleanup)
+        if (!tempCache) {
+          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+        }
       }
     } catch (err) {
       console.warn(`[hybridDedup] Layer 0: hash computation failed for ${rows[i].id}: ${err}`);
@@ -213,16 +220,7 @@ export async function runLayer0(
     }
   }
 
-  // Remaining indices: images NOT involved in any confirmed pair
-  // Plus images whose hashes failed (they should go to Layer 1)
-  const remainingIndices: number[] = [];
-  for (let i = 0; i < n; i++) {
-    if (!confirmedIndices.has(i)) {
-      remainingIndices.push(i);
-    }
-  }
-
-  return { confirmedPairs, remainingIndices };
+  return { confirmedPairs };
 }
 
 
@@ -233,7 +231,7 @@ export async function runLayer0(
 /**
  * Layer 1: 调用 Python CLIP 近邻搜索，返回确认对和灰区对。
  *
- * 仅对 Layer 0 剩余图片（remainingIndices）执行 CLIP 搜索。
+ * 对所有图片索引执行 CLIP 搜索（Layer 0 不再过滤索引）。
  * 返回的索引是相对于原始 rows 数组的全局索引。
  */
 export async function runLayer1(
@@ -241,13 +239,14 @@ export async function runLayer1(
   remainingIndices: number[],
   pHashes: (string | null)[],
   dHashes: (string | null)[],
-  options?: { clipTopK?: number }
+  options?: { clipTopK?: number; tempCache?: TempPathCache }
 ): Promise<Layer1Result> {
   if (remainingIndices.length < 2) {
     return { confirmedPairs: [], grayZonePairs: [] };
   }
 
   const storageProvider = getStorageProvider();
+  const tempCache = options?.tempCache;
 
   // Download remaining images to temp paths for CLIP processing
   const tempPaths: string[] = [];
@@ -255,7 +254,9 @@ export async function runLayer1(
 
   for (const idx of remainingIndices) {
     try {
-      const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
+      const localPath = tempCache
+        ? await tempCache.get(rows[idx].file_path)
+        : await storageProvider.downloadToTemp(rows[idx].file_path);
       tempPaths.push(localPath);
       validIndices.push(idx);
     } catch (err) {
@@ -264,9 +265,11 @@ export async function runLayer1(
   }
 
   if (validIndices.length < 2) {
-    // Clean up temp files
-    for (const p of tempPaths) {
-      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    // Clean up temp files only if not using cache
+    if (!tempCache) {
+      for (const p of tempPaths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+      }
     }
     return { confirmedPairs: [], grayZonePairs: [] };
   }
@@ -302,9 +305,11 @@ export async function runLayer1(
 
     return { confirmedPairs, grayZonePairs };
   } finally {
-    // Clean up temp files
-    for (const p of tempPaths) {
-      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    // Clean up temp files only if not using cache
+    if (!tempCache) {
+      for (const p of tempPaths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+      }
     }
   }
 }
@@ -343,9 +348,11 @@ export function applyStrictThresholdToGrayPairs(
  */
 export async function runLayer3(
   rows: ImageRow[],
-  allConfirmedPairs: Array<{ i: number; j: number }>
+  allConfirmedPairs: Array<{ i: number; j: number }>,
+  options?: { tempCache?: TempPathCache }
 ): Promise<{ groups: DedupGroup[]; kept: string[]; removed: string[] }> {
   const n = rows.length;
+  const tempCache = options?.tempCache;
 
   if (allConfirmedPairs.length === 0) {
     return {
@@ -369,54 +376,69 @@ export async function runLayer3(
   const removedSet = new Set<number>();
 
   for (const groupIndices of rawGroups) {
-    // Compute quality scores for each member
-    const scores: number[] = [];
-    for (const idx of groupIndices) {
-      try {
-        const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
-        try {
-          const score = await computeQualityScore(localPath, rows[idx].id);
-          scores.push(score.overall);
-        } finally {
-          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
-        }
-      } catch {
-        scores.push(0);
-      }
-    }
+    // Partition into active and trashed indices
+    const activeIndices = groupIndices.filter(idx => rows[idx].status === 'active');
+    const candidateIndices = activeIndices.length > 0 ? activeIndices : groupIndices;
 
-    // Find best (highest quality score)
-    let bestLocalIdx = 0;
-    for (let k = 1; k < groupIndices.length; k++) {
-      if (scores[k] > scores[bestLocalIdx]) {
-        bestLocalIdx = k;
-      } else if (scores[k] === scores[bestLocalIdx]) {
-        // Tie-break: higher resolution
-        const resA = (rows[groupIndices[bestLocalIdx]].width ?? 0) * (rows[groupIndices[bestLocalIdx]].height ?? 0);
-        const resB = (rows[groupIndices[k]].width ?? 0) * (rows[groupIndices[k]].height ?? 0);
-        if (resB > resA) {
-          bestLocalIdx = k;
-        } else if (resB === resA) {
-          // Tie-break: larger file size
-          if (rows[groupIndices[k]].file_size > rows[groupIndices[bestLocalIdx]].file_size) {
-            bestLocalIdx = k;
-          } else if (rows[groupIndices[k]].file_size === rows[groupIndices[bestLocalIdx]].file_size) {
-            // Tie-break: earlier in sequence (lower index)
-            if (groupIndices[k] < groupIndices[bestLocalIdx]) {
-              bestLocalIdx = k;
+    // If exactly one active image exists, select it directly without quality scoring
+    let keepIndex: number;
+    if (activeIndices.length === 1) {
+      keepIndex = activeIndices[0];
+    } else {
+      // Compute quality scores only for candidates
+      const scores: number[] = [];
+      for (const idx of candidateIndices) {
+        try {
+          const localPath = tempCache
+            ? await tempCache.get(rows[idx].file_path)
+            : await storageProvider.downloadToTemp(rows[idx].file_path);
+          try {
+            const score = await computeQualityScore(localPath, rows[idx].id);
+            scores.push(score.overall);
+          } finally {
+            // Only clean up if not using cache
+            if (!tempCache) {
+              try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+            }
+          }
+        } catch {
+          scores.push(0);
+        }
+      }
+
+      // Find best (highest quality score) among candidates
+      let bestCandidateIdx = 0;
+      for (let k = 1; k < candidateIndices.length; k++) {
+        if (scores[k] > scores[bestCandidateIdx]) {
+          bestCandidateIdx = k;
+        } else if (scores[k] === scores[bestCandidateIdx]) {
+          // Tie-break: higher resolution
+          const resA = (rows[candidateIndices[bestCandidateIdx]].width ?? 0) * (rows[candidateIndices[bestCandidateIdx]].height ?? 0);
+          const resB = (rows[candidateIndices[k]].width ?? 0) * (rows[candidateIndices[k]].height ?? 0);
+          if (resB > resA) {
+            bestCandidateIdx = k;
+          } else if (resB === resA) {
+            // Tie-break: larger file size
+            if (rows[candidateIndices[k]].file_size > rows[candidateIndices[bestCandidateIdx]].file_size) {
+              bestCandidateIdx = k;
+            } else if (rows[candidateIndices[k]].file_size === rows[candidateIndices[bestCandidateIdx]].file_size) {
+              // Tie-break: earlier in sequence (lower index)
+              if (candidateIndices[k] < candidateIndices[bestCandidateIdx]) {
+                bestCandidateIdx = k;
+              }
             }
           }
         }
       }
-    }
 
-    const keepIndex = groupIndices[bestLocalIdx];
+      keepIndex = candidateIndices[bestCandidateIdx];
+    }
     dedupGroups.push({ indices: groupIndices, keepIndex });
 
     // Mark non-best as removed
     for (let k = 0; k < groupIndices.length; k++) {
-      if (k === bestLocalIdx) continue;
       const idx = groupIndices[k];
+      if (idx === keepIndex) continue;
       removedSet.add(idx);
 
       const row = rows[idx];
@@ -492,6 +514,7 @@ export async function hybridDeduplicate(
   }
 
   const onProgress = options?.onProgress;
+  const tempCache = options?.tempCache;
 
   console.log(`[hybridDedup] Starting hybrid dedup for trip ${tripId} with ${rows.length} images`);
 
@@ -500,9 +523,10 @@ export async function hybridDeduplicate(
   console.log('[hybridDedup] Layer 0: Hash pre-filter...');
   const layer0Result = await runLayer0(rows, {
     hashHammingThreshold: options?.hashHammingThreshold,
+    tempCache,
   });
-  console.log(`[hybridDedup] Layer 0: ${layer0Result.confirmedPairs.length} confirmed pairs, ${layer0Result.remainingIndices.length} remaining`);
-  onProgress?.('layer0', 'complete', `${layer0Result.confirmedPairs.length} confirmed, ${layer0Result.remainingIndices.length} remaining`);
+  console.log(`[hybridDedup] Layer 0: ${layer0Result.confirmedPairs.length} confirmed pairs, ${rows.length} total passed to Layer 1`);
+  onProgress?.('layer0', 'complete', `${layer0Result.confirmedPairs.length} confirmed, ${rows.length} total passed to Layer 1`);
 
   // ---- Python unavailable fallback: skip Layer 1 & 2, go straight to Layer 3 ----
   if (options?.pythonAvailable === false) {
@@ -510,7 +534,7 @@ export async function hybridDeduplicate(
 
     onProgress?.('layer3', 'start');
     console.log('[hybridDedup] Layer 3: Union-Find grouping + quality selection...');
-    const layer3Result = await runLayer3(rows, [...layer0Result.confirmedPairs]);
+    const layer3Result = await runLayer3(rows, [...layer0Result.confirmedPairs], { tempCache });
     console.log(`[hybridDedup] Layer 3: ${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
     onProgress?.('layer3', 'complete', `${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
 
@@ -521,15 +545,18 @@ export async function hybridDeduplicate(
     };
   }
 
-  // Collect pHash/dHash for Layer 1 (recompute for remaining images)
+  // Collect pHash/dHash for Layer 1 (compute for all images)
   // We need these for the hash_data parameter to clipNeighborSearch
   const storageProvider = getStorageProvider();
   const pHashes: (string | null)[] = new Array(rows.length).fill(null);
   const dHashes: (string | null)[] = new Array(rows.length).fill(null);
+  const allIndices = Array.from({ length: rows.length }, (_, i) => i);
 
-  for (const idx of layer0Result.remainingIndices) {
+  for (const idx of allIndices) {
     try {
-      const localPath = await storageProvider.downloadToTemp(rows[idx].file_path);
+      const localPath = tempCache
+        ? await tempCache.get(rows[idx].file_path)
+        : await storageProvider.downloadToTemp(rows[idx].file_path);
       try {
         const [pHash, dHash] = await Promise.all([
           computePHash(localPath),
@@ -538,7 +565,9 @@ export async function hybridDeduplicate(
         pHashes[idx] = pHash;
         dHashes[idx] = dHash;
       } finally {
-        try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+        if (!tempCache) {
+          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+        }
       }
     } catch {
       // Leave as null
@@ -548,8 +577,9 @@ export async function hybridDeduplicate(
   // ---- Layer 1: CLIP 三档粗筛 ----
   onProgress?.('layer1', 'start');
   console.log('[hybridDedup] Layer 1: CLIP coarse filter...');
-  const layer1Result = await runLayer1(rows, layer0Result.remainingIndices, pHashes, dHashes, {
+  const layer1Result = await runLayer1(rows, allIndices, pHashes, dHashes, {
     clipTopK: options?.clipTopK,
+    tempCache,
   });
   console.log(`[hybridDedup] Layer 1: ${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
   onProgress?.('layer1', 'complete', `${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
@@ -573,9 +603,15 @@ export async function hybridDeduplicate(
 
       for (const grayPair of layer1Result.grayZonePairs) {
         try {
-          const localPathA = await storageProvider.downloadToTemp(rows[grayPair.i].file_path);
-          const localPathB = await storageProvider.downloadToTemp(rows[grayPair.j].file_path);
-          tempFilePaths.push(localPathA, localPathB);
+          const localPathA = tempCache
+            ? await tempCache.get(rows[grayPair.i].file_path)
+            : await storageProvider.downloadToTemp(rows[grayPair.i].file_path);
+          const localPathB = tempCache
+            ? await tempCache.get(rows[grayPair.j].file_path)
+            : await storageProvider.downloadToTemp(rows[grayPair.j].file_path);
+          if (!tempCache) {
+            tempFilePaths.push(localPathA, localPathB);
+          }
 
           pairRequests.push({
             imageA: { id: rows[grayPair.i].id, filePath: localPathA },
@@ -625,9 +661,11 @@ export async function hybridDeduplicate(
           }
         }
       } finally {
-        // Clean up temp files
-        for (const p of tempFilePaths) {
-          try { fs.unlinkSync(p); } catch { /* ignore */ }
+        // Clean up temp files only if not using cache
+        if (!tempCache) {
+          for (const p of tempFilePaths) {
+            try { fs.unlinkSync(p); } catch { /* ignore */ }
+          }
         }
       }
 
@@ -651,7 +689,7 @@ export async function hybridDeduplicate(
     ...grayConfirmedPairs,
   ];
 
-  const layer3Result = await runLayer3(rows, allConfirmedPairs);
+  const layer3Result = await runLayer3(rows, allConfirmedPairs, { tempCache });
   console.log(`[hybridDedup] Layer 3: ${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
   onProgress?.('layer3', 'complete', `${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
 
