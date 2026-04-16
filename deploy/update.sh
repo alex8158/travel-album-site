@@ -89,7 +89,8 @@ do_update() {
   fi
 
   log "重启服务..."
-  pm2 restart travel-album || pm2 start "$APP_DIR/server/dist/index.js" --name travel-album
+  pm2 delete travel-album 2>/dev/null || true
+  pm2 start "$APP_DIR/server/dist/index.js" --name travel-album --cwd "$APP_DIR/server"
 
   log "部署完成！"
   pm2 status
@@ -181,7 +182,8 @@ else
 fi
 
 echo ">> 重启服务..."
-pm2 restart travel-album || pm2 start "$APP_DIR/server/dist/index.js" --name travel-album
+pm2 delete travel-album 2>/dev/null || true
+pm2 start "$APP_DIR/server/dist/index.js" --name travel-album --cwd "$APP_DIR/server"
 
 echo ">> 部署完成！"
 pm2 status
