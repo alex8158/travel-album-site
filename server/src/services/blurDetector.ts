@@ -13,8 +13,8 @@ const LAPLACIAN_KERNEL = {
   kernel: [0, 1, 0, 1, -4, 1, 0, 1, 0],
 };
 
-const DEFAULT_BLUR_THRESHOLD = 15;   // < 15 → blurry (明显糊)
-const DEFAULT_CLEAR_THRESHOLD = 50;  // >= 50 → clear, 15~50 → suspect
+export const DEFAULT_BLUR_THRESHOLD = 15;   // < 15 → blurry (明显糊)
+export const DEFAULT_CLEAR_THRESHOLD = 50;  // >= 50 → clear, 15~50 → suspect
 
 export type BlurStatus = 'clear' | 'suspect' | 'blurry';
 

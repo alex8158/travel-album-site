@@ -45,6 +45,7 @@ export interface MediaItem {
   colorCastB?: number;
   noiseLevel?: number;
   category?: string;
+  processingStatus?: 'none' | 'pending' | 'processing' | 'completed' | 'failed';
   createdAt: string;
 }
 

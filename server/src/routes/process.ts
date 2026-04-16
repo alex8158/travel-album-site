@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
-import { deduplicate } from '../services/dedupEngine';
 import { hybridDeduplicate, HybridDedupLayer } from '../services/hybridDedupEngine';
 import { detectBlurry } from '../services/blurDetector';
 import { classifyTrip } from '../services/imageClassifier';
@@ -186,7 +185,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
         console.log(`[process] Python pipeline failed, falling back: ${pythonErr}`);
         const blurResult = await detectBlurry(tripId);
         blurryDeletedCount = blurResult.blurryCount;
-        const dedupResult = await deduplicate(tripId);
+        const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
         dedupDeletedCount = dedupResult.removedCount;
         await classifyTrip(tripId);
       }
@@ -200,7 +199,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     // Node.js fallback path
     const blurResult = await detectBlurry(tripId);
     blurryDeletedCount = blurResult.blurryCount;
-    const dedupResult = await deduplicate(tripId);
+    const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
     dedupDeletedCount = dedupResult.removedCount;
   }
 
@@ -377,6 +376,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
           const layerLabels: Record<HybridDedupLayer, string> = {
             layer0: 'Layer 0: Hash 预过滤',
             layer1: 'Layer 1: CLIP 三档粗筛',
+            layer2: 'Layer 2: LLM 逐对精判',
             strictThreshold: 'Strict Threshold 回退',
             layer3: 'Layer 3: Union-Find 分组',
           };
@@ -416,7 +416,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
             "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
           ).get(tripId) as { cnt: number }).cnt;
           reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-          const dedupResult = await deduplicate(tripId);
+          const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
           dedupDeletedCount = dedupResult.removedCount;
           if (clientDisconnected) return;
           reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
@@ -448,7 +448,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
         "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
       ).get(tripId) as { cnt: number }).cnt;
       reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-      const dedupResult = await deduplicate(tripId);
+      const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false });
       dedupDeletedCount = dedupResult.removedCount;
       if (clientDisconnected) return;
       reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });

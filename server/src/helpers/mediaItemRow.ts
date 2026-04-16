@@ -34,6 +34,7 @@ export interface MediaItemRow {
   color_cast_b: number | null;
   noise_level: number | null;
   category: string | null;
+  processing_status: string | null;
   created_at: string;
 }
 
@@ -77,6 +78,7 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     colorCastB: row.color_cast_b ?? undefined,
     noiseLevel: row.noise_level ?? undefined,
     category: row.category ?? undefined,
+    processingStatus: (row.processing_status || 'none') as MediaItem['processingStatus'],
     createdAt: row.created_at,
   };
 }

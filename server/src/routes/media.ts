@@ -11,6 +11,8 @@ import { TripRow } from '../helpers/tripRow';
 import { getStorageProvider } from '../storage/factory';
 import { generateTags } from '../services/tagGenerator';
 import { getTempDir } from '../helpers/tempDir';
+import { computeSharpness, classifyBlur, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD } from '../services/blurDetector';
+import { generateThumbnail } from '../services/thumbnailGenerator';
 
 const router = Router();
 
@@ -78,6 +80,62 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+/**
+ * Non-blocking function that enqueues background processing for a single uploaded media item.
+ * Uses setImmediate to run asynchronously — the caller does NOT await this.
+ * Updates processing_status through: pending → processing → completed | failed.
+ */
+export function enqueueMediaProcessing(mediaId: string, tripId: string): void {
+  setImmediate(async () => {
+    const db = getDb();
+    try {
+      db.prepare("UPDATE media_items SET processing_status = 'processing' WHERE id = ?").run(mediaId);
+
+      const storageProvider = getStorageProvider();
+      const row = db.prepare('SELECT file_path, media_type FROM media_items WHERE id = ?').get(mediaId) as { file_path: string; media_type: string } | undefined;
+      if (!row) {
+        throw new Error(`Media item ${mediaId} not found`);
+      }
+
+      const localPath = await storageProvider.downloadToTemp(row.file_path);
+
+      // Blur detection for images
+      if (row.media_type === 'image') {
+        try {
+          const sharpnessScore = await computeSharpness(localPath);
+          const blurStatus = classifyBlur(sharpnessScore, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD);
+          db.prepare('UPDATE media_items SET sharpness_score = ?, blur_status = ? WHERE id = ?').run(sharpnessScore, blurStatus, mediaId);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[enqueueMediaProcessing] Blur detection failed for ${mediaId}:`, errorMsg);
+          db.prepare("UPDATE media_items SET blur_status = 'suspect', processing_error = ? WHERE id = ?").run(`[blurDetect] ${errorMsg}`, mediaId);
+        }
+      }
+
+      // Thumbnail generation for images
+      if (row.media_type === 'image') {
+        try {
+          const thumbPath = await generateThumbnail(localPath, tripId, mediaId);
+          db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbPath, mediaId);
+        } catch (err) {
+          console.error(`[enqueueMediaProcessing] Thumbnail generation failed for ${mediaId}:`, err);
+          // Non-fatal — continue processing
+        }
+      }
+
+      db.prepare("UPDATE media_items SET processing_status = 'completed' WHERE id = ?").run(mediaId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[enqueueMediaProcessing] Processing failed for ${mediaId}:`, msg);
+      try {
+        db.prepare("UPDATE media_items SET processing_status = 'failed', processing_error = ? WHERE id = ?").run(msg, mediaId);
+      } catch (dbErr) {
+        console.error(`[enqueueMediaProcessing] Failed to update error status for ${mediaId}:`, dbErr);
+      }
+    }
+  });
+}
 
 // POST /api/trips/:id/media — Upload a media file (requires auth + trip owner/admin)
 router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), async (req: Request, res: Response) => {
@@ -148,9 +206,9 @@ router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), as
     const userId = req.user!.userId;
 
     db.prepare(
-      `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, fileSize, userId, 'public', now);
+      `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, processing_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, fileSize, userId, 'public', 'pending', now);
 
     // Auto-classify file type using the temp file directly (no need to download again)
     try {
@@ -178,6 +236,9 @@ router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), as
       console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
       // Non-fatal — media item is still created successfully
     }
+
+    // Trigger async processing (non-blocking — fires and forgets)
+    enqueueMediaProcessing(mediaId, tripId);
 
     const row = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
     return res.status(201).json(rowToMediaItem(row));

@@ -115,6 +115,13 @@ function initTables(db: Database.Database): void {
     // Column already exists — ignore for idempotency
   }
 
+  // Migration: add processing_status column to media_items table
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN processing_status TEXT DEFAULT 'none'`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
   // Migration: add optimized_path column to media_items table
   try {
     db.exec(`ALTER TABLE media_items ADD COLUMN optimized_path TEXT`);

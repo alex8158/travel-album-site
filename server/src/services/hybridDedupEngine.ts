@@ -37,6 +37,8 @@ export interface HybridDedupOptions {
   preferredProvider?: string;
   /** 进度回调：每个层级开始/完成时调用 */
   onProgress?: (layer: HybridDedupLayer, status: 'start' | 'complete', detail?: string) => void;
+  /** 当 false 时跳过 Layer 1 和 Layer 2，仅执行 Layer 0 + Layer 3 */
+  pythonAvailable?: boolean;
 }
 
 export interface Layer0Result {
@@ -65,6 +67,7 @@ export interface ImageRow {
   file_path: string;
   original_filename: string;
   sharpness_score: number | null;
+  blur_status: string | null;
   width: number | null;
   height: number | null;
   file_size: number;
@@ -473,7 +476,7 @@ export async function hybridDeduplicate(
 
   // Query all active + trashed images for the trip, ordered by created_at
   const rows = db.prepare(
-    `SELECT id, file_path, original_filename, sharpness_score, width, height,
+    `SELECT id, file_path, original_filename, sharpness_score, blur_status, width, height,
             file_size, status, trashed_reason, created_at
      FROM media_items
      WHERE trip_id = ? AND media_type = 'image' AND status IN ('active', 'trashed')
@@ -500,6 +503,23 @@ export async function hybridDeduplicate(
   });
   console.log(`[hybridDedup] Layer 0: ${layer0Result.confirmedPairs.length} confirmed pairs, ${layer0Result.remainingIndices.length} remaining`);
   onProgress?.('layer0', 'complete', `${layer0Result.confirmedPairs.length} confirmed, ${layer0Result.remainingIndices.length} remaining`);
+
+  // ---- Python unavailable fallback: skip Layer 1 & 2, go straight to Layer 3 ----
+  if (options?.pythonAvailable === false) {
+    console.log('[hybridDedup] Python unavailable — skipping Layer 1 & 2, proceeding to Layer 3 with Layer 0 results only');
+
+    onProgress?.('layer3', 'start');
+    console.log('[hybridDedup] Layer 3: Union-Find grouping + quality selection...');
+    const layer3Result = await runLayer3(rows, [...layer0Result.confirmedPairs]);
+    console.log(`[hybridDedup] Layer 3: ${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
+    onProgress?.('layer3', 'complete', `${layer3Result.groups.length} groups, ${layer3Result.removed.length} removed`);
+
+    return {
+      kept: layer3Result.kept,
+      removed: layer3Result.removed,
+      removedCount: layer3Result.removed.length,
+    };
+  }
 
   // Collect pHash/dHash for Layer 1 (recompute for remaining images)
   // We need these for the hash_data parameter to clipNeighborSearch

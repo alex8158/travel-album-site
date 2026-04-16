@@ -28,12 +28,8 @@ function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string
 }
 
 // Mock services to avoid needing real image/video files
-vi.mock('../services/dedupEngine', () => ({
-  deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
-}));
-
-vi.mock('../services/dedupEngine', () => ({
-  deduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
+vi.mock('../services/hybridDedupEngine', () => ({
+  hybridDeduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
 }));
 
 vi.mock('../services/bedrockClient', () => ({
@@ -77,11 +73,11 @@ vi.mock('../storage/factory', () => ({
   }),
 }));
 
-import { deduplicate } from '../services/dedupEngine';
+import { hybridDeduplicate } from '../services/hybridDedupEngine';
 import { analyzeImageWithBedrock } from '../services/bedrockClient';
 import { optimizeTrip } from '../services/imageOptimizer';
 
-const mockDeduplicate = vi.mocked(deduplicate);
+const mockDeduplicate = vi.mocked(hybridDeduplicate);
 const mockAnalyzeImage = vi.mocked(analyzeImageWithBedrock);
 const mockOptimizeTrip = vi.mocked(optimizeTrip);
 

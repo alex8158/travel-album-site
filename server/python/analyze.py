@@ -760,7 +760,7 @@ def build_parser():
     # --- dedup subcommand ---
     dedup_parser = subparsers.add_parser(
         "dedup",
-        help="Detect duplicate images using CLIP embeddings"
+        help="[LEGACY] Detect duplicate images using CLIP embeddings"
     )
     dedup_parser.add_argument(
         "--images", nargs="+", required=True,

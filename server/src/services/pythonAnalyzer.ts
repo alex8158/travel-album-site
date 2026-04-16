@@ -11,6 +11,7 @@ import {
   GRAY_LOW_SEQ_DISTANCE,
   GRAY_LOW_HASH_DISTANCE,
 } from './dedupThresholds';
+import { DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD } from './blurDetector';
 
 const execFileAsync = promisify(execFile);
 
@@ -211,20 +212,21 @@ const EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
  */
 export async function analyzeImages(
   imagePaths: string[],
-  options?: { blurThreshold?: number; modelDir?: string }
+  options?: { blurThreshold?: number; clearThreshold?: number; modelDir?: string }
 ): Promise<PythonAnalyzeResult[]> {
   const modelDir = options?.modelDir ?? getDefaultModelDir();
-  const blurThreshold = options?.blurThreshold ?? 100;
+  const blurThreshold = options?.blurThreshold ?? DEFAULT_BLUR_THRESHOLD;
+  const clearThreshold = options?.clearThreshold ?? DEFAULT_CLEAR_THRESHOLD;
 
   if (imagePaths.length <= ANALYZE_BATCH_SIZE) {
-    return runAnalyzeBatch(imagePaths, modelDir, blurThreshold);
+    return runAnalyzeBatch(imagePaths, modelDir, blurThreshold, clearThreshold);
   }
 
   // Split into batches of ANALYZE_BATCH_SIZE, no overlap
   const allResults: PythonAnalyzeResult[] = [];
   for (let i = 0; i < imagePaths.length; i += ANALYZE_BATCH_SIZE) {
     const batch = imagePaths.slice(i, i + ANALYZE_BATCH_SIZE);
-    const batchResults = await runAnalyzeBatch(batch, modelDir, blurThreshold);
+    const batchResults = await runAnalyzeBatch(batch, modelDir, blurThreshold, clearThreshold);
     allResults.push(...batchResults);
   }
   return allResults;
@@ -233,7 +235,8 @@ export async function analyzeImages(
 async function runAnalyzeBatch(
   imagePaths: string[],
   modelDir: string,
-  blurThreshold: number
+  blurThreshold: number,
+  clearThreshold: number
 ): Promise<PythonAnalyzeResult[]> {
   await mutex.acquire();
   try {
@@ -243,6 +246,7 @@ async function runAnalyzeBatch(
       '--images', ...imagePaths,
       '--model-dir', modelDir,
       '--blur-threshold', String(blurThreshold),
+      '--clear-threshold', String(clearThreshold),
     ];
 
     const { stdout, stderr } = await execFileAsync('python3', args, {
@@ -286,6 +290,7 @@ function mapAnalyzeResult(raw: any): PythonAnalyzeResult {
  * Run Python CLIP dedup on a list of image paths.
  * Does NOT batch — processes entire trip at once (Python handles >500 via top-k).
  * Throws on failure (caller should fall back to pHash).
+ * @deprecated Use `clipNeighborSearch()` instead.
  */
 export async function dedupImages(
   imagePaths: string[],

@@ -330,6 +330,83 @@ export async function selectBest(groupId: string): Promise<MediaItem> {
 }
 
 /**
+ * Score a list of media IDs by downloading each image and computing quality scores.
+ * Returns an array of { mediaId, score } for every ID. On download/scoring failure,
+ * the item receives overall=0 with all dimensions null.
+ */
+export async function scoreMediaIds(
+  mediaIds: string[]
+): Promise<Array<{ mediaId: string; score: QualityScore }>> {
+  if (mediaIds.length === 0) return [];
+
+  const db = getDb();
+  const placeholders = mediaIds.map(() => '?').join(', ');
+  const rows = db.prepare(
+    `SELECT id, file_path FROM media_items WHERE id IN (${placeholders})`
+  ).all(...mediaIds) as Array<{ id: string; file_path: string }>;
+
+  const filePathMap = new Map(rows.map((r) => [r.id, r.file_path]));
+  const storageProvider = getStorageProvider();
+
+  const defaultScore: QualityScore = {
+    sharpness: null,
+    exposure: null,
+    contrast: null,
+    resolution: null,
+    noiseArtifact: null,
+    fileSize: null,
+    overall: 0,
+  };
+
+  const results: Array<{ mediaId: string; score: QualityScore }> = [];
+
+  for (const mediaId of mediaIds) {
+    const filePath = filePathMap.get(mediaId);
+    if (!filePath) {
+      results.push({ mediaId, score: { ...defaultScore } });
+      continue;
+    }
+
+    let localPath: string | null = null;
+    try {
+      localPath = await storageProvider.downloadToTemp(filePath);
+      const score = await computeQualityScore(localPath, mediaId);
+      results.push({ mediaId, score });
+    } catch {
+      results.push({ mediaId, score: { ...defaultScore } });
+    } finally {
+      // Clean up temp file (safe no-op for local provider where path is the original)
+      if (localPath && localPath !== filePath) {
+        try { await fs.promises.unlink(localPath); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Select the best media ID from a list by computing quality scores and
+ * returning the one with the highest overall score.
+ */
+export async function selectBestFromMediaIds(mediaIds: string[]): Promise<string> {
+  if (mediaIds.length === 0) {
+    throw new Error('mediaIds must not be empty');
+  }
+
+  const scored = await scoreMediaIds(mediaIds);
+
+  let bestIdx = 0;
+  for (let i = 1; i < scored.length; i++) {
+    if (scored[i].score.overall > scored[bestIdx].score.overall) {
+      bestIdx = i;
+    }
+  }
+
+  return scored[bestIdx].mediaId;
+}
+
+/**
  * Returns the count of items with status = 'trashed' AND trashed_reason = 'duplicate' for a given trip.
  */
 export function getTrashedDuplicateCount(tripId: string): number {

@@ -1,3 +1,8 @@
+/**
+ * @deprecated This module is deprecated. Use `llmPairReviewer.ts` for LLM pair review
+ * or `hybridDedupEngine.ts` as the dedup entry point.
+ */
+
 import sharp from 'sharp';
 import fs from 'fs';
 import { getDb } from '../database';
@@ -109,11 +114,13 @@ export interface DedupResult {
  * Deduplicate images for a trip using Bedrock vision model with sliding windows.
  * Queries all images (active + trashed) ordered by created_at, sends each window
  * to Bedrock for duplicate detection, and trashes duplicates keeping the best.
+ * @deprecated Use `hybridDedupEngine.hybridDeduplicate()` instead.
  */
 export async function deduplicate(
   tripId: string,
   options?: SlidingWindowDedupOptions
 ): Promise<DedupResult> {
+  console.warn('[DEPRECATED] dedupEngine.bedrock.deduplicate() is deprecated. Use hybridDedupEngine.hybridDeduplicate() instead.');
   const windowSize = Math.min(options?.windowSize ?? 5, 10);
   const bedrockClient = options?.bedrockClient ?? createAIClient();
 
