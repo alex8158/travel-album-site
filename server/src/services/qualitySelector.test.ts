@@ -252,7 +252,8 @@ describe('selectBest', () => {
     // quality_score is the weighted overall, should be in [0, 1]
     expect(row.quality_score).toBeGreaterThanOrEqual(0);
     expect(row.quality_score).toBeLessThanOrEqual(1.0);
-    expect(row.sharpness_score).toBeGreaterThanOrEqual(0);
+    // sharpness_score stays NULL when not pre-computed by blur detection
+    // (we no longer write back a reverse-engineered value)
     // New dimension columns should be written
     expect(row.exposure_score).not.toBeNull();
     expect(row.contrast_score).not.toBeNull();
@@ -475,7 +476,8 @@ describe('processTrip', () => {
     // quality_score is the weighted overall, should be in [0, 1]
     expect(row.quality_score).toBeGreaterThanOrEqual(0);
     expect(row.quality_score).toBeLessThanOrEqual(1.0);
-    expect(row.sharpness_score).toBeGreaterThanOrEqual(0);
+    // sharpness_score stays NULL when not pre-computed by blur detection
+    // (we no longer write back a reverse-engineered value)
     // New dimension columns should be written
     expect(row.exposure_score).not.toBeNull();
     expect(row.contrast_score).not.toBeNull();

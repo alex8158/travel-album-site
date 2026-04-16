@@ -32,30 +32,27 @@ export async function computeHash(imagePath: string): Promise<string> {
 
 /**
  * Compute a 64-bit pHash (perceptual hash) for an image using mean-binarization.
- * Resizes to 32×32 grayscale, computes global mean, then binarizes the 8×8
- * top-left block against that mean. Returns a 16-character hex string.
+ * Resizes to 8×8 grayscale, computes global mean, then binarizes all 64 pixels
+ * against that mean. Returns a 16-character hex string.
  */
 export async function computePHash(imagePath: string): Promise<string> {
   const { data } = await sharp(imagePath)
-    .resize(32, 32, { fit: 'cover' })
+    .resize(8, 8, { fit: 'cover' })
     .grayscale()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
-  // Compute mean of all 1024 pixel values
+  // Compute mean of all 64 pixel values
   let sum = 0;
-  for (let i = 0; i < 1024; i++) {
+  for (let i = 0; i < 64; i++) {
     sum += data[i];
   }
-  const mean = sum / 1024;
+  const mean = sum / 64;
 
-  // Binarize first 64 pixels (8×8 top-left block)
+  // Binarize all 64 pixels against mean
   const bits: number[] = [];
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 8; col++) {
-      const idx = row * 32 + col;
-      bits.push(data[idx] > mean ? 1 : 0);
-    }
+  for (let i = 0; i < 64; i++) {
+    bits.push(data[i] > mean ? 1 : 0);
   }
 
   // Pack 64 bits into 16-char hex string

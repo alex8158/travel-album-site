@@ -285,7 +285,7 @@ export async function selectBest(groupId: string): Promise<MediaItem> {
       scores.push(score);
       updateStmt.run(
         score.overall,
-        score.sharpness !== null ? score.sharpness * 500 : null, // store raw variance if computed fresh
+        null,
         score.exposure,
         score.contrast,
         score.noiseArtifact,
@@ -450,7 +450,7 @@ export async function processTrip(tripId: string): Promise<void> {
       const score = await computeQualityScore(localPath, item.id);
       updateStmt.run(
         score.overall,
-        score.sharpness !== null ? score.sharpness * 500 : null,
+        null,
         score.exposure,
         score.contrast,
         score.noiseArtifact,

@@ -47,6 +47,10 @@ export interface HybridDedupOptions {
 export interface Layer0Result {
   /** 文件哈希/pHash/dHash 确认的重复对（索引对） */
   confirmedPairs: Array<{ i: number; j: number }>;
+  /** Computed pHashes for all images (null if computation failed) */
+  pHashes: (string | null)[];
+  /** Computed dHashes for all images (null if computation failed) */
+  dHashes: (string | null)[];
 }
 
 export interface Layer1Result {
@@ -220,7 +224,7 @@ export async function runLayer0(
     }
   }
 
-  return { confirmedPairs };
+  return { confirmedPairs, pHashes, dHashes };
 }
 
 
@@ -545,39 +549,13 @@ export async function hybridDeduplicate(
     };
   }
 
-  // Collect pHash/dHash for Layer 1 (compute for all images)
-  // We need these for the hash_data parameter to clipNeighborSearch
-  const storageProvider = getStorageProvider();
-  const pHashes: (string | null)[] = new Array(rows.length).fill(null);
-  const dHashes: (string | null)[] = new Array(rows.length).fill(null);
+  // Reuse pHash/dHash from Layer 0 for Layer 1
   const allIndices = Array.from({ length: rows.length }, (_, i) => i);
-
-  for (const idx of allIndices) {
-    try {
-      const localPath = tempCache
-        ? await tempCache.get(rows[idx].file_path)
-        : await storageProvider.downloadToTemp(rows[idx].file_path);
-      try {
-        const [pHash, dHash] = await Promise.all([
-          computePHash(localPath),
-          computeHash(localPath),
-        ]);
-        pHashes[idx] = pHash;
-        dHashes[idx] = dHash;
-      } finally {
-        if (!tempCache) {
-          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
-        }
-      }
-    } catch {
-      // Leave as null
-    }
-  }
 
   // ---- Layer 1: CLIP 三档粗筛 ----
   onProgress?.('layer1', 'start');
   console.log('[hybridDedup] Layer 1: CLIP coarse filter...');
-  const layer1Result = await runLayer1(rows, allIndices, pHashes, dHashes, {
+  const layer1Result = await runLayer1(rows, allIndices, layer0Result.pHashes, layer0Result.dHashes, {
     clipTopK: options?.clipTopK,
     tempCache,
   });
