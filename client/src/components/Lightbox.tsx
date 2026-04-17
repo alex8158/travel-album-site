@@ -3,6 +3,7 @@ import { useEffect, useCallback, useState } from 'react';
 export interface LightboxImage {
   originalUrl: string;
   alt: string;
+  mediaId?: string;
 }
 
 export interface LightboxProps {
@@ -11,9 +12,10 @@ export interface LightboxProps {
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
+  onEdit?: (mediaId: string) => void;
 }
 
-export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext }: LightboxProps) {
+export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext, onEdit }: LightboxProps) {
   const isFirst = currentIndex === 0;
   const isLast = currentIndex === images.length - 1;
   const current = images[currentIndex];
@@ -128,6 +130,16 @@ export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext
         >
           ↻
         </button>
+        {onEdit && current.mediaId && (
+          <button
+            onClick={() => onEdit(current.mediaId!)}
+            aria-label="编辑图片"
+            data-testid="lightbox-edit"
+            style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', fontSize: '1.2rem', cursor: 'pointer', borderRadius: 20, padding: '0 16px', height: 40 }}
+          >
+            ✎ 编辑
+          </button>
+        )}
       </div>
 
       {!isLast && (

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import Lightbox from '../components/Lightbox';
+import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
@@ -97,6 +98,7 @@ export default function GalleryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
 
@@ -351,16 +353,31 @@ export default function GalleryPage() {
         </div>
       )}
 
-      {lightboxIndex !== null && (
+      {lightboxIndex !== null && !editingMediaId && (
         <Lightbox
           images={filteredImages.map((img) => ({
             originalUrl: img.originalUrl,
+            mediaId: img.item.id,
             alt: img.item.originalFilename,
           }))}
           currentIndex={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onPrev={() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
           onNext={() => setLightboxIndex((i) => (i !== null && i < filteredImages.length - 1 ? i + 1 : i))}
+          onEdit={(mediaId) => setEditingMediaId(mediaId)}
+        />
+      )}
+
+      {editingMediaId && (
+        <ImageEditor
+          mediaId={editingMediaId}
+          originalUrl={`/api/media/${editingMediaId}/original`}
+          onClose={() => setEditingMediaId(null)}
+          onSaved={() => {
+            setEditingMediaId(null);
+            // Reload gallery to show updated image
+            window.location.reload();
+          }}
         />
       )}
     </div>
