@@ -21,6 +21,7 @@ interface MediaRow {
   id: string;
   trip_id: string;
   file_path: string;
+  optimized_path: string | null;
   media_type: string;
 }
 
@@ -30,7 +31,7 @@ router.post('/:id/edit', authMiddleware, requireAuth, async (req: Request, res: 
   const db = getDb();
 
   const row = db.prepare(
-    'SELECT id, trip_id, file_path, media_type FROM media_items WHERE id = ?'
+    'SELECT id, trip_id, file_path, optimized_path, media_type FROM media_items WHERE id = ?'
   ).get(mediaId) as MediaRow | undefined;
 
   if (!row) {
@@ -59,13 +60,16 @@ router.post('/:id/edit', authMiddleware, requireAuth, async (req: Request, res: 
   }
 
   const storageProvider = getStorageProvider();
-  const ext = path.extname(row.file_path).slice(1) || 'jpg';
-  const outputFilename = `${mediaId}_opt.${ext}`;
+  const outputFilename = `${mediaId}_opt.jpg`;
   const outputRelativePath = `${row.trip_id}/optimized/${outputFilename}`;
   const tempPath = path.join(getTempDir(), outputFilename);
 
   try {
-    const localPath = await storageProvider.downloadToTemp(row.file_path);
+    // Support base=optimized to continue from auto-optimized version
+    const sourcePath = req.body.base === 'optimized' && row.optimized_path
+      ? row.optimized_path
+      : row.file_path;
+    const localPath = await storageProvider.downloadToTemp(sourcePath);
 
     let pipeline = sharp(localPath, { failOn: 'none' });
 
@@ -94,15 +98,9 @@ router.post('/:id/edit', authMiddleware, requireAuth, async (req: Request, res: 
       pipeline = pipeline.sharpen({ sigma });
     }
 
-    // Resize to max 2048px for web display (same as auto-optimize)
-    pipeline = pipeline.resize(2048, 2048, { fit: 'inside', withoutEnlargement: true });
-
+    // Preserve original resolution — no resize
     pipeline = pipeline.withMetadata();
-
-    const lowerExt = ext.toLowerCase();
-    if (lowerExt === 'jpeg' || lowerExt === 'jpg') {
-      pipeline = pipeline.jpeg({ quality: 85 });
-    }
+    pipeline = pipeline.jpeg({ quality: 88 });
 
     await pipeline.toFile(tempPath);
 

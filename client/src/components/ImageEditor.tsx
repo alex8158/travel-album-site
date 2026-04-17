@@ -21,6 +21,8 @@ function paramsToFilter(p: EditParams): string {
   const b = 1 + p.brightness / 100;
   const c = 1 + p.contrast / 100;
   const s = 1 + p.saturation / 100;
+  // Note: CSS blur(0) with negative value simulates sharpen visually (approximate)
+  // Real sharpen is applied server-side by sharp
   return `brightness(${b}) contrast(${c}) saturate(${s})`;
 }
 
@@ -78,7 +80,7 @@ export default function ImageEditor({ mediaId, originalUrl, onClose, onSaved }: 
       }}
     >
       {/* Preview area */}
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
         <img
           src={originalUrl}
           alt="编辑预览"
@@ -88,6 +90,15 @@ export default function ImageEditor({ mediaId, originalUrl, onClose, onSaved }: 
             transition: 'filter 0.1s ease',
           }}
         />
+        {(params.brightness !== 0 || params.contrast !== 0 || params.saturation !== 0 || params.sharpen > 0) && (
+          <div style={{
+            position: 'absolute', top: 12, left: 12,
+            background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 10px',
+            borderRadius: 4, fontSize: '0.8rem',
+          }}>
+            预览（锐化效果以保存后为准）
+          </div>
+        )}
       </div>
 
       {/* Controls panel */}

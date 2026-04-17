@@ -26,62 +26,41 @@ export interface OptimizeResult {
 /**
  * Pure function: compute optimization parameters from image analysis.
  *
- * Rules (conservative, default light processing):
- * - Brightness < 90: gamma 1.1; if also contrast < 40: enable CLAHE (maxSlope 1.5)
- * - Brightness > 170: gamma 0.9
- * - Brightness 90-170: no gamma
- * - Contrast < 40 AND brightness normal (90-170): CLAHE (maxSlope 1.5)
- * - Contrast > 80: no special handling
- * - Contrast 40-80: skip
- * - Color cast any channel abs >= 10: tint correction (negate cast values)
- * - Noise >= 0.3 AND < 0.6: medianFilter 3, sharpenSigma 0.3
- * - Noise >= 0.6: medianFilter 3, no sharpen
- * - Noise < 0.3: sharpenSigma 0.45
+ * Conservative rules — "宁可提升少一点，也不要做坏":
+ * - Brightness < 80: gentle gamma 1.08
+ * - Brightness > 180: gentle gamma 0.92
+ * - CLAHE: DISABLED by default (too aggressive for automated use)
+ * - Color cast: DISABLED (scene-dependent)
+ * - Noise >= 0.6: median(3), no sharpen
+ * - Noise >= 0.4: median(3), sharpenSigma 0.2
+ * - Noise < 0.4: sharpenSigma 0.25
  */
 export function computeOptimizeParams(analysis: ImageAnalysis): OptimizeParams {
   const params: OptimizeParams = {};
 
-  // --- Brightness ---
-  if (analysis.avgBrightness < 90) {
-    params.gammaCorrection = 1.1;
-    if (analysis.contrastLevel < 40) {
-      params.claheEnabled = true;
-      params.claheOptions = { width: 3, height: 3, maxSlope: 2 };
-    }
-  } else if (analysis.avgBrightness > 170) {
-    params.gammaCorrection = 0.9;
+  // --- Brightness: very gentle gamma only for clearly dark/bright images ---
+  if (analysis.avgBrightness < 80) {
+    params.gammaCorrection = 1.08;
+  } else if (analysis.avgBrightness > 180) {
+    params.gammaCorrection = 0.92;
   }
-  // 90-170: no gamma
 
-  // --- Contrast (only when brightness is normal 90-170) ---
-  if (analysis.contrastLevel < 40 && analysis.avgBrightness >= 90 && analysis.avgBrightness <= 170) {
-    params.claheEnabled = true;
-    params.claheOptions = { width: 3, height: 3, maxSlope: 2 };
-  }
-  // contrast > 80: no special handling; 40-80: skip
+  // --- CLAHE: DISABLED by default ---
+  // Too aggressive for automated use. Underwater, sunset, fog scenes get destroyed.
+  // Revisit in V2 with scene-aware classification.
 
-  // --- Color cast ---
-  // DISABLED in V1: tint() is too aggressive for automated use.
-  // Water/underwater, sunset, neon scenes have natural strong color casts
-  // that should NOT be "corrected". Revisit in V2 with scene-aware logic.
-  // if (
-  //   Math.abs(analysis.colorCastR) >= 10 ||
-  //   Math.abs(analysis.colorCastG) >= 10 ||
-  //   Math.abs(analysis.colorCastB) >= 10
-  // ) {
-  //   params.tintCorrection = { ... };
-  // }
+  // --- Color cast: DISABLED ---
 
-  // --- Noise / Sharpen ---
+  // --- Noise / Sharpen: conservative ---
   if (analysis.noiseLevel >= 0.6) {
     params.medianFilter = 3;
-    // no sharpen
-  } else if (analysis.noiseLevel >= 0.3) {
+    // no sharpen — noisy images get worse with sharpening
+  } else if (analysis.noiseLevel >= 0.4) {
     params.medianFilter = 3;
-    params.sharpenSigma = 0.3;
+    params.sharpenSigma = 0.2;
   } else {
-    // noise < 0.3
-    params.sharpenSigma = 0.45;
+    // clean image: very light sharpen
+    params.sharpenSigma = 0.25;
   }
 
   return params;
@@ -138,8 +117,8 @@ export async function optimizeImage(
       pipeline = pipeline.sharpen({ sigma: params.sharpenSigma });
     }
 
-    // Resize to max 2048px long edge for web display (preserve aspect ratio, no upscale)
-    pipeline = pipeline.resize(2048, 2048, { fit: 'inside', withoutEnlargement: true });
+    // Preserve original resolution — no resize for optimized output
+    // (thumbnails handle web display sizing separately)
 
     // Preserve EXIF metadata
     pipeline = pipeline.withMetadata();
