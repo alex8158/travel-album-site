@@ -357,6 +357,13 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   const reporter = new ProgressReporter(res);
   reporter.initSSE();
 
+  // Heartbeat: send keepalive every 15s to prevent SSE timeout
+  const heartbeat = setInterval(() => {
+    if (!clientDisconnected) {
+      res.write(`:keepalive\n\n`);
+    }
+  }, 15000);
+
   try {
     let failedCount = 0;
 
@@ -665,6 +672,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const message = err instanceof Error ? err.message : String(err);
     reporter.sendError({ message });
   } finally {
+    clearInterval(heartbeat);
     processingTrips.delete(tripId);
   }
 });
