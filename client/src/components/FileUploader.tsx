@@ -136,9 +136,10 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
     setUploading(false);
     if (!cancelledRef.current) {
       setEntries(prev => {
-        const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
-        if (allDone && onAllUploaded) {
-          onAllUploaded(prev.length);
+        const allDone = prev.length > 0 && prev.every(e => e.status === 'completed' || e.status === 'failed');
+        const completedCount = prev.filter(e => e.status === 'completed').length;
+        if (allDone && completedCount > 0 && onAllUploaded) {
+          onAllUploaded(completedCount);
         }
         return prev;
       });
@@ -187,9 +188,10 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
     await uploadFile(index, entries[index]);
     setUploading(false);
     setEntries(prev => {
-      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
-      if (allDone && onAllUploaded) {
-        onAllUploaded(prev.length);
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed' || e.status === 'failed');
+      const completedCount = prev.filter(e => e.status === 'completed').length;
+      if (allDone && completedCount > 0 && onAllUploaded) {
+        onAllUploaded(completedCount);
       }
       return prev;
     });
@@ -208,9 +210,10 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
     await runWithConcurrency(tasks, 3);
     setUploading(false);
     setEntries(prev => {
-      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
-      if (allDone && onAllUploaded) {
-        onAllUploaded(prev.length);
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed' || e.status === 'failed');
+      const completedCount = prev.filter(e => e.status === 'completed').length;
+      if (allDone && completedCount > 0 && onAllUploaded) {
+        onAllUploaded(completedCount);
       }
       return prev;
     });
@@ -224,9 +227,10 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
     }
     // If all remaining are completed, trigger onAllUploaded
     setEntries(prev => {
-      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
-      if (allDone && onAllUploaded) {
-        onAllUploaded(prev.length);
+      const allDone = prev.length > 0 && prev.every(e => e.status === 'completed' || e.status === 'failed');
+      const completedCount = prev.filter(e => e.status === 'completed').length;
+      if (allDone && completedCount > 0 && onAllUploaded) {
+        onAllUploaded(completedCount);
       }
       return prev;
     });
