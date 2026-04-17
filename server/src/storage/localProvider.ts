@@ -1,7 +1,8 @@
 import { promises as fs } from 'fs';
-import { existsSync } from 'fs';
+import { createWriteStream, existsSync } from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { StorageProvider } from './types';
 
 export class LocalStorageProvider implements StorageProvider {
@@ -26,11 +27,7 @@ export class LocalStorageProvider implements StorageProvider {
     if (Buffer.isBuffer(data)) {
       await fs.writeFile(fullPath, data);
     } else {
-      const chunks: Buffer[] = [];
-      for await (const chunk of data) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      await fs.writeFile(fullPath, Buffer.concat(chunks));
+      await pipeline(data, createWriteStream(fullPath));
     }
   }
 

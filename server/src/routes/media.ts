@@ -15,6 +15,64 @@ import { getTempDir } from '../helpers/tempDir';
 
 const router = Router();
 
+/** Fire-and-forget post-upload processing: classify + tag generation */
+async function postUploadProcessMedia(
+  mediaId: string,
+  tempFilePath: string,
+  tripTitle: string,
+  effectiveMime: string,
+  originalFilename: string,
+): Promise<void> {
+  const db = getDb();
+  try {
+    db.prepare('UPDATE media_items SET processing_status = ? WHERE id = ?').run('processing', mediaId);
+
+    // Classify file type
+    try {
+      const classification = await classify(tempFilePath);
+      db.prepare(
+        'UPDATE media_items SET media_type = ?, mime_type = ? WHERE id = ?'
+      ).run(classification.type, classification.mimeType, mediaId);
+    } catch (err) {
+      console.error(`[FileClassifier] Error classifying file ${mediaId}:`, err);
+      const fallbackType = effectiveMime.startsWith('image/') ? 'image'
+        : effectiveMime.startsWith('video/') ? 'video'
+        : 'unknown';
+      db.prepare('UPDATE media_items SET media_type = ? WHERE id = ?').run(fallbackType, mediaId);
+    }
+
+    // Generate tags
+    try {
+      const classifiedRow = db.prepare('SELECT media_type FROM media_items WHERE id = ?').get(mediaId) as { media_type: string } | undefined;
+      const mediaType = classifiedRow?.media_type || 'unknown';
+      const tags = generateTags(mediaId, tripTitle, mediaType, originalFilename, new Date());
+      const insertTag = db.prepare(
+        'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
+      );
+      for (const tag of tags) {
+        insertTag.run(tag.id, tag.mediaId, tag.tagName, tag.createdAt);
+      }
+    } catch (err) {
+      console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
+    }
+
+    db.prepare('UPDATE media_items SET processing_status = ? WHERE id = ?').run('completed', mediaId);
+  } catch (err) {
+    console.error(`[PostUpload] Processing failed for ${mediaId}:`, err);
+    try {
+      db.prepare('UPDATE media_items SET processing_status = ? WHERE id = ?').run('failed', mediaId);
+    } catch { /* ignore */ }
+  } finally {
+    try {
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+    } catch (cleanupErr) {
+      console.warn(`[PostUpload] Failed to clean up temp file ${tempFilePath}:`, cleanupErr);
+    }
+  }
+}
+
 const SUPPORTED_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -85,19 +143,6 @@ router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), as
   const tripId = req.params.id as string;
   const db = getDb();
 
-  // Helper to clean up temp file left by diskStorage
-  const cleanupTempFile = () => {
-    if (req.file?.path) {
-      try {
-        if (fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
-      } catch (cleanupErr) {
-        console.warn(`[Upload] Failed to clean up temp file ${req.file.path}:`, cleanupErr);
-      }
-    }
-  };
-
   try {
     // Verify trip exists
     const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
@@ -148,47 +193,32 @@ router.post('/:id/media', authMiddleware, requireAuth, upload.single('file'), as
     const now = new Date().toISOString();
     const userId = req.user!.userId;
 
+    const initialMediaType = effectiveMime.startsWith('image/') ? 'image'
+      : effectiveMime.startsWith('video/') ? 'video'
+      : 'unknown';
+
     db.prepare(
       `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, user_id, visibility, processing_status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(mediaId, tripId, relativePath, 'unknown', effectiveMime, file.originalname, fileSize, userId, 'public', 'none', now);
-
-    // Auto-classify file type using the temp file directly (no need to download again)
-    try {
-      const classification = await classify(tempFilePath);
-      db.prepare(
-        `UPDATE media_items SET media_type = ?, mime_type = ? WHERE id = ?`
-      ).run(classification.type, classification.mimeType, mediaId);
-    } catch (err) {
-      console.error(`[FileClassifier] Error classifying file ${mediaId}:`, err);
-      // Fallback: use mime type to determine media_type
-      const fallbackType = effectiveMime.startsWith('image/') ? 'image' 
-        : effectiveMime.startsWith('video/') ? 'video' 
-        : 'unknown';
-      db.prepare('UPDATE media_items SET media_type = ? WHERE id = ?').run(fallbackType, mediaId);
-    }
-
-    // Generate tags and insert into media_tags table
-    try {
-      const classifiedRow = db.prepare('SELECT media_type FROM media_items WHERE id = ?').get(mediaId) as { media_type: string } | undefined;
-      const mediaType = classifiedRow?.media_type || 'unknown';
-      const tags = generateTags(mediaId, trip.title, mediaType, file.originalname, new Date());
-      const insertTag = db.prepare(
-        'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
-      );
-      for (const tag of tags) {
-        insertTag.run(tag.id, tag.mediaId, tag.tagName, tag.createdAt);
-      }
-    } catch (err) {
-      console.error(`[TagGenerator] Error generating tags for ${mediaId}:`, err);
-      // Non-fatal — media item is still created successfully
-    }
+    ).run(mediaId, tripId, relativePath, initialMediaType, effectiveMime, file.originalname, fileSize, userId, 'public', 'pending', now);
 
     const row = db.prepare('SELECT * FROM media_items WHERE id = ?').get(mediaId) as MediaItemRow;
-    return res.status(201).json(rowToMediaItem(row));
-  } finally {
-    // Always clean up the temp file, whether success or failure
-    cleanupTempFile();
+    res.status(201).json(rowToMediaItem(row));
+
+    // Fire-and-forget async processing (classify + tags)
+    void postUploadProcessMedia(mediaId, tempFilePath, trip.title, effectiveMime, file.originalname);
+  } catch (err) {
+    // Clean up temp file only on error in the main handler (before postUploadProcessMedia takes over)
+    if (req.file?.path) {
+      try {
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+      } catch (cleanupErr) {
+        console.warn(`[Upload] Failed to clean up temp file ${req.file.path}:`, cleanupErr);
+      }
+    }
+    throw err;
   }
 });
 

@@ -49,6 +49,22 @@ function getAuthToken(): string | null {
   }
 }
 
+async function runWithConcurrency(
+  tasks: Array<() => Promise<void>>,
+  concurrency = 3
+): Promise<void> {
+  let cursor = 0;
+  async function worker() {
+    while (cursor < tasks.length) {
+      const current = cursor++;
+      await tasks[current]();
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker())
+  );
+}
+
 export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, onUploadCancelled }: FileUploaderProps) {
   const [mode, setMode] = useState<'file' | 'folder'>('file');
   const [entries, setEntries] = useState<UploadFileEntry[]>([]);
@@ -111,12 +127,12 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
   const doUpload = useCallback(async (fileEntries: UploadFileEntry[]) => {
     cancelledRef.current = false;
     setUploading(true);
-    for (let i = 0; i < fileEntries.length; i++) {
-      if (cancelledRef.current) break;
-      if (fileEntries[i].status === 'pending') {
-        await uploadFile(i, fileEntries[i]);
-      }
-    }
+    const tasks = fileEntries.map((item, i) => () => {
+      if (cancelledRef.current) return Promise.resolve();
+      if (item.status === 'pending') return uploadFile(i, item);
+      return Promise.resolve();
+    });
+    await runWithConcurrency(tasks, 3);
     setUploading(false);
     if (!cancelledRef.current) {
       setEntries(prev => {
@@ -182,11 +198,14 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
   const handleRetryAll = useCallback(async () => {
     cancelledRef.current = false;
     setUploading(true);
-    for (let i = 0; i < entries.length; i++) {
-      if (entries[i].status === 'failed') {
-        await uploadFile(i, entries[i]);
-      }
-    }
+    const tasks = entries
+      .map((entry, i) => ({ entry, i }))
+      .filter(({ entry }) => entry.status === 'failed')
+      .map(({ entry, i }) => () => {
+        if (cancelledRef.current) return Promise.resolve();
+        return uploadFile(i, entry);
+      });
+    await runWithConcurrency(tasks, 3);
     setUploading(false);
     setEntries(prev => {
       const allDone = prev.length > 0 && prev.every(e => e.status === 'completed');
