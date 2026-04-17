@@ -101,8 +101,7 @@ export async function optimizeImage(
   mediaId: string,
   params: OptimizeParams,
 ): Promise<string> {
-  const ext = path.extname(imagePath).slice(1) || 'jpg';
-  const outputFilename = `${mediaId}_opt.${ext}`;
+  const outputFilename = `${mediaId}_opt.jpg`;
   const outputRelativePath = `${tripId}/optimized/${outputFilename}`;
 
   const tempPath = path.join(getTempDir(), outputFilename);
@@ -145,13 +144,16 @@ export async function optimizeImage(
     // Preserve EXIF metadata
     pipeline = pipeline.withMetadata();
 
-    // JPEG quality handling
-    const lowerExt = ext.toLowerCase();
-    if (lowerExt === 'jpeg' || lowerExt === 'jpg') {
-      pipeline = pipeline.jpeg({ quality: 85 });
-    }
+    // Output format: always JPEG for web display (consistent, smaller, compatible)
+    pipeline = pipeline.jpeg({ quality: 88 });
 
     await pipeline.toFile(tempPath);
+
+    // Validate output: ensure the optimized file is a valid image
+    const meta = await sharp(tempPath).metadata();
+    if (!meta.width || !meta.height) {
+      throw new Error('Optimized image has no dimensions — output corrupted');
+    }
 
     const storageProvider = getStorageProvider();
     const buffer = fs.readFileSync(tempPath);

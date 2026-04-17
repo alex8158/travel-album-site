@@ -100,9 +100,16 @@ router.get('/:id/original', async (req: Request, res: Response) => {
     }
   }
 
-  // For images: serve optimized version if available
+  // For images: serve optimized version if available, verify it exists
   if (!servePath && row.media_type === 'image' && row.optimized_path) {
-    servePath = row.optimized_path;
+    try {
+      const exists = await storageProvider.exists(row.optimized_path);
+      if (exists) {
+        servePath = row.optimized_path;
+      }
+    } catch {
+      // Fall through to original
+    }
   }
 
   // Fallback: original file
