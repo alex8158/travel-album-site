@@ -235,6 +235,18 @@ def find_duplicates(embeddings, threshold=0.92):
     k = min(len(vectors), 20)  # top-20 neighbors
     scores, neighbors = index.search(vectors, k)
 
+    # Debug: log max similarity for diagnostics
+    max_sim = 0.0
+    for i in range(len(vectors)):
+        for j_idx in range(k):
+            if neighbors[i][j_idx] != i:
+                max_sim = max(max_sim, float(scores[i][j_idx]))
+    print(
+        f"FAISS: {len(vectors)} vectors, dim={dim}, "
+        f"max_similarity={max_sim:.4f}, threshold={threshold}",
+        file=sys.stderr
+    )
+
     # Build adjacency from threshold
     from collections import defaultdict
     adj = defaultdict(set)

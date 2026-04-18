@@ -638,7 +638,7 @@ export async function hybridDeduplicate(
     try {
       onProgress?.('layer1', 'start');
       console.log('[hybridDedup] Layer 1 (ML): DINOv2 + FAISS dedup...');
-      const dinoThreshold = parseFloat(process.env.DINOV2_DEDUP_THRESHOLD ?? '0.92');
+      const dinoThreshold = parseFloat(process.env.DINOV2_DEDUP_THRESHOLD ?? '0.80');
       mlDedupPairs = await runDINOv2Dedup(rows, allIndices, { tempCache, threshold: dinoThreshold });
       usedMLDedup = true;
       console.log(`[hybridDedup] Layer 1 (ML): ${mlDedupPairs.length} confirmed pairs via DINOv2`);
