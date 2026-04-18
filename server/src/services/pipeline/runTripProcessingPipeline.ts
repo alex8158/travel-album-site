@@ -201,6 +201,8 @@ async function runBlurStage(
         pyResult.blurStatus &&
         pyResult.blurStatus !== 'unknown'
       ) {
+        console.log(`[blur] ${ctx.mediaId} python: score=${pyResult.blurScore.toFixed(1)} status=${pyResult.blurStatus}`);
+
         ctx.blur = {
           sharpnessScore: pyResult.blurScore,
           blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
@@ -212,6 +214,7 @@ async function runBlurStage(
         if (ctx.blur.blurStatus === 'suspect') {
           try {
             const nodeResult = await assessBlur(ctx.localPath);
+            console.log(`[blur] ${ctx.mediaId} node cross-check: score=${nodeResult.sharpnessScore?.toFixed(1)} musiq=${nodeResult.musiqScore ?? 'n/a'} status=${nodeResult.blurStatus}`);
             if (nodeResult.blurStatus === 'blurry') {
               ctx.blur = nodeResult;
             }
@@ -229,6 +232,7 @@ async function runBlurStage(
       }
 
       ctx.blur = await assessBlur(ctx.localPath);
+      console.log(`[blur] ${ctx.mediaId} node-only: score=${ctx.blur.sharpnessScore?.toFixed(1)} musiq=${ctx.blur.musiqScore ?? 'n/a'} status=${ctx.blur.blurStatus}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.processingErrors.push(`[blur] ${msg}`);
