@@ -103,31 +103,39 @@ async function applyPythonAnalyzeResults(
     const row = rows[i];
     const result = results[i];
 
-    if (result && !result.error) {
-      // Apply blur result: only trash clearly blurry, suspect stays active
-      if (result.blurStatus === 'blurry' && result.blurScore !== null) {
+    // --- Apply blur result: even if error=true, Python may have blur data ---
+    let blurApplied = false;
+    if (result && result.blurScore != null && result.blurStatus && result.blurStatus !== 'unknown') {
+      // Python returned blur data (blur detection runs independently of classification)
+      if (result.blurStatus === 'blurry') {
         trashBlurStmt.run(result.blurScore, row.id);
         blurryCount++;
+        blurApplied = true;
       } else {
         updateBlurStmt.run(result.blurScore, result.blurStatus, row.id);
+        blurApplied = true;
       }
-      // Apply classification: trust Python's category directly (single source of truth)
-      if (result.category) {
-        updateCategoryStmt.run(result.category, row.id);
-        deleteCategoryTagsStmt.run(row.id);
-        insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());
-      }
-    } else {
-      // Python failed for this image — per-image Node.js fallback for blur detection
-      console.log(`[process] Python error for ${row.original_filename}, running Node.js blur fallback`);
+    }
 
-      // Try Node.js blur detection on this single image
-      let fallbackBlurStatus = 'unknown';
-      let fallbackSharpness: number | null = null;
+    // --- Apply classification: only when no error ---
+    if (result && !result.error && result.category) {
+      updateCategoryStmt.run(result.category, row.id);
+      deleteCategoryTagsStmt.run(row.id);
+      insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());
+    } else {
+      // Classification failed or missing — mark as 'other'
+      updateCategoryStmt.run('other', row.id);
+      deleteCategoryTagsStmt.run(row.id);
+      insertTagStmt.run(uuidv4(), row.id, 'category:other', new Date().toISOString());
+    }
+
+    // --- If blur was not applied from Python, do Node.js fallback ---
+    if (!blurApplied) {
+      console.log(`[process] No Python blur data for ${row.original_filename}, running Node.js fallback`);
       if (tempPaths && tempPaths[i]) {
         try {
-          fallbackSharpness = await computeSharpness(tempPaths[i]);
-          fallbackBlurStatus = classifyBlur(fallbackSharpness, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD);
+          const fallbackSharpness = await computeSharpness(tempPaths[i]);
+          const fallbackBlurStatus = classifyBlur(fallbackSharpness, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD);
           if (fallbackBlurStatus === 'blurry') {
             trashBlurStmt.run(fallbackSharpness, row.id);
             blurryCount++;
@@ -142,15 +150,12 @@ async function applyPythonAnalyzeResults(
       } else {
         updateBlurStmt.run(null, 'suspect', row.id);
       }
+    }
 
-      // Classification: mark as 'other' (no Node.js classifier available)
-      updateCategoryStmt.run('other', row.id);
-      deleteCategoryTagsStmt.run(row.id);
-      insertTagStmt.run(uuidv4(), row.id, 'category:other', new Date().toISOString());
-      if (result?.errorMessage) {
-        const errText = `[python-analyze] ${result.errorMessage}`;
-        appendErrorStmt.run(errText, errText, row.id);
-      }
+    // Log error if present
+    if (result?.error && result?.errorMessage) {
+      const errText = `[python-analyze] ${result.errorMessage}`;
+      appendErrorStmt.run(errText, errText, row.id);
     }
   }
 
@@ -187,6 +192,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   const usePython = isPythonAvailable();
   let blurryDeletedCount = 0;
   let dedupDeletedCount = 0;
+  let pythonClassifyDone = false;
 
   if (usePython) {
     // Python path: analyze (blur + classify) then dedup
@@ -229,6 +235,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
             const analyzeResults = await analyzeImages(tempPaths);
             const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults, tempPaths);
             blurryDeletedCount = blurResult.blurryCount;
+            pythonClassifyDone = true;
 
             // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
             const dedupResult = await hybridDeduplicate(tripId, { tempCache });
@@ -243,10 +250,13 @@ router.post('/:id/process', async (req: Request, res: Response) => {
             await classifyTrip(tripId);
           }
         } else {
-          // All downloads failed — skip Python analysis, continue to subsequent stages
-          console.log(`[process] All image downloads failed for trip ${tripId}, skipping Python analysis`);
-          const dedupResult = await hybridDeduplicate(tripId, { tempCache });
+          // All downloads failed — fall back to Node.js blur + classify + dedup
+          console.log(`[process] All image downloads failed for trip ${tripId}, falling back to Node.js`);
+          const blurResult = await detectBlurry(tripId);
+          blurryDeletedCount = blurResult.blurryCount;
+          const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false, tempCache });
           dedupDeletedCount = dedupResult.removedCount;
+          await classifyTrip(tripId);
         }
       } finally {
         tempCache.cleanup();
@@ -273,7 +283,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
   failedCount += optimizeResults.filter(r => r.error).length;
 
   // Step 5: Classify — skip if Python already classified, otherwise use Rekognition
-  if (!usePython) {
+  if (!pythonClassifyDone) {
     await classifyTrip(tripId);
   }
   const classifiedCount = (db.prepare(
@@ -409,6 +419,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     const usePython = isPythonAvailable();
     let blurryDeletedCount = 0;
     let dedupDeletedCount = 0;
+    let pythonClassifyDone = false;
 
     // Step 1: Blur detection + Step 2: Dedup (combined when Python available)
     if (usePython) {
@@ -455,6 +466,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
               const analyzeResults = await analyzeImages(tempPaths);
               const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults, tempPaths);
               blurryDeletedCount = blurResult.blurryCount;
+              pythonClassifyDone = true;
 
               if (clientDisconnected) return;
               reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
@@ -520,18 +532,22 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
               await classifyTrip(tripId);
             }
           } else {
-            // All downloads failed — skip Python analysis, continue to subsequent stages
-            console.log(`[process] All image downloads failed for trip ${tripId}, skipping Python analysis`);
+            // All downloads failed — fall back to Node.js blur + classify + dedup
+            console.log(`[process] All image downloads failed for trip ${tripId}, falling back to Node.js`);
+            const blurResult = await detectBlurry(tripId);
+            blurryDeletedCount = blurResult.blurryCount;
             reporter.sendStepComplete('blurDetect', { processed: totalImages, total: totalImages });
 
             const activeImageCount = (db.prepare(
               "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
             ).get(tripId) as { cnt: number }).cnt;
             reporter.sendStepStart('dedup', { processed: 0, total: activeImageCount });
-            const dedupResult = await hybridDeduplicate(tripId, { tempCache });
+            const dedupResult = await hybridDeduplicate(tripId, { pythonAvailable: false, tempCache });
             dedupDeletedCount = dedupResult.removedCount;
             if (clientDisconnected) return;
             reporter.sendStepComplete('dedup', { processed: activeImageCount, total: activeImageCount });
+
+            await classifyTrip(tripId);
           }
         } finally {
           tempCache.cleanup();
@@ -587,7 +603,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
     // Step 5: Classify — skip if Python already classified, otherwise use Rekognition
     if (clientDisconnected) return;
     reporter.sendStepStart('classify', { processed: 0, total: postDedupCount });
-    if (!usePython) {
+    if (!pythonClassifyDone) {
       await classifyTrip(tripId);
     }
     const classifiedCount = (db.prepare(
