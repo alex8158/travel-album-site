@@ -47,18 +47,34 @@ export interface BlurDetectResult {
 
 /**
  * Compute the sharpness score of an image using Laplacian variance.
- * Applies CLAHE brightness normalization first to prevent dark/bright images
- * from being falsely classified as blurry (matching Python analyze.py behavior).
+ * Tries CLAHE brightness normalization first to prevent dark/bright images
+ * from being falsely classified as blurry. Falls back to plain Laplacian
+ * if CLAHE is not supported by the current libvips/sharp version.
  */
 export async function computeSharpness(imagePath: string): Promise<number> {
-  const { data, info } = await sharp(imagePath, { failOn: 'none' })
-    .grayscale()
-    // Brightness normalization: CLAHE equalizes contrast before Laplacian,
-    // preventing dark images from being falsely classified as blurry
-    .clahe({ width: 3, height: 3, maxSlope: 3 })
-    .convolve(LAPLACIAN_KERNEL)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  let data: Buffer;
+  let info: { width: number; height: number };
+
+  try {
+    // Try with CLAHE normalization (preferred — matches Python analyze.py)
+    const result = await sharp(imagePath, { failOn: 'none' })
+      .grayscale()
+      .clahe({ width: 3, height: 3, maxSlope: 3 })
+      .convolve(LAPLACIAN_KERNEL)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    data = result.data;
+    info = result.info;
+  } catch {
+    // CLAHE not supported — fall back to plain grayscale Laplacian
+    const result = await sharp(imagePath, { failOn: 'none' })
+      .grayscale()
+      .convolve(LAPLACIAN_KERNEL)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    data = result.data;
+    info = result.info;
+  }
 
   const pixelCount = info.width * info.height;
   let sum = 0;
