@@ -46,12 +46,15 @@ export interface BlurDetectResult {
 
 /**
  * Compute the sharpness score of an image using Laplacian variance.
- * Applies brightness normalization first to prevent dark/bright images
- * from being falsely classified as blurry.
+ * Applies CLAHE brightness normalization first to prevent dark/bright images
+ * from being falsely classified as blurry (matching Python analyze.py behavior).
  */
 export async function computeSharpness(imagePath: string): Promise<number> {
   const { data, info } = await sharp(imagePath, { failOn: 'none' })
     .grayscale()
+    // Brightness normalization: CLAHE equalizes contrast before Laplacian,
+    // preventing dark images from being falsely classified as blurry
+    .clahe({ width: 3, height: 3, maxSlope: 3 })
     .convolve(LAPLACIAN_KERNEL)
     .raw()
     .toBuffer({ resolveWithObject: true });

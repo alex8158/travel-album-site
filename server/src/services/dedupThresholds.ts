@@ -35,7 +35,7 @@ export const CLIP_GRAY_LOW_THRESHOLD = 0.85;
 export const CLIP_STRICT_THRESHOLD = 0.955;
 
 /** top-k 近邻搜索的 k 值。 */
-export const CLIP_TOP_K = 5;
+export const CLIP_TOP_K = 15;
 
 /**
  * [0.85, 0.90) 档序列位置差限制: abs(i-j) ≤ 12。
