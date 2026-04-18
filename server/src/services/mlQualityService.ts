@@ -9,6 +9,7 @@
 
 import { spawn } from 'child_process';
 import path from 'path';
+import { getPythonPath } from '../helpers/pythonPath';
 
 const PYTHON_SCRIPT = path.resolve(__dirname, '../../python/quality_service.py');
 
@@ -30,7 +31,7 @@ interface EmbeddingResult {
  */
 async function runPythonCommand(args: string[]): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('python3', [PYTHON_SCRIPT, ...args], {
+    const proc = spawn(getPythonPath(), [PYTHON_SCRIPT, ...args], {
       cwd: path.dirname(PYTHON_SCRIPT),
       env: { ...process.env },
     });
@@ -115,7 +116,7 @@ export async function isMLServiceAvailable(): Promise<boolean> {
   if (_mlAvailable !== null) return _mlAvailable;
 
   try {
-    const proc = spawn('python3', ['-c', 'import torch; import pyiqa; import faiss; print("ok")']);
+    const proc = spawn(getPythonPath(), ['-c', 'import torch; import pyiqa; import faiss; print("ok")']);
     _mlAvailable = await new Promise<boolean>((resolve) => {
       let out = '';
       proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });

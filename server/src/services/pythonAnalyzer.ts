@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { getPythonPath } from '../helpers/pythonPath';
 import {
   CLIP_CONFIRMED_THRESHOLD,
   CLIP_GRAY_HIGH_THRESHOLD,
@@ -120,7 +121,7 @@ export function isPythonAvailable(): boolean {
   try {
     // 1. Check python3 exists and is 3.9+
     const { execSync } = require('child_process');
-    const versionOutput = execSync('python3 --version', { encoding: 'utf-8', timeout: 5000 }).trim();
+    const versionOutput = execSync(`${getPythonPath()} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
     const match = versionOutput.match(/Python (\d+)\.(\d+)/);
     if (!match || parseInt(match[1]) < 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) < 9)) {
       console.log(`[pythonAnalyzer] Python version too old: ${versionOutput}`);
@@ -249,7 +250,7 @@ async function runAnalyzeBatch(
       '--clear-threshold', String(clearThreshold),
     ];
 
-    const { stdout, stderr } = await execFileAsync('python3', args, {
+    const { stdout, stderr } = await execFileAsync(getPythonPath(), args, {
       timeout: EXEC_TIMEOUT,
       maxBuffer: EXEC_MAX_BUFFER,
     });
@@ -318,7 +319,7 @@ export async function dedupImages(
       '--metadata', metadataStr,
     ];
 
-    const { stdout, stderr } = await execFileAsync('python3', args, {
+    const { stdout, stderr } = await execFileAsync(getPythonPath(), args, {
       timeout: EXEC_TIMEOUT,
       maxBuffer: EXEC_MAX_BUFFER,
     });
@@ -383,7 +384,7 @@ export async function clipNeighborSearch(
       '--hash-data', hashDataStr,
     ];
 
-    const { stdout, stderr } = await execFileAsync('python3', args, {
+    const { stdout, stderr } = await execFileAsync(getPythonPath(), args, {
       timeout: EXEC_TIMEOUT,
       maxBuffer: EXEC_MAX_BUFFER,
     });

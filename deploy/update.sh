@@ -49,91 +49,97 @@ do_update() {
   rm -rf "$APP_DIR/server/public"
   cp -r "$APP_DIR/client/dist" "$APP_DIR/server/public"
 
-  # Python 环境检测和安装
-  log "检测 Python 环境..."
-  if ! command -v python3 &>/dev/null; then
+  # Python 虚拟环境（使用 Python 3.11 如果可用，否则 python3）
+  VENV_DIR="$APP_DIR/server/python/.venv"
+  log "配置 Python 虚拟环境..."
+
+  # 尝试找到最高版本的 Python
+  PYTHON_BIN=""
+  for py in python3.12 python3.11 python3.10 python3; do
+    if command -v "$py" &>/dev/null; then
+      PYTHON_BIN="$py"
+      break
+    fi
+  done
+
+  if [ -z "$PYTHON_BIN" ]; then
     warn "Python3 未安装，正在安装..."
     if command -v yum &>/dev/null; then
-      sudo yum install -y python3 python3-pip
+      sudo yum install -y python3.11 python3.11-pip 2>/dev/null || sudo yum install -y python3 python3-pip
     elif command -v apt-get &>/dev/null; then
-      sudo apt-get update && sudo apt-get install -y python3 python3-pip
-    else
-      warn "无法自动安装 Python3，请手动安装"
+      sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv 2>/dev/null || sudo apt-get install -y python3 python3-venv
     fi
+    for py in python3.12 python3.11 python3.10 python3; do
+      if command -v "$py" &>/dev/null; then
+        PYTHON_BIN="$py"
+        break
+      fi
+    done
   fi
 
-  if command -v python3 &>/dev/null; then
-    PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+')
-    log "Python 版本: $PYTHON_VERSION"
+  if [ -n "$PYTHON_BIN" ]; then
+    log "使用 Python: $($PYTHON_BIN --version)"
 
-    # 确保 pip 可用
-    if ! python3 -m pip --version &>/dev/null; then
-      warn "pip 未安装，正在安装..."
-      python3 -m ensurepip --upgrade 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+    # 创建或复用虚拟环境
+    if [ ! -f "$VENV_DIR/bin/python" ]; then
+      log "创建虚拟环境: $VENV_DIR"
+      $PYTHON_BIN -m venv "$VENV_DIR"
     fi
 
-    # 安装基础 Python 依赖（不含 ML 模型）
-    log "安装基础 Python 依赖..."
-    python3 -m pip install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
+    VENV_PIP="$VENV_DIR/bin/pip"
+    VENV_PYTHON="$VENV_DIR/bin/python"
 
-    # 安装 ML 依赖（torch CPU-only 单独装，避免下载 GPU 版本）
+    # 升级 pip
+    $VENV_PYTHON -m pip install --upgrade pip --quiet
+
+    # 基础依赖
+    log "安装基础 Python 依赖..."
+    $VENV_PIP install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
+
+    # ML 依赖（CPU-only torch）
     log "安装 ML 依赖（CPU-only torch）..."
-    if ! python3 -c "import torch" 2>/dev/null; then
+    if ! $VENV_PYTHON -c "import torch" 2>/dev/null; then
       log "首次安装 torch + torchvision (CPU-only)..."
-      python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+      $VENV_PIP install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
     else
       log "torch 已安装，跳过"
     fi
-    python3 -m pip install pyiqa faiss-cpu --quiet
-    if ! python3 -c "import clip" 2>/dev/null; then
+    $VENV_PIP install pyiqa faiss-cpu --quiet
+    if ! $VENV_PYTHON -c "import clip" 2>/dev/null; then
       log "安装 OpenAI CLIP..."
-      python3 -m pip install git+https://github.com/openai/CLIP.git --quiet
+      $VENV_PIP install git+https://github.com/openai/CLIP.git --quiet
     else
       log "CLIP 已安装，跳过"
     fi
 
-    # 检测并准备 CLIP ONNX 模型（仅首次）
+    # CLIP ONNX 模型
     ONNX_DIR="$APP_DIR/server/python/models/clip-vit-base-patch32-onnx"
     if [ ! -d "$ONNX_DIR" ] || [ ! -f "$ONNX_DIR/config.json" ]; then
       log "首次部署：下载并导出 CLIP ONNX 模型..."
-      python3 "$APP_DIR/server/python/prepare_model.py"
+      $VENV_PYTHON "$APP_DIR/server/python/prepare_model.py"
     else
       log "CLIP ONNX 模型已存在，跳过下载"
     fi
 
-    # 预热 ML 模型（首次运行时下载 DINOv2、MUSIQ、LAION aesthetic 权重）
+    # 预热 ML 模型
     log "检测 ML 模型..."
-    if python3 -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
-      ML_MODELS_READY=$(python3 -c "
-import os, sys
-# Check if DINOv2 cache exists (torch hub)
-hub_dir = os.path.expanduser('~/.cache/torch/hub/checkpoints')
-aesthetic_path = os.path.join('$APP_DIR/server/python/models', 'sac+logos+ava1-l14-linearMSE.pth')
-if os.path.exists(aesthetic_path):
-    print('ready')
-else:
-    print('need_download')
-" 2>/dev/null)
-      if [ "$ML_MODELS_READY" = "need_download" ]; then
-        log "首次部署：预下载 ML 模型（DINOv2、MUSIQ、LAION aesthetic）..."
-        python3 -c "
+    if $VENV_PYTHON -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
+      AESTHETIC_PATH="$APP_DIR/server/python/models/sac+logos+ava1-l14-linearMSE.pth"
+      if [ ! -f "$AESTHETIC_PATH" ]; then
+        log "首次部署：预下载 ML 模型..."
+        $VENV_PYTHON -c "
 import sys
 sys.path.insert(0, '$APP_DIR/server/python')
 from quality_service import _load_dinov2, _load_musiq, _load_aesthetic
-print('Loading DINOv2...', file=sys.stderr)
-_load_dinov2()
-print('Loading MUSIQ...', file=sys.stderr)
-_load_musiq()
-print('Loading LAION aesthetic...', file=sys.stderr)
-_load_aesthetic()
+_load_dinov2(); _load_musiq(); _load_aesthetic()
 print('All ML models ready.', file=sys.stderr)
 " 2>&1 | while read line; do log "$line"; done
       else
         log "ML 模型已缓存，跳过下载"
       fi
-      log "ML 质量服务可用（DINOv2 去重 + MUSIQ/aesthetic 评分 + 双条件模糊检测）"
+      log "ML 质量服务可用"
     else
-      warn "ML 依赖不完整，将使用传统算法（CLIP + 六维评分 + Laplacian）"
+      warn "ML 依赖不完整，将使用传统算法"
     fi
   else
     warn "Python3 不可用，将使用 Node.js 回退算法"
@@ -193,87 +199,88 @@ echo ">> 复制客户端构建产物..."
 rm -rf "$APP_DIR/server/public"
 cp -r "$APP_DIR/client/dist" "$APP_DIR/server/public"
 
-# Python 环境检测和安装
-echo ">> 检测 Python 环境..."
-if ! command -v python3 &>/dev/null; then
+# Python 虚拟环境
+VENV_DIR="$APP_DIR/server/python/.venv"
+echo ">> 配置 Python 虚拟环境..."
+
+PYTHON_BIN=""
+for py in python3.12 python3.11 python3.10 python3; do
+  if command -v "$py" &>/dev/null; then
+    PYTHON_BIN="$py"
+    break
+  fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
   echo ">> Python3 未安装，正在安装..."
   if command -v yum &>/dev/null; then
-    sudo yum install -y python3 python3-pip
+    sudo yum install -y python3.11 python3.11-pip 2>/dev/null || sudo yum install -y python3 python3-pip
   elif command -v apt-get &>/dev/null; then
-    sudo apt-get update && sudo apt-get install -y python3 python3-pip
-  else
-    echo ">> 警告：无法自动安装 Python3，请手动安装"
+    sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv 2>/dev/null || sudo apt-get install -y python3 python3-venv
   fi
+  for py in python3.12 python3.11 python3.10 python3; do
+    if command -v "$py" &>/dev/null; then
+      PYTHON_BIN="$py"
+      break
+    fi
+  done
 fi
 
-if command -v python3 &>/dev/null; then
-  PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+')
-  echo ">> Python 版本: $PYTHON_VERSION"
+if [ -n "$PYTHON_BIN" ]; then
+  echo ">> 使用 Python: $($PYTHON_BIN --version)"
 
-  # 确保 pip 可用
-  if ! python3 -m pip --version &>/dev/null; then
-    echo ">> pip 未安装，正在安装..."
-    python3 -m ensurepip --upgrade 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+  if [ ! -f "$VENV_DIR/bin/python" ]; then
+    echo ">> 创建虚拟环境: $VENV_DIR"
+    $PYTHON_BIN -m venv "$VENV_DIR"
   fi
 
-  # 安装基础 Python 依赖
-  echo ">> 安装基础 Python 依赖..."
-  python3 -m pip install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
+  VENV_PIP="$VENV_DIR/bin/pip"
+  VENV_PYTHON="$VENV_DIR/bin/python"
 
-  # 安装 ML 依赖（torch CPU-only 单独装）
+  $VENV_PYTHON -m pip install --upgrade pip --quiet
+
+  echo ">> 安装基础 Python 依赖..."
+  $VENV_PIP install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
+
   echo ">> 安装 ML 依赖（CPU-only torch）..."
-  if ! python3 -c "import torch" 2>/dev/null; then
+  if ! $VENV_PYTHON -c "import torch" 2>/dev/null; then
     echo ">> 首次安装 torch + torchvision (CPU-only)..."
-    python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+    $VENV_PIP install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
   else
     echo ">> torch 已安装，跳过"
   fi
-  python3 -m pip install pyiqa faiss-cpu --quiet
-  if ! python3 -c "import clip" 2>/dev/null; then
+  $VENV_PIP install pyiqa faiss-cpu --quiet
+  if ! $VENV_PYTHON -c "import clip" 2>/dev/null; then
     echo ">> 安装 OpenAI CLIP..."
-    python3 -m pip install git+https://github.com/openai/CLIP.git --quiet
+    $VENV_PIP install git+https://github.com/openai/CLIP.git --quiet
   else
     echo ">> CLIP 已安装，跳过"
   fi
 
-  # 检测并准备 CLIP ONNX 模型（仅首次）
   ONNX_DIR="$APP_DIR/server/python/models/clip-vit-base-patch32-onnx"
   if [ ! -d "$ONNX_DIR" ] || [ ! -f "$ONNX_DIR/config.json" ]; then
     echo ">> 首次部署：下载并导出 CLIP ONNX 模型..."
-    python3 "$APP_DIR/server/python/prepare_model.py"
+    $VENV_PYTHON "$APP_DIR/server/python/prepare_model.py"
   else
     echo ">> CLIP ONNX 模型已存在，跳过下载"
   fi
 
-  # 预热 ML 模型
   echo ">> 检测 ML 模型..."
-  if python3 -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
-    ML_MODELS_READY=$(python3 -c "
-import os
-aesthetic_path = os.path.join('$APP_DIR/server/python/models', 'sac+logos+ava1-l14-linearMSE.pth')
-if os.path.exists(aesthetic_path):
-    print('ready')
-else:
-    print('need_download')
-" 2>/dev/null)
-    if [ "$ML_MODELS_READY" = "need_download" ]; then
-      echo ">> 首次部署：预下载 ML 模型（DINOv2、MUSIQ、LAION aesthetic）..."
-      python3 -c "
+  if $VENV_PYTHON -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
+    AESTHETIC_PATH="$APP_DIR/server/python/models/sac+logos+ava1-l14-linearMSE.pth"
+    if [ ! -f "$AESTHETIC_PATH" ]; then
+      echo ">> 首次部署：预下载 ML 模型..."
+      $VENV_PYTHON -c "
 import sys
 sys.path.insert(0, '$APP_DIR/server/python')
 from quality_service import _load_dinov2, _load_musiq, _load_aesthetic
-print('Loading DINOv2...', file=sys.stderr)
-_load_dinov2()
-print('Loading MUSIQ...', file=sys.stderr)
-_load_musiq()
-print('Loading LAION aesthetic...', file=sys.stderr)
-_load_aesthetic()
+_load_dinov2(); _load_musiq(); _load_aesthetic()
 print('All ML models ready.', file=sys.stderr)
 "
     else
       echo ">> ML 模型已缓存，跳过下载"
     fi
-    echo ">> ML 质量服务可用（DINOv2 去重 + MUSIQ/aesthetic 评分 + 双条件模糊检测）"
+    echo ">> ML 质量服务可用"
   else
     echo ">> 警告：ML 依赖不完整，将使用传统算法"
   fi

@@ -23,8 +23,8 @@ yum install -y ffmpeg || {
 # Install nginx and git
 yum install -y nginx git
 
-# Install Python3 and pip
-yum install -y python3 python3-pip || {
+# Install Python 3.11+ and pip
+yum install -y python3.11 python3.11-pip 2>/dev/null || yum install -y python3 python3-pip || {
   echo "Python3 安装失败，ML 功能将不可用"
 }
 
@@ -62,46 +62,55 @@ if [ ! -f server/.env ]; then
   echo ">> 已创建 server/.env（默认 AI_REVIEW_ENABLED=false，不调用 LLM）"
 fi
 
-# Python 依赖安装
-if command -v python3 &>/dev/null; then
-  echo ">> Python 版本: $(python3 --version)"
+# Python 虚拟环境
+APP_DIR="/home/ec2-user/travel-album-site"
+VENV_DIR="$APP_DIR/server/python/.venv"
 
-  # 确保 pip 可用
-  python3 -m pip --version &>/dev/null || python3 -m ensurepip --upgrade 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+PYTHON_BIN=""
+for py in python3.12 python3.11 python3.10 python3; do
+  if command -v "$py" &>/dev/null; then
+    PYTHON_BIN="$py"
+    break
+  fi
+done
 
-  # 基础 Python 依赖
+if [ -n "$PYTHON_BIN" ]; then
+  echo ">> 使用 Python: $($PYTHON_BIN --version)"
+  $PYTHON_BIN -m venv "$VENV_DIR"
+  VENV_PIP="$VENV_DIR/bin/pip"
+  VENV_PYTHON="$VENV_DIR/bin/python"
+
+  $VENV_PYTHON -m pip install --upgrade pip --quiet
+
   echo ">> 安装基础 Python 依赖..."
-  python3 -m pip install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
+  $VENV_PIP install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
 
-  # ML 依赖（CPU-only torch）
   echo ">> 安装 ML 依赖（CPU-only torch）..."
-  python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
-  python3 -m pip install pyiqa faiss-cpu --quiet
-  python3 -m pip install git+https://github.com/openai/CLIP.git --quiet
+  $VENV_PIP install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+  $VENV_PIP install pyiqa faiss-cpu --quiet
+  $VENV_PIP install git+https://github.com/openai/CLIP.git --quiet
 
-  # CLIP ONNX 模型
-  ONNX_DIR="/home/ec2-user/travel-album-site/server/python/models/clip-vit-base-patch32-onnx"
+  ONNX_DIR="$APP_DIR/server/python/models/clip-vit-base-patch32-onnx"
   if [ ! -d "$ONNX_DIR" ] || [ ! -f "$ONNX_DIR/config.json" ]; then
     echo ">> 下载 CLIP ONNX 模型..."
-    python3 /home/ec2-user/travel-album-site/server/python/prepare_model.py
+    $VENV_PYTHON "$APP_DIR/server/python/prepare_model.py"
   fi
 
-  # 预热 ML 模型（DINOv2、MUSIQ、LAION aesthetic）
-  if python3 -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
+  if $VENV_PYTHON -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
     echo ">> 预下载 ML 模型..."
-    python3 -c "
+    $VENV_PYTHON -c "
 import sys
-sys.path.insert(0, '/home/ec2-user/travel-album-site/server/python')
+sys.path.insert(0, '$APP_DIR/server/python')
 from quality_service import _load_dinov2, _load_musiq, _load_aesthetic
-_load_dinov2()
-_load_musiq()
-_load_aesthetic()
+_load_dinov2(); _load_musiq(); _load_aesthetic()
 print('All ML models ready.')
 " 2>&1
     echo ">> ML 质量服务就绪"
   else
     echo ">> 警告：ML 依赖不完整，将使用传统算法"
   fi
+
+  chown -R ec2-user:ec2-user "$VENV_DIR"
 else
   echo ">> 警告：Python3 不可用，将使用 Node.js 回退算法"
 fi
