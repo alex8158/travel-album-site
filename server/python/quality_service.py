@@ -33,7 +33,10 @@ _aesthetic_clip_preprocess = None
 
 
 def _load_dinov2():
-    """Load DINOv2-small for embedding extraction."""
+    """Load DINOv2-small for embedding extraction.
+    Uses HuggingFace transformers (compatible with Python 3.9+)
+    instead of torch.hub (which requires Python 3.10+ for latest DINOv2).
+    """
     global _dinov2_model, _dinov2_transform
     if _dinov2_model is not None:
         return _dinov2_model, _dinov2_transform
@@ -41,15 +44,31 @@ def _load_dinov2():
     import torch
     from torchvision import transforms
 
-    print("Loading DINOv2-small...", file=sys.stderr)
-    _dinov2_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', pretrained=True)
-    _dinov2_model.eval()
+    print("Loading DINOv2-small via transformers...", file=sys.stderr)
+
+    try:
+        from transformers import AutoModel
+        _dinov2_model = AutoModel.from_pretrained(
+            "facebook/dinov2-small", trust_remote_code=True
+        )
+        _dinov2_model.eval()
+    except Exception as e:
+        print(f"transformers load failed ({e}), trying torch.hub...",
+              file=sys.stderr)
+        _dinov2_model = torch.hub.load(
+            'facebookresearch/dinov2', 'dinov2_vits14', pretrained=True
+        )
+        _dinov2_model.eval()
 
     _dinov2_transform = transforms.Compose([
-        transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.Resize(
+            256,
+            interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]),
     ])
 
     return _dinov2_model, _dinov2_transform
@@ -103,6 +122,7 @@ def _load_aesthetic():
 def extract_embeddings(image_paths):
     """Extract DINOv2 embeddings for a list of images.
     Returns list of {path, embedding} dicts.
+    Handles both torch.hub and HuggingFace transformers model outputs.
     """
     import torch
     from PIL import Image
@@ -115,11 +135,26 @@ def extract_embeddings(image_paths):
             img = Image.open(path).convert("RGB")
             tensor = transform(img).unsqueeze(0)
             with torch.no_grad():
-                embedding = model(tensor)
-            emb = embedding[0].numpy().tolist()
-            results.append({"path": path, "embedding": emb, "error": None})
+                output = model(tensor)
+            # HuggingFace transformers returns BaseModelOutput
+            # with .last_hidden_state; torch.hub returns tensor
+            if hasattr(output, 'last_hidden_state'):
+                # Use CLS token (first token) as embedding
+                emb = output.last_hidden_state[:, 0].squeeze()
+            elif hasattr(output, 'pooler_output') and \
+                    output.pooler_output is not None:
+                emb = output.pooler_output.squeeze()
+            else:
+                emb = output[0] if isinstance(output, tuple) \
+                    else output.squeeze()
+            emb = emb.numpy().tolist()
+            results.append({
+                "path": path, "embedding": emb, "error": None
+            })
         except Exception as e:
-            results.append({"path": path, "embedding": None, "error": str(e)})
+            results.append({
+                "path": path, "embedding": None, "error": str(e)
+            })
 
     return results
 
