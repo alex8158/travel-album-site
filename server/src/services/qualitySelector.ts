@@ -5,6 +5,7 @@ import type { MediaItem, QualityScore } from '../types';
 import { MediaItemRow, rowToMediaItem as baseRowToMediaItem } from '../helpers/mediaItemRow';
 import { computeSharpness } from './blurDetector';
 import { getStorageProvider } from '../storage/factory';
+import { batchMLQuality, isMLServiceAvailable } from './mlQualityService';
 
 /**
  * Laplacian convolution kernel for noise estimation.
@@ -415,6 +416,103 @@ export function getTrashedDuplicateCount(tripId: string): number {
     "SELECT COUNT(*) as count FROM media_items WHERE trip_id = ? AND status = 'trashed' AND trashed_reason = 'duplicate'"
   ).get(tripId) as { count: number };
   return row.count;
+}
+
+/**
+ * ML-enhanced quality scoring: uses MUSIQ (IQA) + LAION aesthetic + traditional dimensions.
+ * When ML service is available, replaces the six-dimension sharpness-heavy scoring with:
+ *   final_score = 0.40 * musiq_norm + 0.25 * aesthetic_norm + 0.15 * resolution + 0.10 * exposure + 0.10 * fileSize
+ *
+ * Falls back to traditional computeQualityScore when ML is unavailable.
+ */
+export async function computeMLEnhancedQuality(
+  imagePaths: string[],
+  mediaIds: string[]
+): Promise<Array<{ mediaId: string; score: number }>> {
+  const mlAvailable = await isMLServiceAvailable();
+
+  if (!mlAvailable || imagePaths.length === 0) {
+    // Fallback to traditional scoring
+    const results: Array<{ mediaId: string; score: number }> = [];
+    for (let i = 0; i < imagePaths.length; i++) {
+      try {
+        const score = await computeQualityScore(imagePaths[i], mediaIds[i]);
+        results.push({ mediaId: mediaIds[i], score: score.overall });
+      } catch {
+        results.push({ mediaId: mediaIds[i], score: 0 });
+      }
+    }
+    return results;
+  }
+
+  try {
+    console.log(`[qualitySelector] ML-enhanced scoring for ${imagePaths.length} images...`);
+    const mlResults = await batchMLQuality(imagePaths);
+
+    const results: Array<{ mediaId: string; score: number }> = [];
+    for (let i = 0; i < imagePaths.length; i++) {
+      const ml = mlResults[i];
+      let finalScore = 0;
+
+      if (ml && !ml.error) {
+        // MUSIQ score: typically 0-100, normalize to 0-1
+        const musiqNorm = ml.musiq_score != null ? Math.min(ml.musiq_score / 100, 1.0) : null;
+        // Aesthetic score: typically 1-10, normalize to 0-1
+        const aestheticNorm = ml.aesthetic_score != null ? Math.min(ml.aesthetic_score / 10, 1.0) : null;
+
+        // Get resolution and file size from traditional analysis
+        let resolutionNorm = 0;
+        let exposureNorm = 0.5;
+        let fileSizeNorm = 0;
+        try {
+          const meta = await sharp(imagePaths[i]).metadata();
+          resolutionNorm = normalizeResolution((meta.width ?? 0) * (meta.height ?? 0));
+          const stats = await sharp(imagePaths[i]).stats();
+          const avgMean = stats.channels.map(c => c.mean).reduce((a, b) => a + b, 0) / stats.channels.length;
+          exposureNorm = normalizeExposure(avgMean);
+          const fileStat = await fs.promises.stat(imagePaths[i]);
+          fileSizeNorm = normalizeFileSize(fileStat.size);
+        } catch { /* use defaults */ }
+
+        // Weighted combination
+        let weightedSum = 0;
+        let totalWeight = 0;
+
+        if (musiqNorm != null) { weightedSum += 0.40 * musiqNorm; totalWeight += 0.40; }
+        if (aestheticNorm != null) { weightedSum += 0.25 * aestheticNorm; totalWeight += 0.25; }
+        weightedSum += 0.15 * resolutionNorm; totalWeight += 0.15;
+        weightedSum += 0.10 * exposureNorm; totalWeight += 0.10;
+        weightedSum += 0.10 * fileSizeNorm; totalWeight += 0.10;
+
+        finalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+      } else {
+        // ML failed for this image, fall back to traditional
+        try {
+          const score = await computeQualityScore(imagePaths[i], mediaIds[i]);
+          finalScore = score.overall;
+        } catch {
+          finalScore = 0;
+        }
+      }
+
+      results.push({ mediaId: mediaIds[i], score: finalScore });
+    }
+
+    console.log(`[qualitySelector] ML-enhanced scoring complete`);
+    return results;
+  } catch (err) {
+    console.warn(`[qualitySelector] ML scoring failed, falling back to traditional: ${err}`);
+    const results: Array<{ mediaId: string; score: number }> = [];
+    for (let i = 0; i < imagePaths.length; i++) {
+      try {
+        const score = await computeQualityScore(imagePaths[i], mediaIds[i]);
+        results.push({ mediaId: mediaIds[i], score: score.overall });
+      } catch {
+        results.push({ mediaId: mediaIds[i], score: 0 });
+      }
+    }
+    return results;
+  }
 }
 
 /**

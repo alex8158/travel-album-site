@@ -5,7 +5,9 @@ Pillow>=10.0.0
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
 
-# ML quality models
+# ML quality models (optional — system auto-falls back to traditional algorithms if unavailable)
+# For CPU-only servers, install torch separately first:
+#   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 torch>=2.0.0
 torchvision>=0.15.0
 pyiqa>=0.1.10

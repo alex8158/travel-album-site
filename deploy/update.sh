@@ -72,17 +72,68 @@ do_update() {
       python3 -m ensurepip --upgrade 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | python3
     fi
 
-    # 安装 Python 依赖
-    log "安装 Python 依赖..."
-    python3 -m pip install -r "$APP_DIR/server/python/requirements.txt" --quiet
+    # 安装基础 Python 依赖（不含 ML 模型）
+    log "安装基础 Python 依赖..."
+    python3 -m pip install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
 
-    # 检测并准备 CLIP 模型（仅首次）
+    # 安装 ML 依赖（torch CPU-only 单独装，避免下载 GPU 版本）
+    log "安装 ML 依赖（CPU-only torch）..."
+    if ! python3 -c "import torch" 2>/dev/null; then
+      log "首次安装 torch + torchvision (CPU-only)..."
+      python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+    else
+      log "torch 已安装，跳过"
+    fi
+    python3 -m pip install pyiqa faiss-cpu --quiet
+    if ! python3 -c "import clip" 2>/dev/null; then
+      log "安装 OpenAI CLIP..."
+      python3 -m pip install git+https://github.com/openai/CLIP.git --quiet
+    else
+      log "CLIP 已安装，跳过"
+    fi
+
+    # 检测并准备 CLIP ONNX 模型（仅首次）
     ONNX_DIR="$APP_DIR/server/python/models/clip-vit-base-patch32-onnx"
     if [ ! -d "$ONNX_DIR" ] || [ ! -f "$ONNX_DIR/config.json" ]; then
       log "首次部署：下载并导出 CLIP ONNX 模型..."
       python3 "$APP_DIR/server/python/prepare_model.py"
     else
-      log "CLIP 模型已存在，跳过下载"
+      log "CLIP ONNX 模型已存在，跳过下载"
+    fi
+
+    # 预热 ML 模型（首次运行时下载 DINOv2、MUSIQ、LAION aesthetic 权重）
+    log "检测 ML 模型..."
+    if python3 -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
+      ML_MODELS_READY=$(python3 -c "
+import os, sys
+# Check if DINOv2 cache exists (torch hub)
+hub_dir = os.path.expanduser('~/.cache/torch/hub/checkpoints')
+aesthetic_path = os.path.join('$APP_DIR/server/python/models', 'sac+logos+ava1-l14-linearMSE.pth')
+if os.path.exists(aesthetic_path):
+    print('ready')
+else:
+    print('need_download')
+" 2>/dev/null)
+      if [ "$ML_MODELS_READY" = "need_download" ]; then
+        log "首次部署：预下载 ML 模型（DINOv2、MUSIQ、LAION aesthetic）..."
+        python3 -c "
+import sys
+sys.path.insert(0, '$APP_DIR/server/python')
+from quality_service import _load_dinov2, _load_musiq, _load_aesthetic
+print('Loading DINOv2...', file=sys.stderr)
+_load_dinov2()
+print('Loading MUSIQ...', file=sys.stderr)
+_load_musiq()
+print('Loading LAION aesthetic...', file=sys.stderr)
+_load_aesthetic()
+print('All ML models ready.', file=sys.stderr)
+" 2>&1 | while read line; do log "$line"; done
+      else
+        log "ML 模型已缓存，跳过下载"
+      fi
+      log "ML 质量服务可用（DINOv2 去重 + MUSIQ/aesthetic 评分 + 双条件模糊检测）"
+    else
+      warn "ML 依赖不完整，将使用传统算法（CLIP + 六维评分 + Laplacian）"
     fi
   else
     warn "Python3 不可用，将使用 Node.js 回退算法"
@@ -165,17 +216,66 @@ if command -v python3 &>/dev/null; then
     python3 -m ensurepip --upgrade 2>/dev/null || curl -sS https://bootstrap.pypa.io/get-pip.py | python3
   fi
 
-  # 安装 Python 依赖
-  echo ">> 安装 Python 依赖..."
-  python3 -m pip install -r "$APP_DIR/server/python/requirements.txt" --quiet
+  # 安装基础 Python 依赖
+  echo ">> 安装基础 Python 依赖..."
+  python3 -m pip install transformers optimum onnxruntime Pillow opencv-python-headless numpy --quiet
 
-  # 检测并准备 CLIP 模型（仅首次）
+  # 安装 ML 依赖（torch CPU-only 单独装）
+  echo ">> 安装 ML 依赖（CPU-only torch）..."
+  if ! python3 -c "import torch" 2>/dev/null; then
+    echo ">> 首次安装 torch + torchvision (CPU-only)..."
+    python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
+  else
+    echo ">> torch 已安装，跳过"
+  fi
+  python3 -m pip install pyiqa faiss-cpu --quiet
+  if ! python3 -c "import clip" 2>/dev/null; then
+    echo ">> 安装 OpenAI CLIP..."
+    python3 -m pip install git+https://github.com/openai/CLIP.git --quiet
+  else
+    echo ">> CLIP 已安装，跳过"
+  fi
+
+  # 检测并准备 CLIP ONNX 模型（仅首次）
   ONNX_DIR="$APP_DIR/server/python/models/clip-vit-base-patch32-onnx"
   if [ ! -d "$ONNX_DIR" ] || [ ! -f "$ONNX_DIR/config.json" ]; then
     echo ">> 首次部署：下载并导出 CLIP ONNX 模型..."
     python3 "$APP_DIR/server/python/prepare_model.py"
   else
-    echo ">> CLIP 模型已存在，跳过下载"
+    echo ">> CLIP ONNX 模型已存在，跳过下载"
+  fi
+
+  # 预热 ML 模型
+  echo ">> 检测 ML 模型..."
+  if python3 -c "import torch; import pyiqa; import faiss" 2>/dev/null; then
+    ML_MODELS_READY=$(python3 -c "
+import os
+aesthetic_path = os.path.join('$APP_DIR/server/python/models', 'sac+logos+ava1-l14-linearMSE.pth')
+if os.path.exists(aesthetic_path):
+    print('ready')
+else:
+    print('need_download')
+" 2>/dev/null)
+    if [ "$ML_MODELS_READY" = "need_download" ]; then
+      echo ">> 首次部署：预下载 ML 模型（DINOv2、MUSIQ、LAION aesthetic）..."
+      python3 -c "
+import sys
+sys.path.insert(0, '$APP_DIR/server/python')
+from quality_service import _load_dinov2, _load_musiq, _load_aesthetic
+print('Loading DINOv2...', file=sys.stderr)
+_load_dinov2()
+print('Loading MUSIQ...', file=sys.stderr)
+_load_musiq()
+print('Loading LAION aesthetic...', file=sys.stderr)
+_load_aesthetic()
+print('All ML models ready.', file=sys.stderr)
+"
+    else
+      echo ">> ML 模型已缓存，跳过下载"
+    fi
+    echo ">> ML 质量服务可用（DINOv2 去重 + MUSIQ/aesthetic 评分 + 双条件模糊检测）"
+  else
+    echo ">> 警告：ML 依赖不完整，将使用传统算法"
   fi
 else
   echo ">> 警告：Python3 不可用，将使用 Node.js 回退算法"

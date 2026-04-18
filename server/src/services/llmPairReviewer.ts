@@ -151,6 +151,13 @@ function createOpenAIProviderClient(): BedrockClient {
 export function detectConfiguredProviders(
   preferredProvider?: string,
 ): ProviderConfig[] {
+  // Check AI_REVIEW_ENABLED — if explicitly set to false, skip all LLM providers
+  const aiReviewEnabled = process.env.AI_REVIEW_ENABLED;
+  if (aiReviewEnabled !== undefined && aiReviewEnabled.toLowerCase() === 'false') {
+    console.log('[llmPairReviewer] AI_REVIEW_ENABLED=false — LLM pair review disabled');
+    return [];
+  }
+
   const available: ProviderConfig[] = [];
 
   // Detect OpenAI

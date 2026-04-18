@@ -446,7 +446,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
               // Layer-level progress labels for SSE
               const layerLabels: Record<HybridDedupLayer, string> = {
                 layer0: 'Layer 0: Hash 预过滤',
-                layer1: 'Layer 1: CLIP 三档粗筛',
+                layer1: 'Layer 1: 语义相似度检测',
                 layer2: 'Layer 2: LLM 逐对精判',
                 strictThreshold: 'Strict Threshold 回退',
                 layer3: 'Layer 3: Union-Find 分组',

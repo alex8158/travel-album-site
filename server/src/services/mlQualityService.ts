@@ -104,25 +104,33 @@ export async function findDuplicateGroups(
   return result as number[][];
 }
 
+// Cache ML availability check result
+let _mlAvailable: boolean | null = null;
+
 /**
  * Check if the ML quality service is available (Python + dependencies installed).
+ * Result is cached after first check.
  */
 export async function isMLServiceAvailable(): Promise<boolean> {
+  if (_mlAvailable !== null) return _mlAvailable;
+
   try {
-    await runPythonCommand(['quality', '/dev/null']);
-    return false; // /dev/null should fail gracefully
+    const proc = spawn('python3', ['-c', 'import torch; import pyiqa; import faiss; print("ok")']);
+    _mlAvailable = await new Promise<boolean>((resolve) => {
+      let out = '';
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      proc.on('close', (code) => { resolve(code === 0 && out.trim() === 'ok'); });
+      proc.on('error', () => { resolve(false); });
+    });
   } catch {
-    // Check if it's a "module not found" error vs just a bad image
-    try {
-      const proc = spawn('python3', ['-c', 'import torch; import pyiqa; import faiss; print("ok")']);
-      return new Promise((resolve) => {
-        let out = '';
-        proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-        proc.on('close', (code) => { resolve(code === 0 && out.trim() === 'ok'); });
-        proc.on('error', () => { resolve(false); });
-      });
-    } catch {
-      return false;
-    }
+    _mlAvailable = false;
   }
+
+  console.log(`[mlQuality] ML service available: ${_mlAvailable}`);
+  return _mlAvailable;
+}
+
+/** Reset cached availability (for testing). */
+export function resetMLAvailabilityCache(): void {
+  _mlAvailable = null;
 }

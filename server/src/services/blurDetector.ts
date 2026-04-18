@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 import { deleteMediaItemFromDb } from '../helpers/deleteMediaItem';
+import { computeMLQuality, isMLServiceAvailable } from './mlQualityService';
 
 /**
  * Laplacian convolution kernel for sharpness detection.
@@ -87,6 +88,55 @@ export function classifyBlur(
   return 'clear';
 }
 
+/**
+ * Dual-condition blur classification using Laplacian + MUSIQ IQA.
+ * Only marks as blurry when BOTH conditions are met:
+ * - Laplacian variance < blurThreshold (traditional blur indicator)
+ * - MUSIQ score < musiqBlurThreshold (ML quality indicator)
+ *
+ * This prevents dark/night/underwater images from being falsely classified as blurry.
+ * Falls back to single-condition (Laplacian only) when ML service is unavailable.
+ */
+export async function classifyBlurDual(
+  imagePath: string,
+  blurThreshold: number,
+  clearThreshold: number,
+  musiqBlurThreshold = 30  // MUSIQ score below 30 = likely genuinely bad quality
+): Promise<{ blurStatus: BlurStatus; sharpnessScore: number; musiqScore: number | null }> {
+  const sharpnessScore = await computeSharpness(imagePath);
+
+  // If clearly sharp by Laplacian, no need for ML check
+  if (sharpnessScore >= clearThreshold) {
+    return { blurStatus: 'clear', sharpnessScore, musiqScore: null };
+  }
+
+  // If Laplacian says suspect or blurry, try ML confirmation
+  const mlAvailable = await isMLServiceAvailable();
+  const effectiveMusiqThreshold = parseFloat(process.env.MUSIQ_BLUR_THRESHOLD ?? String(musiqBlurThreshold));
+  if (mlAvailable && sharpnessScore < blurThreshold) {
+    try {
+      const mlResult = await computeMLQuality(imagePath);
+      const musiqScore = mlResult.musiq_score;
+
+      if (musiqScore != null) {
+        // Dual condition: both Laplacian AND MUSIQ must agree it's bad
+        if (musiqScore < effectiveMusiqThreshold) {
+          return { blurStatus: 'blurry', sharpnessScore, musiqScore };
+        } else {
+          // Laplacian says blurry but MUSIQ says acceptable — mark as suspect, not blurry
+          return { blurStatus: 'suspect', sharpnessScore, musiqScore };
+        }
+      }
+    } catch (err) {
+      console.warn(`[blurDetector] ML quality check failed, using Laplacian only: ${err}`);
+    }
+  }
+
+  // Fallback: single-condition classification
+  const blurStatus = classifyBlur(sharpnessScore, blurThreshold, clearThreshold);
+  return { blurStatus, sharpnessScore, musiqScore: null };
+}
+
 interface MediaItemRow {
   id: string;
   file_path: string;
@@ -136,8 +186,11 @@ export async function detectBlurry(
 
     try {
       const localPath = await storageProvider.downloadToTemp(row.file_path);
-      sharpnessScore = await computeSharpness(localPath);
-      blurStatus = classifyBlur(sharpnessScore, blurThreshold, clearThreshold);
+
+      // Use dual-condition blur detection (Laplacian + MUSIQ) when ML available
+      const dualResult = await classifyBlurDual(localPath, blurThreshold, clearThreshold);
+      sharpnessScore = dualResult.sharpnessScore;
+      blurStatus = dualResult.blurStatus;
 
       if (blurStatus === 'blurry') {
         // Only trash clearly blurry images

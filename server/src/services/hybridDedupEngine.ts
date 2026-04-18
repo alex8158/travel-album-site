@@ -20,8 +20,9 @@ import {
 } from './dedupThresholds';
 import { computePHash, computeHash, hammingDistance, DedupResult } from './dedupEngine';
 import { clipNeighborSearch, ClipCandidatePair } from './pythonAnalyzer';
-import { computeQualityScore } from './qualitySelector';
+import { computeQualityScore, computeMLEnhancedQuality } from './qualitySelector';
 import { detectConfiguredProviders, reviewPairs, PairReviewRequest } from './llmPairReviewer';
+import { extractEmbeddings, findDuplicateGroups, isMLServiceAvailable } from './mlQualityService';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -319,6 +320,79 @@ export async function runLayer1(
 }
 
 // ---------------------------------------------------------------------------
+// DINOv2 + FAISS dedup (ML-enhanced Layer 1 alternative)
+// ---------------------------------------------------------------------------
+
+/**
+ * ML-enhanced dedup using DINOv2 embeddings + FAISS cosine similarity.
+ * Returns confirmed duplicate pairs directly (no gray zone — FAISS threshold is definitive).
+ * Falls back to CLIP Layer 1 if ML service is unavailable.
+ */
+async function runDINOv2Dedup(
+  rows: ImageRow[],
+  indices: number[],
+  options?: { tempCache?: TempPathCache; threshold?: number }
+): Promise<Array<{ i: number; j: number }>> {
+  if (indices.length < 2) return [];
+
+  const storageProvider = getStorageProvider();
+  const tempCache = options?.tempCache;
+  const threshold = options?.threshold ?? 0.92;
+
+  // Download images to temp paths
+  const tempPaths: string[] = [];
+  const validIndices: number[] = [];
+
+  for (const idx of indices) {
+    try {
+      const localPath = tempCache
+        ? await tempCache.get(rows[idx].file_path)
+        : await storageProvider.downloadToTemp(rows[idx].file_path);
+      tempPaths.push(localPath);
+      validIndices.push(idx);
+    } catch (err) {
+      console.warn(`[hybridDedup] DINOv2: failed to download ${rows[idx].id}: ${err}`);
+    }
+  }
+
+  if (validIndices.length < 2) return [];
+
+  try {
+    // Extract DINOv2 embeddings
+    console.log(`[hybridDedup] DINOv2: extracting embeddings for ${validIndices.length} images...`);
+    const embeddingResults = await extractEmbeddings(tempPaths);
+    const embeddings = embeddingResults.map(r => r.embedding);
+
+    // Find duplicate groups via FAISS
+    console.log(`[hybridDedup] DINOv2: FAISS duplicate detection (threshold=${threshold})...`);
+    const groups = await findDuplicateGroups(embeddings, threshold);
+
+    // Convert groups to pairs (all pairs within each group)
+    const confirmedPairs: Array<{ i: number; j: number }> = [];
+    for (const group of groups) {
+      for (let a = 0; a < group.length; a++) {
+        for (let b = a + 1; b < group.length; b++) {
+          // Map local indices back to global indices
+          confirmedPairs.push({
+            i: validIndices[group[a]],
+            j: validIndices[group[b]],
+          });
+        }
+      }
+    }
+
+    console.log(`[hybridDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs`);
+    return confirmedPairs;
+  } finally {
+    if (!tempCache) {
+      for (const p of tempPaths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Strict Threshold 回退
 // ---------------------------------------------------------------------------
 
@@ -389,26 +463,29 @@ export async function runLayer3(
     if (activeIndices.length === 1) {
       keepIndex = activeIndices[0];
     } else {
-      // Compute quality scores only for candidates
-      const scores: number[] = [];
+      // Compute quality scores for candidates — try ML-enhanced first
+      const candidatePaths: string[] = [];
+      const candidateIds: string[] = [];
       for (const idx of candidateIndices) {
         try {
           const localPath = tempCache
             ? await tempCache.get(rows[idx].file_path)
             : await storageProvider.downloadToTemp(rows[idx].file_path);
-          try {
-            const score = await computeQualityScore(localPath, rows[idx].id);
-            scores.push(score.overall);
-          } finally {
-            // Only clean up if not using cache
-            if (!tempCache) {
-              try { fs.unlinkSync(localPath); } catch { /* ignore */ }
-            }
-          }
+          candidatePaths.push(localPath);
+          candidateIds.push(rows[idx].id);
         } catch {
-          scores.push(0);
+          candidatePaths.push('');
+          candidateIds.push(rows[idx].id);
         }
       }
+
+      const mlScores = await computeMLEnhancedQuality(
+        candidatePaths.filter(p => p !== ''),
+        candidateIds.filter((_, i) => candidatePaths[i] !== '')
+      );
+      const scoreMap = new Map(mlScores.map(s => [s.mediaId, s.score]));
+
+      const scores: number[] = candidateIds.map(id => scoreMap.get(id) ?? 0);
 
       // Find best (highest quality score) among candidates
       let bestCandidateIdx = 0;
@@ -552,111 +629,139 @@ export async function hybridDeduplicate(
   // Reuse pHash/dHash from Layer 0 for Layer 1
   const allIndices = Array.from({ length: rows.length }, (_, i) => i);
 
-  // ---- Layer 1: CLIP 三档粗筛 ----
-  onProgress?.('layer1', 'start');
-  console.log('[hybridDedup] Layer 1: CLIP coarse filter...');
-  const layer1Result = await runLayer1(rows, allIndices, layer0Result.pHashes, layer0Result.dHashes, {
-    clipTopK: options?.clipTopK,
-    tempCache,
-  });
-  console.log(`[hybridDedup] Layer 1: ${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
-  onProgress?.('layer1', 'complete', `${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+  // ---- Try ML-enhanced dedup (DINOv2 + FAISS) first, fall back to CLIP ----
+  let mlDedupPairs: Array<{ i: number; j: number }> | null = null;
+  let usedMLDedup = false;
 
-  // ---- Layer 2 / Strict Threshold: 灰区对判定 ----
-  let grayConfirmedPairs: Array<{ i: number; j: number }> = [];
-
-  if (layer1Result.grayZonePairs.length > 0) {
-    // Detect configured LLM providers
-    const providers = detectConfiguredProviders(options?.preferredProvider);
-
-    if (providers.length > 0) {
-      // Layer 2: LLM 逐对精判
-      onProgress?.('layer2', 'start');
-      console.log(`[hybridDedup] Layer 2: LLM pair review with ${providers.length} provider(s) [${providers.map(p => p.type).join(', ')}]...`);
-
-      // Build PairReviewRequest list — download images to temp for LLM review
-      const pairRequests: PairReviewRequest[] = [];
-      const tempFilePaths: string[] = [];
-      const pairIndexMap: Array<{ i: number; j: number }> = [];
-
-      for (const grayPair of layer1Result.grayZonePairs) {
-        try {
-          const sp = getStorageProvider();
-          const localPathA = tempCache
-            ? await tempCache.get(rows[grayPair.i].file_path)
-            : await sp.downloadToTemp(rows[grayPair.i].file_path);
-          const localPathB = tempCache
-            ? await tempCache.get(rows[grayPair.j].file_path)
-            : await sp.downloadToTemp(rows[grayPair.j].file_path);
-          if (!tempCache) {
-            tempFilePaths.push(localPathA, localPathB);
-          }
-
-          pairRequests.push({
-            imageA: { id: rows[grayPair.i].id, filePath: localPathA },
-            imageB: { id: rows[grayPair.j].id, filePath: localPathB },
-            clipSimilarity: grayPair.similarity,
-          });
-          pairIndexMap.push({ i: grayPair.i, j: grayPair.j });
-        } catch (err) {
-          console.warn(`[hybridDedup] Layer 2: failed to download images for pair (${rows[grayPair.i].id}, ${rows[grayPair.j].id}): ${err}`);
-          // Fall back to strict threshold for this pair
-          if (applyStrictThreshold(grayPair.similarity)) {
-            grayConfirmedPairs.push({ i: grayPair.i, j: grayPair.j });
-          }
-        }
-      }
-
-      try {
-        if (pairRequests.length > 0) {
-          const reviewResults = await reviewPairs(pairRequests, providers);
-
-          let llmSuccessCount = 0;
-          let llmFallbackCount = 0;
-
-          for (let k = 0; k < reviewResults.length; k++) {
-            const result = reviewResults[k];
-            if (result.isDuplicate) {
-              grayConfirmedPairs.push(pairIndexMap[k]);
-            }
-            if (result.fellBackToThreshold) {
-              llmFallbackCount++;
-            } else {
-              llmSuccessCount++;
-            }
-          }
-
-          // Check if all LLM calls failed (all fell back to threshold)
-          if (llmSuccessCount === 0 && llmFallbackCount > 0) {
-            console.warn(
-              `[hybridDedup] Layer 2: All LLM providers failed for all ${llmFallbackCount} gray zone pairs. ` +
-              `Results are based on Strict Threshold fallback. LLM dedup is currently unavailable.`
-            );
-          } else {
-            console.log(
-              `[hybridDedup] Layer 2: ${llmSuccessCount} pairs reviewed by LLM, ${llmFallbackCount} fell back to threshold, ` +
-              `${grayConfirmedPairs.length} confirmed as duplicates`
-            );
-          }
-        }
-      } finally {
-        // Clean up temp files only if not using cache
-        if (!tempCache) {
-          for (const p of tempFilePaths) {
-            try { fs.unlinkSync(p); } catch { /* ignore */ }
-          }
-        }
-      }
-
-      onProgress?.('layer2', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
-    } else {
-      // No providers available — Strict Threshold 回退 (MVP behavior)
-      onProgress?.('strictThreshold', 'start');
-      console.log('[hybridDedup] No LLM providers configured. Strict Threshold fallback for gray zone pairs...');
-      grayConfirmedPairs = applyStrictThresholdToGrayPairs(layer1Result.grayZonePairs);
-      console.log(`[hybridDedup] Strict Threshold: ${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
-      onProgress?.('strictThreshold', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+  const mlAvailable = await isMLServiceAvailable();
+  if (mlAvailable) {
+    try {
+      onProgress?.('layer1', 'start');
+      console.log('[hybridDedup] Layer 1 (ML): DINOv2 + FAISS dedup...');
+      const dinoThreshold = parseFloat(process.env.DINOV2_DEDUP_THRESHOLD ?? '0.92');
+      mlDedupPairs = await runDINOv2Dedup(rows, allIndices, { tempCache, threshold: dinoThreshold });
+      usedMLDedup = true;
+      console.log(`[hybridDedup] Layer 1 (ML): ${mlDedupPairs.length} confirmed pairs via DINOv2`);
+      onProgress?.('layer1', 'complete', `${mlDedupPairs.length} confirmed pairs (DINOv2+FAISS)`);
+    } catch (err) {
+      console.warn(`[hybridDedup] DINOv2 dedup failed, falling back to CLIP: ${err}`);
+      mlDedupPairs = null;
     }
+  }
+
+  if (!usedMLDedup) {
+    // ---- Layer 1: CLIP 三档粗筛 (fallback) ----
+    onProgress?.('layer1', 'start');
+    console.log('[hybridDedup] Layer 1: CLIP coarse filter...');
+    const layer1Result = await runLayer1(rows, allIndices, layer0Result.pHashes, layer0Result.dHashes, {
+      clipTopK: options?.clipTopK,
+      tempCache,
+    });
+    console.log(`[hybridDedup] Layer 1: ${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+    onProgress?.('layer1', 'complete', `${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+
+    // ---- Layer 2 / Strict Threshold: 灰区对判定 ----
+    let grayConfirmedPairs: Array<{ i: number; j: number }> = [];
+
+    if (layer1Result.grayZonePairs.length > 0) {
+      // Detect configured LLM providers
+      const providers = detectConfiguredProviders(options?.preferredProvider);
+
+      if (providers.length > 0) {
+        // Layer 2: LLM 逐对精判
+        onProgress?.('layer2', 'start');
+        console.log(`[hybridDedup] Layer 2: LLM pair review with ${providers.length} provider(s) [${providers.map(p => p.type).join(', ')}]...`);
+
+        // Build PairReviewRequest list — download images to temp for LLM review
+        const pairRequests: PairReviewRequest[] = [];
+        const tempFilePaths: string[] = [];
+        const pairIndexMap: Array<{ i: number; j: number }> = [];
+
+        for (const grayPair of layer1Result.grayZonePairs) {
+          try {
+            const sp = getStorageProvider();
+            const localPathA = tempCache
+              ? await tempCache.get(rows[grayPair.i].file_path)
+              : await sp.downloadToTemp(rows[grayPair.i].file_path);
+            const localPathB = tempCache
+              ? await tempCache.get(rows[grayPair.j].file_path)
+              : await sp.downloadToTemp(rows[grayPair.j].file_path);
+            if (!tempCache) {
+              tempFilePaths.push(localPathA, localPathB);
+            }
+
+            pairRequests.push({
+              imageA: { id: rows[grayPair.i].id, filePath: localPathA },
+              imageB: { id: rows[grayPair.j].id, filePath: localPathB },
+              clipSimilarity: grayPair.similarity,
+            });
+            pairIndexMap.push({ i: grayPair.i, j: grayPair.j });
+          } catch (err) {
+            console.warn(`[hybridDedup] Layer 2: failed to download images for pair (${rows[grayPair.i].id}, ${rows[grayPair.j].id}): ${err}`);
+            // Fall back to strict threshold for this pair
+            if (applyStrictThreshold(grayPair.similarity)) {
+              grayConfirmedPairs.push({ i: grayPair.i, j: grayPair.j });
+            }
+          }
+        }
+
+        try {
+          if (pairRequests.length > 0) {
+            const reviewResults = await reviewPairs(pairRequests, providers);
+
+            let llmSuccessCount = 0;
+            let llmFallbackCount = 0;
+
+            for (let k = 0; k < reviewResults.length; k++) {
+              const result = reviewResults[k];
+              if (result.isDuplicate) {
+                grayConfirmedPairs.push(pairIndexMap[k]);
+              }
+              if (result.fellBackToThreshold) {
+                llmFallbackCount++;
+              } else {
+                llmSuccessCount++;
+              }
+            }
+
+            // Check if all LLM calls failed (all fell back to threshold)
+            if (llmSuccessCount === 0 && llmFallbackCount > 0) {
+              console.warn(
+                `[hybridDedup] Layer 2: All LLM providers failed for all ${llmFallbackCount} gray zone pairs. ` +
+                `Results are based on Strict Threshold fallback. LLM dedup is currently unavailable.`
+              );
+            } else {
+              console.log(
+                `[hybridDedup] Layer 2: ${llmSuccessCount} pairs reviewed by LLM, ${llmFallbackCount} fell back to threshold, ` +
+                `${grayConfirmedPairs.length} confirmed as duplicates`
+              );
+            }
+          }
+        } finally {
+          // Clean up temp files only if not using cache
+          if (!tempCache) {
+            for (const p of tempFilePaths) {
+              try { fs.unlinkSync(p); } catch { /* ignore */ }
+            }
+          }
+        }
+
+        onProgress?.('layer2', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+      } else {
+        // No providers available — Strict Threshold 回退 (MVP behavior)
+        onProgress?.('strictThreshold', 'start');
+        console.log('[hybridDedup] No LLM providers configured. Strict Threshold fallback for gray zone pairs...');
+        grayConfirmedPairs = applyStrictThresholdToGrayPairs(layer1Result.grayZonePairs);
+        console.log(`[hybridDedup] Strict Threshold: ${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+        onProgress?.('strictThreshold', 'complete', `${grayConfirmedPairs.length} confirmed from ${layer1Result.grayZonePairs.length} gray zone pairs`);
+      }
+    }
+
+    // Combine CLIP results
+    mlDedupPairs = [
+      ...layer1Result.confirmedPairs.map(p => ({ i: p.i, j: p.j })),
+      ...grayConfirmedPairs,
+    ];
   }
 
   // ---- Layer 3: Union-Find 分组 + 质量选择 ----
@@ -664,8 +769,7 @@ export async function hybridDeduplicate(
   console.log('[hybridDedup] Layer 3: Union-Find grouping + quality selection...');
   const allConfirmedPairs: Array<{ i: number; j: number }> = [
     ...layer0Result.confirmedPairs,
-    ...layer1Result.confirmedPairs.map(p => ({ i: p.i, j: p.j })),
-    ...grayConfirmedPairs,
+    ...(mlDedupPairs ?? []),
   ];
 
   const layer3Result = await runLayer3(rows, allConfirmedPairs, { tempCache });
