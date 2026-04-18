@@ -342,17 +342,32 @@ export async function runTripProcessingPipeline(
     }
 
     // ---- Stage: reduce ----
+    let decisions: ReturnType<typeof reduce> = [];
     onProgress('reduce', 'start');
-    const decisions = reduce(contexts, dedupAssessment);
-    onProgress('reduce', 'complete', `${decisions.length} decisions`);
+    try {
+      decisions = reduce(contexts, dedupAssessment);
+      onProgress('reduce', 'complete', `${decisions.length} decisions`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'reduce', error: msg });
+      console.error(`[pipeline] reduce failed: ${msg}`);
+      onProgress('reduce', 'complete', `failed: ${msg}`);
+    }
 
     // ---- Stage: write ----
     onProgress('write', 'start');
-    const writeResult = writeDecisions(tripId, decisions);
-    if (writeResult.error) {
-      stageErrors.push({ stage: 'write', error: writeResult.error });
+    try {
+      const writeResult = writeDecisions(tripId, decisions);
+      if (writeResult.error) {
+        stageErrors.push({ stage: 'write', error: writeResult.error });
+      }
+      onProgress('write', 'complete', `${writeResult.updatedCount} updated`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'write', error: msg });
+      console.error(`[pipeline] write failed: ${msg}`);
+      onProgress('write', 'complete', `failed: ${msg}`);
     }
-    onProgress('write', 'complete', `${writeResult.updatedCount} updated`);
 
     // ---- Compute stats from decisions ----
     const blurryDeletedCount = decisions.filter(

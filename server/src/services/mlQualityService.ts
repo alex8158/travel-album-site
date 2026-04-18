@@ -28,8 +28,10 @@ interface EmbeddingResult {
 
 /**
  * Run a Python quality_service.py command and return parsed JSON output.
+ * When stdinData is provided, it is written to the process's stdin to avoid
+ * E2BIG errors from large CLI arguments (e.g., 100+ image paths or embeddings).
  */
-async function runPythonCommand(args: string[]): Promise<unknown> {
+async function runPythonCommand(args: string[], stdinData?: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const proc = spawn(getPythonPath(), [PYTHON_SCRIPT, ...args], {
       cwd: path.dirname(PYTHON_SCRIPT),
@@ -60,14 +62,21 @@ async function runPythonCommand(args: string[]): Promise<unknown> {
     proc.on('error', (err) => {
       reject(new Error(`Failed to spawn Python: ${err.message}`));
     });
+
+    // Write large data via stdin to avoid E2BIG
+    if (stdinData) {
+      proc.stdin.write(stdinData);
+      proc.stdin.end();
+    }
   });
 }
 
 /**
  * Extract DINOv2 embeddings for a list of image paths.
+ * Uses stdin to pass paths (avoids E2BIG for large lists).
  */
 export async function extractEmbeddings(imagePaths: string[]): Promise<EmbeddingResult[]> {
-  const result = await runPythonCommand(['embeddings', JSON.stringify(imagePaths)]);
+  const result = await runPythonCommand(['embeddings', '--stdin'], JSON.stringify(imagePaths));
   return result as EmbeddingResult[];
 }
 
@@ -81,14 +90,16 @@ export async function computeMLQuality(imagePath: string): Promise<QualityResult
 
 /**
  * Compute quality scores for multiple images.
+ * Uses stdin to pass paths (avoids E2BIG for large lists).
  */
 export async function batchMLQuality(imagePaths: string[]): Promise<QualityResult[]> {
-  const result = await runPythonCommand(['batch_quality', JSON.stringify(imagePaths)]);
+  const result = await runPythonCommand(['batch_quality', '--stdin'], JSON.stringify(imagePaths));
   return result as QualityResult[];
 }
 
 /**
  * Find duplicate groups from embeddings using FAISS cosine similarity.
+ * Uses stdin to pass embeddings (avoids E2BIG for large arrays).
  * @param embeddings Array of embedding vectors (null for failed extractions)
  * @param threshold Cosine similarity threshold (default 0.92)
  * @returns Array of groups, each group is array of original indices
@@ -97,11 +108,8 @@ export async function findDuplicateGroups(
   embeddings: (number[] | null)[],
   threshold = 0.92
 ): Promise<number[][]> {
-  const result = await runPythonCommand([
-    'find_duplicates',
-    JSON.stringify(embeddings),
-    String(threshold),
-  ]);
+  const stdinPayload = JSON.stringify({ embeddings, threshold });
+  const result = await runPythonCommand(['find_duplicates', '--stdin'], stdinPayload);
   return result as number[][];
 }
 

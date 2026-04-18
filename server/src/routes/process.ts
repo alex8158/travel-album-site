@@ -60,6 +60,10 @@ router.post('/:id/process', async (req: Request, res: Response) => {
       failedCount: result.failedCount,
       coverImageId: result.coverImageId,
     });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[process] Pipeline failed for trip ${tripId}: ${message}`);
+    return res.status(500).json({ error: { code: 'PROCESSING_FAILED', message } });
   } finally {
     processingTrips.delete(tripId);
   }

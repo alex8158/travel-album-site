@@ -291,9 +291,13 @@ def main():
         sys.exit(1)
 
     command = sys.argv[1]
+    use_stdin = '--stdin' in sys.argv
 
     if command == "embeddings":
-        paths = json.loads(sys.argv[2])
+        if use_stdin:
+            paths = json.loads(sys.stdin.read())
+        else:
+            paths = json.loads(sys.argv[2])
         results = extract_embeddings(paths)
         print(json.dumps(results))
 
@@ -303,14 +307,21 @@ def main():
         print(json.dumps(result))
 
     elif command == "batch_quality":
-        paths = json.loads(sys.argv[2])
+        if use_stdin:
+            paths = json.loads(sys.stdin.read())
+        else:
+            paths = json.loads(sys.argv[2])
         results = batch_quality(paths)
         print(json.dumps(results))
 
     elif command == "find_duplicates":
-        # Input: JSON array of {index, embedding} or just embeddings array
-        data = json.loads(sys.argv[2])
-        threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.92
+        if use_stdin:
+            payload = json.loads(sys.stdin.read())
+            data = payload["embeddings"]
+            threshold = payload.get("threshold", 0.92)
+        else:
+            data = json.loads(sys.argv[2])
+            threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.92
         groups = find_duplicates(data, threshold)
         print(json.dumps(groups))
 
