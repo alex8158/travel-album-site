@@ -156,25 +156,42 @@ export async function classifyBlurDual(
 }
 
 /**
- * Pure assessment function for Node.js Laplacian blur detection.
+ * Pure assessment function for Node.js blur detection.
  * Returns a BlurAssessment without any DB writes or side effects.
+ *
+ * Uses dual-condition detection when ML service is available:
+ * - Laplacian < blurThreshold AND MUSIQ < musiqThreshold → blurry
+ * - Laplacian in suspect zone AND MUSIQ very low (< 20) → blurry
+ * - Otherwise falls back to single-condition Laplacian classification
  *
  * This is the Node fallback called by the orchestrator's runBlurStage
  * when Python blur detection fails. It is NOT the fallback chain owner.
- *
- * Reads thresholds from PROCESS_THRESHOLDS.
  */
 export async function assessBlur(imagePath: string): Promise<BlurAssessment> {
   try {
-    const sharpnessScore = await computeSharpness(imagePath);
-    const blurStatus = classifyBlur(
-      sharpnessScore,
+    const dualResult = await classifyBlurDual(
+      imagePath,
       PROCESS_THRESHOLDS.blurThreshold,
       PROCESS_THRESHOLDS.clearThreshold,
+      PROCESS_THRESHOLDS.musiqBlurThreshold,
     );
+
+    // Extra check: if Laplacian says suspect but MUSIQ says very bad quality,
+    // upgrade to blurry. This catches blurry underwater/low-contrast photos
+    // where Laplacian variance is inflated by noise/grain.
+    let finalStatus = dualResult.blurStatus;
+    if (
+      finalStatus === 'suspect' &&
+      dualResult.musiqScore != null &&
+      dualResult.musiqScore < 20
+    ) {
+      finalStatus = 'blurry';
+    }
+
     return {
-      sharpnessScore,
-      blurStatus,
+      sharpnessScore: dualResult.sharpnessScore,
+      blurStatus: finalStatus,
+      musiqScore: dualResult.musiqScore,
       source: 'node',
     };
   } catch (err) {

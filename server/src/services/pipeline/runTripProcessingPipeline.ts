@@ -206,10 +206,23 @@ async function runBlurStage(
           blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
           source: 'python',
         };
+
+        // If Python says suspect, use Node.js assessBlur (which includes MUSIQ)
+        // to potentially upgrade to blurry for genuinely bad quality images
+        if (ctx.blur.blurStatus === 'suspect') {
+          try {
+            const nodeResult = await assessBlur(ctx.localPath);
+            if (nodeResult.blurStatus === 'blurry') {
+              ctx.blur = nodeResult;
+            }
+          } catch {
+            // Keep Python result on Node.js failure
+          }
+        }
         continue;
       }
 
-      // Python blur failed or unavailable — try Node.js Laplacian
+      // Python blur failed or unavailable — try Node.js (includes MUSIQ dual-condition)
       const blurError = pyResult?.blurError;
       if (blurError) {
         ctx.processingErrors.push(`[python-blur] ${blurError}`);
