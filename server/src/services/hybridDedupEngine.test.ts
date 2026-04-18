@@ -685,10 +685,10 @@ describe('Unit Tests — hybridDedupEngine', () => {
       expect(confirmed.length).toBe(2);
     });
 
-    it('should reject pairs with similarity < 0.955', () => {
+    it('should reject pairs with similarity < 0.92', () => {
       const grayPairs = [
-        { i: 0, j: 1, similarity: 0.954 },
-        { i: 2, j: 3, similarity: 0.90 },
+        { i: 0, j: 1, similarity: 0.919 },
+        { i: 2, j: 3, similarity: 0.85 },
       ];
       const confirmed = applyStrictThresholdToGrayPairs(grayPairs);
       expect(confirmed.length).toBe(0);
@@ -698,8 +698,8 @@ describe('Unit Tests — hybridDedupEngine', () => {
       const grayPairs = [
         { i: 0, j: 1, similarity: 0.96 },
         { i: 2, j: 3, similarity: 0.91 },
-        { i: 4, j: 5, similarity: 0.955 },
-        { i: 6, j: 7, similarity: 0.954999 },
+        { i: 4, j: 5, similarity: 0.92 },
+        { i: 6, j: 7, similarity: 0.919999 },
       ];
       const confirmed = applyStrictThresholdToGrayPairs(grayPairs);
       expect(confirmed.length).toBe(2);

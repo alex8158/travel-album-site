@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { hybridDeduplicate, HybridDedupLayer } from '../services/hybridDedupEngine';
-import { detectBlurry } from '../services/blurDetector';
+import { detectBlurry, computeSharpness, classifyBlur, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD } from '../services/blurDetector';
 import { classifyTrip } from '../services/imageClassifier';
 import { analyzeTrip } from '../services/imageAnalyzer';
 import { optimizeTrip } from '../services/imageOptimizer';
@@ -69,7 +69,8 @@ interface ImageRow {
 async function applyPythonAnalyzeResults(
   tripId: string,
   rows: ImageRow[],
-  results: PythonAnalyzeResult[]
+  results: PythonAnalyzeResult[],
+  tempPaths?: string[]
 ): Promise<{ blurryCount: number }> {
   const db = getDb();
   let blurryCount = 0;
@@ -117,10 +118,32 @@ async function applyPythonAnalyzeResults(
         insertTagStmt.run(uuidv4(), row.id, `category:${result.category}`, new Date().toISOString());
       }
     } else {
-      // Python failed for this image — mark as error, no per-image Node fallback
-      // (entire trip will use one engine; if Python fails for some images, mark them)
-      console.log(`[process] Python error for ${row.original_filename}, marking as unknown/other`);
-      updateBlurStmt.run(null, 'unknown', row.id);
+      // Python failed for this image — per-image Node.js fallback for blur detection
+      console.log(`[process] Python error for ${row.original_filename}, running Node.js blur fallback`);
+
+      // Try Node.js blur detection on this single image
+      let fallbackBlurStatus = 'unknown';
+      let fallbackSharpness: number | null = null;
+      if (tempPaths && tempPaths[i]) {
+        try {
+          fallbackSharpness = await computeSharpness(tempPaths[i]);
+          fallbackBlurStatus = classifyBlur(fallbackSharpness, DEFAULT_BLUR_THRESHOLD, DEFAULT_CLEAR_THRESHOLD);
+          if (fallbackBlurStatus === 'blurry') {
+            trashBlurStmt.run(fallbackSharpness, row.id);
+            blurryCount++;
+            console.log(`[process] Node fallback: ${row.original_filename} → blurry (sharpness=${fallbackSharpness.toFixed(1)})`);
+          } else {
+            updateBlurStmt.run(fallbackSharpness, fallbackBlurStatus, row.id);
+          }
+        } catch (blurErr) {
+          console.log(`[process] Node blur fallback also failed for ${row.original_filename}: ${blurErr}`);
+          updateBlurStmt.run(null, 'suspect', row.id);
+        }
+      } else {
+        updateBlurStmt.run(null, 'suspect', row.id);
+      }
+
+      // Classification: mark as 'other' (no Node.js classifier available)
       updateCategoryStmt.run('other', row.id);
       deleteCategoryTagsStmt.run(row.id);
       insertTagStmt.run(uuidv4(), row.id, 'category:other', new Date().toISOString());
@@ -204,7 +227,7 @@ router.post('/:id/process', async (req: Request, res: Response) => {
           try {
             // Step 1+5: Python analyze (blur + classify combined)
             const analyzeResults = await analyzeImages(tempPaths);
-            const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults);
+            const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults, tempPaths);
             blurryDeletedCount = blurResult.blurryCount;
 
             // Step 2: Hybrid dedup (Layer 0 + Layer 1 + Strict Threshold + Layer 3)
@@ -430,7 +453,7 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
             try {
               // Python analyze: blur + classify in one call
               const analyzeResults = await analyzeImages(tempPaths);
-              const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults);
+              const blurResult = await applyPythonAnalyzeResults(tripId, successRows, analyzeResults, tempPaths);
               blurryDeletedCount = blurResult.blurryCount;
 
               if (clientDisconnected) return;

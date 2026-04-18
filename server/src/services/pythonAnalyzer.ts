@@ -111,6 +111,19 @@ function getDefaultModelDir(): string {
 // ---------------------------------------------------------------------------
 
 let pythonAvailableCache: boolean | null = null;
+let pythonUnavailableReason: string | null = null;
+
+/** Get the reason Python was marked unavailable (for diagnostics). */
+export function getPythonUnavailableReason(): string | null {
+  return pythonUnavailableReason;
+}
+
+function setPythonUnavailable(reason: string): false {
+  pythonUnavailableReason = reason;
+  console.warn(`[pythonAnalyzer] UNAVAILABLE: ${reason}`);
+  pythonAvailableCache = false;
+  return false;
+}
 
 /**
  * Check if Python environment is available and model files exist with valid checksums.
@@ -122,35 +135,30 @@ export function isPythonAvailable(): boolean {
   try {
     // 1. Check python3 exists and is 3.9+
     const { execSync } = require('child_process');
-    const versionOutput = execSync(`${getPythonPath()} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    const pythonBin = getPythonPath();
+    console.log(`[pythonAnalyzer] Checking Python at: ${pythonBin}`);
+    const versionOutput = execSync(`${pythonBin} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
     const match = versionOutput.match(/Python (\d+)\.(\d+)/);
     if (!match || parseInt(match[1]) < 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) < 9)) {
-      console.log(`[pythonAnalyzer] Python version too old: ${versionOutput}`);
-      pythonAvailableCache = false;
-      return false;
+      return setPythonUnavailable(`Python version too old: ${versionOutput} (need 3.9+)`);
     }
+    console.log(`[pythonAnalyzer] Python version: ${versionOutput}`);
 
     // 2. Check analyze.py exists
     if (!fs.existsSync(ANALYZE_SCRIPT)) {
-      console.log('[pythonAnalyzer] analyze.py not found');
-      pythonAvailableCache = false;
-      return false;
+      return setPythonUnavailable(`analyze.py not found at ${ANALYZE_SCRIPT}`);
     }
 
     // 3. Check model directory and config
     if (!fs.existsSync(MODEL_CONFIG_PATH)) {
-      console.log('[pythonAnalyzer] model_config.json not found');
-      pythonAvailableCache = false;
-      return false;
+      return setPythonUnavailable(`model_config.json not found at ${MODEL_CONFIG_PATH}`);
     }
 
     const config = JSON.parse(fs.readFileSync(MODEL_CONFIG_PATH, 'utf-8'));
     const modelDir = path.resolve(PYTHON_DIR, config.onnx_dir);
 
     if (!fs.existsSync(modelDir)) {
-      console.log(`[pythonAnalyzer] Model directory not found: ${modelDir}`);
-      pythonAvailableCache = false;
-      return false;
+      return setPythonUnavailable(`Model directory not found: ${modelDir}`);
     }
 
     // 4. Verify checksums for key files
@@ -158,17 +166,13 @@ export function isPythonAvailable(): boolean {
     for (const [filename, expectedHash] of Object.entries(checksums)) {
       const filePath = path.join(modelDir, filename);
       if (!fs.existsSync(filePath)) {
-        console.log(`[pythonAnalyzer] Model file missing: ${filePath}`);
-        pythonAvailableCache = false;
-        return false;
+        return setPythonUnavailable(`Model file missing: ${filePath}`);
       }
       // Only verify .onnx files (large files — skip others for speed)
       if (filename.endsWith('.onnx')) {
         const hash = computeFileHash(filePath);
         if (hash !== expectedHash) {
-          console.log(`[pythonAnalyzer] Checksum mismatch for ${filename}`);
-          pythonAvailableCache = false;
-          return false;
+          return setPythonUnavailable(`Checksum mismatch for ${filename}`);
         }
       }
     }
@@ -177,9 +181,7 @@ export function isPythonAvailable(): boolean {
     pythonAvailableCache = true;
     return true;
   } catch (err) {
-    console.log(`[pythonAnalyzer] Python check failed: ${err}`);
-    pythonAvailableCache = false;
-    return false;
+    return setPythonUnavailable(`Python check failed: ${err}`);
   }
 }
 
@@ -195,7 +197,8 @@ function computeFileHash(filePath: string): string {
  */
 function markPythonUnavailable(): void {
   pythonAvailableCache = false;
-  console.log('[pythonAnalyzer] Python marked as permanently unavailable (exit code 2)');
+  pythonUnavailableReason = 'Python process exited with code 2 (module not found)';
+  console.warn('[pythonAnalyzer] Python marked as permanently unavailable (exit code 2)');
 }
 
 // ---------------------------------------------------------------------------
