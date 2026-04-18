@@ -4,3 +4,10 @@ onnxruntime>=1.16.0
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
+
+# ML quality models
+torch>=2.0.0
+torchvision>=0.15.0
+pyiqa>=0.1.10
+faiss-cpu>=1.7.4
+clip @ git+https://github.com/openai/CLIP.git
