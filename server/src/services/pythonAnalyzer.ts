@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import crypto from 'crypto';
 import { getPythonPath } from '../helpers/pythonPath';
 import {
@@ -240,11 +241,15 @@ async function runAnalyzeBatch(
   clearThreshold: number
 ): Promise<PythonAnalyzeResult[]> {
   await mutex.acquire();
+  const imagesFile = path.join(os.tmpdir(), `analyze-images-${Date.now()}.txt`);
   try {
+    // Write image paths to temp file to avoid E2BIG
+    fs.writeFileSync(imagesFile, imagePaths.join('\n'));
+
     const args = [
       ANALYZE_SCRIPT,
       'analyze',
-      '--images', ...imagePaths,
+      '--images-file', imagesFile,
       '--model-dir', modelDir,
       '--blur-threshold', String(blurThreshold),
       '--clear-threshold', String(clearThreshold),
@@ -267,6 +272,7 @@ async function runAnalyzeBatch(
     }
     throw new Error(`Python analyze failed: ${err.message || err}`);
   } finally {
+    try { fs.unlinkSync(imagesFile); } catch { /* ignore */ }
     mutex.release();
   }
 }
@@ -308,12 +314,14 @@ export async function dedupImages(
   const threshold = options?.threshold ?? 0.955;
 
   await mutex.acquire();
+  const imagesFile = path.join(os.tmpdir(), `dedup-images-${Date.now()}.txt`);
   try {
+    fs.writeFileSync(imagesFile, imagePaths.join('\n'));
     const metadataStr = JSON.stringify(metadata);
     const args = [
       ANALYZE_SCRIPT,
       'dedup',
-      '--images', ...imagePaths,
+      '--images-file', imagesFile,
       '--model-dir', modelDir,
       '--threshold', String(threshold),
       '--metadata', metadataStr,
@@ -342,6 +350,7 @@ export async function dedupImages(
     }
     throw new Error(`Python dedup failed: ${err.message || err}`);
   } finally {
+    try { fs.unlinkSync(imagesFile); } catch { /* ignore */ }
     mutex.release();
   }
 }
@@ -368,12 +377,14 @@ export async function clipNeighborSearch(
   const topK = options?.topK ?? CLIP_TOP_K;
 
   await mutex.acquire();
+  const imagesFile = path.join(os.tmpdir(), `clip-images-${Date.now()}.txt`);
   try {
+    fs.writeFileSync(imagesFile, imagePaths.join('\n'));
     const hashDataStr = JSON.stringify(hashData);
     const args = [
       ANALYZE_SCRIPT,
       'clip-neighbors',
-      '--images', ...imagePaths,
+      '--images-file', imagesFile,
       '--model-dir', modelDir,
       '--top-k', String(topK),
       '--confirmed-threshold', String(CLIP_CONFIRMED_THRESHOLD),
@@ -414,6 +425,7 @@ export async function clipNeighborSearch(
     }
     throw new Error(`Python clip-neighbors failed: ${err.message || err}`);
   } finally {
+    try { fs.unlinkSync(imagesFile); } catch { /* ignore */ }
     mutex.release();
   }
 }

@@ -452,9 +452,23 @@ def select_best_to_keep(indices, metadata):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_images(args):
+    """Resolve image paths from --images or --images-file."""
+    images = args.images or []
+    if hasattr(args, 'images_file') and args.images_file:
+        with open(args.images_file, 'r') as f:
+            images = [
+                line.strip() for line in f if line.strip()
+            ]
+    if not images:
+        raise ValueError("No images provided (use --images or --images-file)")
+    return images
+
+
 def cmd_analyze(args):
     """Run CLIP classification + blur detection on a list of images."""
     start_time = time.time()
+    args.images = _resolve_images(args)
 
     # Load model
     model_load_start = time.time()
@@ -524,6 +538,7 @@ def cmd_analyze(args):
 def cmd_dedup(args):
     """Run CLIP embedding-based deduplication on a list of images."""
     start_time = time.time()
+    args.images = _resolve_images(args)
 
     # Load model
     model, processor = load_model(args.model_dir)
@@ -584,6 +599,7 @@ def cmd_clip_neighbors(args):
     All thresholds are received via CLI arguments (no hardcoded values).
     """
     start_time = time.time()
+    args.images = _resolve_images(args)
 
     # Load model
     model, processor = load_model(args.model_dir)
@@ -741,8 +757,12 @@ def build_parser():
         help="Classify images and detect blur"
     )
     analyze_parser.add_argument(
-        "--images", nargs="+", required=True,
+        "--images", nargs="+", required=False,
         help="List of image file paths"
+    )
+    analyze_parser.add_argument(
+        "--images-file", type=str, default=None,
+        help="Path to file containing image paths (one per line)"
     )
     analyze_parser.add_argument(
         "--model-dir", default="./models",
@@ -763,8 +783,12 @@ def build_parser():
         help="[LEGACY] Detect duplicate images using CLIP embeddings"
     )
     dedup_parser.add_argument(
-        "--images", nargs="+", required=True,
+        "--images", nargs="+", required=False,
         help="List of image file paths"
+    )
+    dedup_parser.add_argument(
+        "--images-file", type=str, default=None,
+        help="Path to file containing image paths (one per line)"
     )
     dedup_parser.add_argument(
         "--model-dir", default="./models",
@@ -785,8 +809,12 @@ def build_parser():
         help="CLIP top-k neighbor search with three-tier classification"
     )
     cn_parser.add_argument(
-        "--images", nargs="+", required=True,
+        "--images", nargs="+", required=False,
         help="List of image file paths"
+    )
+    cn_parser.add_argument(
+        "--images-file", type=str, default=None,
+        help="Path to file containing image paths (one per line)"
     )
     cn_parser.add_argument(
         "--model-dir", default="./models",
