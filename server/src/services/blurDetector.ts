@@ -3,6 +3,8 @@ import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 import { deleteMediaItemFromDb } from '../helpers/deleteMediaItem';
 import { computeMLQuality, isMLServiceAvailable } from './mlQualityService';
+import { PROCESS_THRESHOLDS } from './dedupThresholds';
+import type { BlurAssessment } from './pipeline/types';
 
 /**
  * Laplacian convolution kernel for sharpness detection.
@@ -151,6 +153,39 @@ export async function classifyBlurDual(
   // Fallback: single-condition classification
   const blurStatus = classifyBlur(sharpnessScore, blurThreshold, clearThreshold);
   return { blurStatus, sharpnessScore, musiqScore: null };
+}
+
+/**
+ * Pure assessment function for Node.js Laplacian blur detection.
+ * Returns a BlurAssessment without any DB writes or side effects.
+ *
+ * This is the Node fallback called by the orchestrator's runBlurStage
+ * when Python blur detection fails. It is NOT the fallback chain owner.
+ *
+ * Reads thresholds from PROCESS_THRESHOLDS.
+ */
+export async function assessBlur(imagePath: string): Promise<BlurAssessment> {
+  try {
+    const sharpnessScore = await computeSharpness(imagePath);
+    const blurStatus = classifyBlur(
+      sharpnessScore,
+      PROCESS_THRESHOLDS.blurThreshold,
+      PROCESS_THRESHOLDS.clearThreshold,
+    );
+    return {
+      sharpnessScore,
+      blurStatus,
+      source: 'node',
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return {
+      blurStatus: 'suspect',
+      sharpnessScore: null,
+      source: 'node',
+      error: errorMessage,
+    };
+  }
 }
 
 interface MediaItemRow {

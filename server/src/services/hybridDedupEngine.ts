@@ -16,13 +16,15 @@ import { getStorageProvider } from '../storage/factory';
 import { TempPathCache } from '../helpers/tempPathCache';
 import {
   HASH_HAMMING_THRESHOLD,
+  PROCESS_THRESHOLDS,
   applyStrictThreshold,
 } from './dedupThresholds';
 import { computePHash, computeHash, hammingDistance, DedupResult } from './dedupEngine';
-import { clipNeighborSearch, ClipCandidatePair } from './pythonAnalyzer';
+import { clipNeighborSearch, ClipCandidatePair, isPythonAvailable } from './pythonAnalyzer';
 import { computeQualityScore, computeMLEnhancedQuality } from './qualitySelector';
 import { detectConfiguredProviders, reviewPairs, PairReviewRequest } from './llmPairReviewer';
 import { extractEmbeddings, findDuplicateGroups, isMLServiceAvailable } from './mlQualityService';
+import type { DedupAssessment } from './pipeline/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -781,4 +783,359 @@ export async function hybridDeduplicate(
     removed: layer3Result.removed,
     removedCount: layer3Result.removed.length,
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Pure Assessment — assessDedup
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure four-layer hybrid dedup assessment.
+ *
+ * Unlike `hybridDeduplicate`, this function:
+ * - Does NOT read or write DB state
+ * - Self-detects Python/ML availability via isPythonAvailable() / isMLServiceAvailable()
+ * - Tracks download failures in skippedIndices/skippedReasons
+ * - Tracks which capabilities were actually used
+ * - Returns a DedupAssessment with full evidence trail
+ *
+ * All decision inputs come from function arguments (rows) or pure helper outputs.
+ */
+export async function assessDedup(
+  rows: ImageRow[],
+  tempCache: TempPathCache,
+): Promise<DedupAssessment> {
+  const n = rows.length;
+  const capabilitiesUsed = { hash: false, clip: false, dinov2: false, llm: false };
+  const evidenceByPair: DedupAssessment['evidenceByPair'] = [];
+  const skippedIndices: number[] = [];
+  const skippedReasons: Record<number, string> = {};
+
+  if (n < 2) {
+    return {
+      confirmedPairs: [],
+      groups: [],
+      kept: rows.map(r => r.id),
+      removed: [],
+      skippedIndices,
+      skippedReasons,
+      capabilitiesUsed,
+      evidenceByPair,
+    };
+  }
+
+  console.log(`[assessDedup] Starting pure dedup assessment for ${n} images`);
+
+  // ---- Layer 0: Hash pre-filter ----
+  console.log('[assessDedup] Layer 0: Hash pre-filter...');
+  const layer0Result = await runLayer0(rows, { tempCache });
+  if (layer0Result.confirmedPairs.length > 0) {
+    capabilitiesUsed.hash = true;
+  }
+
+  // Record hash evidence
+  for (const pair of layer0Result.confirmedPairs) {
+    evidenceByPair.push({ i: pair.i, j: pair.j, hashMatched: true });
+  }
+
+  console.log(`[assessDedup] Layer 0: ${layer0Result.confirmedPairs.length} confirmed pairs`);
+
+  // ---- Detect Python/ML availability ----
+  const pythonOk = isPythonAvailable();
+  const mlOk = await isMLServiceAvailable();
+
+  let mlDedupPairs: Array<{ i: number; j: number }> | null = null;
+  let usedMLDedup = false;
+
+  if (!pythonOk) {
+    console.log('[assessDedup] Python unavailable — skipping Layer 1 & 2');
+  } else {
+    const allIndices = Array.from({ length: n }, (_, i) => i);
+
+    // ---- Try DINOv2 + FAISS first ----
+    if (mlOk) {
+      try {
+        console.log('[assessDedup] Layer 1 (ML): DINOv2 + FAISS dedup...');
+        const dinoThreshold = PROCESS_THRESHOLDS.dinov2DedupThreshold;
+        mlDedupPairs = await runDINOv2DedupTracked(
+          rows, allIndices, tempCache, dinoThreshold, skippedIndices, skippedReasons,
+        );
+        usedMLDedup = true;
+        capabilitiesUsed.dinov2 = true;
+
+        // Record DINOv2 evidence (no per-pair score available from FAISS groups)
+        for (const pair of mlDedupPairs) {
+          evidenceByPair.push({ i: pair.i, j: pair.j, dinoScore: undefined });
+        }
+
+        console.log(`[assessDedup] Layer 1 (ML): ${mlDedupPairs.length} confirmed pairs via DINOv2`);
+      } catch (err) {
+        console.warn(`[assessDedup] DINOv2 dedup failed, falling back to CLIP: ${err}`);
+        mlDedupPairs = null;
+      }
+    }
+
+    // ---- CLIP fallback ----
+    if (!usedMLDedup) {
+      console.log('[assessDedup] Layer 1: CLIP coarse filter...');
+      const layer1Result = await runLayer1(rows, allIndices, layer0Result.pHashes, layer0Result.dHashes, {
+        tempCache,
+      });
+
+      if (layer1Result.confirmedPairs.length > 0 || layer1Result.grayZonePairs.length > 0) {
+        capabilitiesUsed.clip = true;
+      }
+
+      // Record CLIP evidence for confirmed pairs
+      for (const pair of layer1Result.confirmedPairs) {
+        evidenceByPair.push({ i: pair.i, j: pair.j, clipScore: pair.similarity });
+      }
+
+      console.log(`[assessDedup] Layer 1: ${layer1Result.confirmedPairs.length} confirmed, ${layer1Result.grayZonePairs.length} gray zone`);
+
+      // ---- Layer 2: LLM or Strict Threshold for gray zone ----
+      let grayConfirmedPairs: Array<{ i: number; j: number }> = [];
+
+      if (layer1Result.grayZonePairs.length > 0) {
+        const providers = detectConfiguredProviders();
+
+        if (providers.length > 0) {
+          console.log(`[assessDedup] Layer 2: LLM pair review with ${providers.length} provider(s)...`);
+
+          const pairRequests: PairReviewRequest[] = [];
+          const pairIndexMap: Array<{ i: number; j: number }> = [];
+
+          for (const grayPair of layer1Result.grayZonePairs) {
+            try {
+              const localPathA = await tempCache.get(rows[grayPair.i].file_path);
+              const localPathB = await tempCache.get(rows[grayPair.j].file_path);
+
+              pairRequests.push({
+                imageA: { id: rows[grayPair.i].id, filePath: localPathA },
+                imageB: { id: rows[grayPair.j].id, filePath: localPathB },
+                clipSimilarity: grayPair.similarity,
+              });
+              pairIndexMap.push({ i: grayPair.i, j: grayPair.j });
+            } catch (err) {
+              console.warn(`[assessDedup] Layer 2: download failed for pair (${rows[grayPair.i].id}, ${rows[grayPair.j].id}): ${err}`);
+              if (applyStrictThreshold(grayPair.similarity)) {
+                grayConfirmedPairs.push({ i: grayPair.i, j: grayPair.j });
+                evidenceByPair.push({ i: grayPair.i, j: grayPair.j, clipScore: grayPair.similarity });
+              }
+            }
+          }
+
+          if (pairRequests.length > 0) {
+            const reviewResults = await reviewPairs(pairRequests, providers);
+            let llmSuccessCount = 0;
+
+            for (let k = 0; k < reviewResults.length; k++) {
+              const result = reviewResults[k];
+              const pairIdx = pairIndexMap[k];
+              if (result.isDuplicate) {
+                grayConfirmedPairs.push(pairIdx);
+              }
+              if (!result.fellBackToThreshold) {
+                llmSuccessCount++;
+                evidenceByPair.push({
+                  i: pairIdx.i,
+                  j: pairIdx.j,
+                  clipScore: pairRequests[k].clipSimilarity,
+                  llmConfirmed: result.isDuplicate,
+                });
+              } else {
+                evidenceByPair.push({
+                  i: pairIdx.i,
+                  j: pairIdx.j,
+                  clipScore: pairRequests[k].clipSimilarity,
+                });
+              }
+            }
+
+            if (llmSuccessCount > 0) {
+              capabilitiesUsed.llm = true;
+            }
+          }
+        } else {
+          console.log('[assessDedup] No LLM providers — Strict Threshold fallback for gray zone...');
+          const strictConfirmed = applyStrictThresholdToGrayPairs(layer1Result.grayZonePairs);
+          grayConfirmedPairs = strictConfirmed;
+
+          for (const grayPair of layer1Result.grayZonePairs) {
+            evidenceByPair.push({ i: grayPair.i, j: grayPair.j, clipScore: grayPair.similarity });
+          }
+        }
+      }
+
+      mlDedupPairs = [
+        ...layer1Result.confirmedPairs.map(p => ({ i: p.i, j: p.j })),
+        ...grayConfirmedPairs,
+      ];
+    }
+  }
+
+  // ---- Layer 3: Pure Union-Find grouping + quality selection (no DB) ----
+  const allConfirmedPairs: Array<{ i: number; j: number }> = [
+    ...layer0Result.confirmedPairs,
+    ...(mlDedupPairs ?? []),
+  ];
+
+  console.log(`[assessDedup] Layer 3: Union-Find grouping with ${allConfirmedPairs.length} confirmed pairs...`);
+
+  const { groups, kept, removed } = runPureLayer3(rows, allConfirmedPairs, tempCache);
+
+  console.log(`[assessDedup] Layer 3: ${groups.length} groups, ${removed.length} removed`);
+
+  return {
+    confirmedPairs: allConfirmedPairs,
+    groups,
+    kept,
+    removed,
+    skippedIndices,
+    skippedReasons,
+    capabilitiesUsed,
+    evidenceByPair,
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// Pure Layer 3 — Union-Find grouping + quality selection (no DB writes)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure Layer 3: groups confirmed pairs via Union-Find and selects the best
+ * image per group using row metadata only (resolution, file_size, index).
+ * No DB reads or writes.
+ */
+function runPureLayer3(
+  rows: ImageRow[],
+  allConfirmedPairs: Array<{ i: number; j: number }>,
+  _tempCache: TempPathCache,
+): { groups: DedupAssessment['groups']; kept: string[]; removed: string[] } {
+  const n = rows.length;
+
+  if (allConfirmedPairs.length === 0) {
+    return {
+      groups: [],
+      kept: rows.map(r => r.id),
+      removed: [],
+    };
+  }
+
+  const uf = new UnionFind(n);
+  for (const pair of allConfirmedPairs) {
+    uf.union(pair.i, pair.j);
+  }
+
+  const rawGroups = uf.getGroups(n);
+  const dedupGroups: DedupAssessment['groups'] = [];
+  const removedSet = new Set<number>();
+
+  for (const groupIndices of rawGroups) {
+    // Use all indices as candidates (pure — no status filtering from DB)
+    const candidateIndices = groupIndices;
+
+    // Select best using row metadata: resolution → file_size → earliest index
+    let bestIdx = 0;
+    for (let k = 1; k < candidateIndices.length; k++) {
+      const bestRow = rows[candidateIndices[bestIdx]];
+      const currRow = rows[candidateIndices[k]];
+
+      const resA = (bestRow.width ?? 0) * (bestRow.height ?? 0);
+      const resB = (currRow.width ?? 0) * (currRow.height ?? 0);
+
+      if (resB > resA) {
+        bestIdx = k;
+      } else if (resB === resA) {
+        if (currRow.file_size > bestRow.file_size) {
+          bestIdx = k;
+        } else if (currRow.file_size === bestRow.file_size) {
+          if (candidateIndices[k] < candidateIndices[bestIdx]) {
+            bestIdx = k;
+          }
+        }
+      }
+    }
+
+    const keepIndex = candidateIndices[bestIdx];
+    dedupGroups.push({ indices: groupIndices, keepIndex });
+
+    for (const idx of groupIndices) {
+      if (idx !== keepIndex) {
+        removedSet.add(idx);
+      }
+    }
+  }
+
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (let i = 0; i < n; i++) {
+    if (removedSet.has(i)) {
+      removed.push(rows[i].id);
+    } else {
+      kept.push(rows[i].id);
+    }
+  }
+
+  return { groups: dedupGroups, kept, removed };
+}
+
+
+// ---------------------------------------------------------------------------
+// DINOv2 dedup with skip tracking (for assessDedup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Same as runDINOv2Dedup but tracks download failures in skippedIndices/skippedReasons.
+ */
+async function runDINOv2DedupTracked(
+  rows: ImageRow[],
+  indices: number[],
+  tempCache: TempPathCache,
+  threshold: number,
+  skippedIndices: number[],
+  skippedReasons: Record<number, string>,
+): Promise<Array<{ i: number; j: number }>> {
+  if (indices.length < 2) return [];
+
+  const tempPaths: string[] = [];
+  const validIndices: number[] = [];
+
+  for (const idx of indices) {
+    try {
+      const localPath = await tempCache.get(rows[idx].file_path);
+      tempPaths.push(localPath);
+      validIndices.push(idx);
+    } catch (err) {
+      console.warn(`[assessDedup] DINOv2: failed to download ${rows[idx].id}: ${err}`);
+      skippedIndices.push(idx);
+      skippedReasons[idx] = `Download failed: ${err}`;
+    }
+  }
+
+  if (validIndices.length < 2) return [];
+
+  console.log(`[assessDedup] DINOv2: extracting embeddings for ${validIndices.length} images...`);
+  const embeddingResults = await extractEmbeddings(tempPaths);
+  const embeddings = embeddingResults.map(r => r.embedding);
+
+  console.log(`[assessDedup] DINOv2: FAISS duplicate detection (threshold=${threshold})...`);
+  const groups = await findDuplicateGroups(embeddings, threshold);
+
+  const confirmedPairs: Array<{ i: number; j: number }> = [];
+  for (const group of groups) {
+    for (let a = 0; a < group.length; a++) {
+      for (let b = a + 1; b < group.length; b++) {
+        confirmedPairs.push({
+          i: validIndices[group[a]],
+          j: validIndices[group[b]],
+        });
+      }
+    }
+  }
+
+  console.log(`[assessDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs`);
+  return confirmedPairs;
 }

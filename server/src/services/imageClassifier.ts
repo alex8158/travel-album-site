@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 import type { MediaItemRow } from '../helpers/mediaItemRow';
+import type { ClassificationAssessment } from './pipeline/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,6 +169,74 @@ export async function classifyImage(bytesOrBucket: Buffer | string, s3Key?: stri
         .filter((l) => l.Name)
         .map((l) => ({ name: l.Name!, confidence: l.Confidence ?? 0 }));
       return mapLabelsToCategory(labelsWithConf);
+    } catch (err: unknown) {
+      lastError = err;
+      const isThrottling =
+        err instanceof Error && (err.name === 'ThrottlingException' || err.name === 'Throttling');
+      if (isThrottling && attempt < 2) {
+        await sleep(Math.pow(2, attempt) * 1000);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Pure assessment functions (no DB writes) — used by pipeline v4
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a ClassificationAssessment from pre-computed Rekognition labels.
+ * Pure function: no network calls, no DB access.
+ */
+export function assessFromLabels(labels: LabelWithConfidence[]): ClassificationAssessment {
+  const result = mapLabelsToCategory(labels);
+
+  // Build categoryScores from the max confidence per matched category
+  const categoryScores: Record<string, number> = {};
+  for (const item of labels) {
+    if (matchesAny(item.name, PEOPLE_LABELS)) {
+      categoryScores['people'] = Math.max(categoryScores['people'] ?? 0, item.confidence);
+    }
+    if (matchesAny(item.name, ANIMAL_LABELS)) {
+      categoryScores['animal'] = Math.max(categoryScores['animal'] ?? 0, item.confidence);
+    }
+    if (matchesAny(item.name, LANDSCAPE_LABELS)) {
+      categoryScores['landscape'] = Math.max(categoryScores['landscape'] ?? 0, item.confidence);
+    }
+  }
+
+  return {
+    category: result.category,
+    categoryScores: Object.keys(categoryScores).length > 0 ? categoryScores : null,
+    source: 'rekognition',
+  };
+}
+
+/**
+ * Classify an image buffer via Rekognition and return a pure ClassificationAssessment.
+ * No DB writes — this is the Rekognition-only fallback called when Python CLIP fails.
+ */
+export async function assessClassification(imageBytes: Buffer): Promise<ClassificationAssessment> {
+  const client = createRekognitionClient();
+
+  const command = new DetectLabelsCommand({
+    Image: { Bytes: imageBytes },
+    MaxLabels: 20,
+    MinConfidence: 70,
+  });
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await client.send(command);
+      const labelsWithConf: LabelWithConfidence[] = (response.Labels ?? [])
+        .filter((l) => l.Name)
+        .map((l) => ({ name: l.Name!, confidence: l.Confidence ?? 0 }));
+      return assessFromLabels(labelsWithConf);
     } catch (err: unknown) {
       lastError = err;
       const isThrottling =

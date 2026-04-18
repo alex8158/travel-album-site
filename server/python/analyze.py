@@ -479,14 +479,15 @@ def cmd_analyze(args):
     for image_path in args.images:
         result = {
             "file": image_path,
-            "error": False,
+            "classify_error": None,
+            "blur_error": None,
             "category": None,
             "category_scores": None,
             "blur_status": "unknown",
             "blur_score": None,
         }
 
-        # CLIP classification
+        # CLIP classification (independent of blur detection)
         try:
             category, category_scores = classify_image(
                 image_path, model, processor
@@ -496,25 +497,21 @@ def cmd_analyze(args):
         except Exception as exc:
             print(f"Classification failed for {image_path}: {exc}",
                   file=sys.stderr)
-            result["error"] = True
-            result["error_message"] = str(exc)
+            result["classify_error"] = str(exc)
 
-        # Blur detection (independent of classification success)
-        blur_status, blur_score = detect_blur(
-            image_path,
-            blur_threshold=args.blur_threshold,
-            clear_threshold=args.clear_threshold,
-        )
-        result["blur_status"] = blur_status
-        result["blur_score"] = blur_score
-
-        # If classification failed, mark as error but keep blur results
-        # If blur also failed (unknown), that's fine — still not a full error
-        # unless classification also failed
-        if result["error"] and blur_status == "unknown":
-            result["error_message"] = result.get(
-                "error_message", "Processing failed"
+        # Blur detection (independent of classification)
+        try:
+            blur_status, blur_score = detect_blur(
+                image_path,
+                blur_threshold=args.blur_threshold,
+                clear_threshold=args.clear_threshold,
             )
+            result["blur_status"] = blur_status
+            result["blur_score"] = blur_score
+        except Exception as exc:
+            print(f"Blur detection failed for {image_path}: {exc}",
+                  file=sys.stderr)
+            result["blur_error"] = str(exc)
 
         results.append(result)
 

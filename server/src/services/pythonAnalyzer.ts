@@ -25,7 +25,17 @@ export type ImageCategory = 'people' | 'animal' | 'landscape' | 'other';
 
 export interface PythonAnalyzeResult {
   file: string;
+  /** Per-capability error: non-null string if CLIP classification failed */
+  classifyError: string | null;
+  /** Per-capability error: non-null string if OpenCV blur detection failed */
+  blurError: string | null;
+  /**
+   * Derived for backward compatibility: true if either classifyError or blurError is set.
+   * Consumers should check classifyError/blurError specifically — even when error=true,
+   * blur fields (blurStatus, blurScore) may still contain valid data.
+   */
   error: boolean;
+  /** Derived for backward compatibility: first non-null of classifyError or blurError */
   errorMessage?: string;
   category: ImageCategory | null;
   categoryScores: Record<string, number> | null;
@@ -281,10 +291,14 @@ async function runAnalyzeBatch(
 }
 
 function mapAnalyzeResult(raw: any): PythonAnalyzeResult {
+  const classifyError: string | null = raw.classify_error ?? null;
+  const blurError: string | null = raw.blur_error ?? null;
   return {
     file: raw.file,
-    error: raw.error ?? false,
-    errorMessage: raw.error_message,
+    classifyError,
+    blurError,
+    error: !!(classifyError || blurError),
+    errorMessage: classifyError || blurError || undefined,
     category: raw.category as ImageCategory | null,
     categoryScores: raw.category_scores,
     blurStatus: raw.blur_status ?? 'unknown',

@@ -7,6 +7,7 @@ import { signToken } from '../services/authService';
 import { authMiddleware } from '../middleware/auth';
 import tripsRouter from './trips';
 import processRouter from './process';
+import type { PipelineResult } from '../services/pipeline/types';
 
 const app = express();
 app.use(express.json());
@@ -27,43 +28,12 @@ function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string
   return { userId, token };
 }
 
-// Mock services to avoid needing real image/video files
-vi.mock('../services/hybridDedupEngine', () => ({
-  hybridDeduplicate: vi.fn().mockResolvedValue({ kept: [], removed: [], removedCount: 0 }),
+// Mock the pipeline orchestrator — process.ts now delegates everything to it
+vi.mock('../services/pipeline/runTripProcessingPipeline', () => ({
+  runTripProcessingPipeline: vi.fn(),
 }));
 
-vi.mock('../services/bedrockClient', () => ({
-  createAIClient: vi.fn().mockReturnValue({
-    invokeModel: vi.fn().mockResolvedValue('{}'),
-  }),
-  analyzeImageWithBedrock: vi.fn().mockResolvedValue({ blur_status: 'clear', category: 'other' }),
-}));
-
-vi.mock('../services/blurDetector', () => ({
-  applyBlurResult: vi.fn(),
-  detectBlurry: vi.fn().mockResolvedValue({ blurryCount: 0, suspectCount: 0, deleteLogs: [], results: [] }),
-}));
-
-vi.mock('../services/imageAnalyzer', () => ({
-  analyzeTrip: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../services/imageOptimizer', () => ({
-  optimizeTrip: vi.fn().mockResolvedValue([]),
-}));
-
-vi.mock('../services/imageClassifier', () => ({
-  applyClassifyResult: vi.fn(),
-  classifyTrip: vi.fn().mockResolvedValue(undefined),
-}));
-vi.mock('../services/videoAnalyzer', () => ({
-  analyzeVideo: vi.fn().mockResolvedValue({ mediaId: '', duration: 0, segments: [] }),
-}));
-
-vi.mock('../services/videoEditor', () => ({
-  editVideo: vi.fn().mockResolvedValue({ mediaId: '', compiledPath: null, selectedSegments: [] }),
-}));
-
+// Still need storage mock since other routes may use it
 vi.mock('../storage/factory', () => ({
   getStorageProvider: vi.fn().mockReturnValue({
     downloadToTemp: vi.fn().mockResolvedValue('/tmp/fake-image.jpg'),
@@ -73,13 +43,29 @@ vi.mock('../storage/factory', () => ({
   }),
 }));
 
-import { hybridDeduplicate } from '../services/hybridDedupEngine';
-import { analyzeImageWithBedrock } from '../services/bedrockClient';
-import { optimizeTrip } from '../services/imageOptimizer';
+import { runTripProcessingPipeline } from '../services/pipeline/runTripProcessingPipeline';
 
-const mockDeduplicate = vi.mocked(hybridDeduplicate);
-const mockAnalyzeImage = vi.mocked(analyzeImageWithBedrock);
-const mockOptimizeTrip = vi.mocked(optimizeTrip);
+const mockRunPipeline = vi.mocked(runTripProcessingPipeline);
+
+function makeEmptyResult(tripId: string): PipelineResult {
+  return {
+    tripId,
+    totalImages: 0,
+    totalVideos: 0,
+    blurryDeletedCount: 0,
+    dedupDeletedCount: 0,
+    analyzedCount: 0,
+    optimizedCount: 0,
+    classifiedCount: 0,
+    categoryStats: { people: 0, animal: 0, landscape: 0, other: 0 },
+    compiledCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    partialFailureCount: 0,
+    downloadFailedCount: 0,
+    coverImageId: null,
+  };
+}
 
 describe('POST /api/trips/:id/process', () => {
   let authToken: string;
@@ -91,12 +77,7 @@ describe('POST /api/trips/:id/process', () => {
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
-    mockDeduplicate.mockReset();
-    mockDeduplicate.mockResolvedValue({ kept: [], removed: [], removedCount: 0 });
-    mockAnalyzeImage.mockReset();
-    mockAnalyzeImage.mockResolvedValue({ blur_status: 'clear', category: 'other' });
-    mockOptimizeTrip.mockReset();
-    mockOptimizeTrip.mockResolvedValue([]);
+    mockRunPipeline.mockReset();
     const user = createTestUser('regular');
     authToken = user.token;
     testUserId = user.userId;
@@ -118,10 +99,13 @@ describe('POST /api/trips/:id/process', () => {
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Empty Trip' });
 
-    const res = await request(app).post(`/api/trips/${trip.body.id}/process`);
+    const tripId = trip.body.id;
+    mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
+
+    const res = await request(app).post(`/api/trips/${tripId}/process`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      tripId: trip.body.id,
+      tripId,
       totalImages: 0,
       totalVideos: 0,
       blurryDeletedCount: 0,
@@ -154,11 +138,14 @@ describe('POST /api/trips/:id/process', () => {
     insertMedia.run('img-1', tripId, `${tripId}/originals/a.jpg`, 'image', 'image/jpeg', 'a.jpg', 1000, testUserId, 'public', now);
     insertMedia.run('img-2', tripId, `${tripId}/originals/b.jpg`, 'image', 'image/jpeg', 'b.jpg', 2000, testUserId, 'public', now);
     insertMedia.run('img-3', tripId, `${tripId}/originals/c.jpg`, 'image', 'image/jpeg', 'c.jpg', 3000, testUserId, 'public', now);
-    // Also insert a video — should NOT be included in image count
     insertMedia.run('vid-1', tripId, `${tripId}/originals/v.mp4`, 'video', 'video/mp4', 'v.mp4', 5000, testUserId, 'public', now);
 
-    // Mock deduplicate to return some removed
-    mockDeduplicate.mockResolvedValue({ kept: ['img-1', 'img-2'], removed: ['img-3'], removedCount: 1 });
+    mockRunPipeline.mockResolvedValue({
+      ...makeEmptyResult(tripId),
+      totalImages: 3,
+      totalVideos: 1,
+      dedupDeletedCount: 1,
+    });
 
     const res = await request(app).post(`/api/trips/${tripId}/process`);
     expect(res.status).toBe(200);
@@ -167,12 +154,12 @@ describe('POST /api/trips/:id/process', () => {
     expect(res.body.totalVideos).toBe(1);
     expect(res.body.dedupDeletedCount).toBe(1);
 
-    // Verify deduplicate was called with tripId
-    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
-    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
+    // Verify pipeline was called with tripId
+    expect(mockRunPipeline).toHaveBeenCalledTimes(1);
+    expect(mockRunPipeline.mock.calls[0][0]).toBe(tripId);
   });
 
-  it('should call deduplicate with tripId string', async () => {
+  it('should call pipeline with tripId string', async () => {
     const trip = await request(app)
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
@@ -186,13 +173,57 @@ describe('POST /api/trips/:id/process', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run('img-a', tripId, `${tripId}/originals/photo.jpg`, 'image', 'image/jpeg', 'photo.jpg', 1000, testUserId, 'public', now);
 
-    mockDeduplicate.mockResolvedValue({ kept: ['img-a'], removed: [], removedCount: 0 });
+    mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
     await request(app).post(`/api/trips/${tripId}/process`);
 
-    // deduplicate receives tripId as first arg
-    expect(mockDeduplicate).toHaveBeenCalledTimes(1);
-    expect(typeof mockDeduplicate.mock.calls[0][0]).toBe('string');
-    expect(mockDeduplicate.mock.calls[0][0]).toBe(tripId);
+    // pipeline receives tripId as first arg
+    expect(mockRunPipeline).toHaveBeenCalledTimes(1);
+    expect(typeof mockRunPipeline.mock.calls[0][0]).toBe('string');
+    expect(mockRunPipeline.mock.calls[0][0]).toBe(tripId);
+  });
+
+  it('should return 409 when trip is already processing', async () => {
+    const trip = await request(app)
+      .post('/api/trips')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ title: 'Concurrent Trip' });
+    const tripId = trip.body.id;
+
+    // Make the pipeline hang so we can test concurrent access
+    let resolveHang!: (value: PipelineResult) => void;
+    const hangPromise = new Promise<PipelineResult>(resolve => { resolveHang = resolve; });
+    mockRunPipeline.mockReturnValue(hangPromise);
+
+    // Fire first request without awaiting — use .then() to avoid blocking
+    const firstReqPromise = request(app).post(`/api/trips/${tripId}/process`).then(r => r);
+
+    // Wait for the first request to enter the handler and register in processingTrips
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Second request should get 409
+    const secondRes = await request(app).post(`/api/trips/${tripId}/process`);
+    expect(secondRes.status).toBe(409);
+    expect(secondRes.body.error.code).toBe('ALREADY_PROCESSING');
+
+    // Resolve the first request so it completes and cleanup happens
+    resolveHang(makeEmptyResult(tripId));
+    const firstRes = await firstReqPromise;
+    expect(firstRes.status).toBe(200);
+  }, 10000);
+
+  it('should pass videoResolution option to pipeline', async () => {
+    const trip = await request(app)
+      .post('/api/trips')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({ title: 'Video Trip' });
+    const tripId = trip.body.id;
+
+    mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
+
+    await request(app).post(`/api/trips/${tripId}/process?videoResolution=720`);
+
+    expect(mockRunPipeline).toHaveBeenCalledTimes(1);
+    expect(mockRunPipeline.mock.calls[0][1]).toEqual({ videoResolution: 720 });
   });
 });
