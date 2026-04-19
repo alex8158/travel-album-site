@@ -8,9 +8,8 @@ import {
   PythonAnalyzeResult,
 } from '../pythonAnalyzer';
 import { assessClassification } from '../imageClassifier';
-import { computeSharpness, classifyBlur } from '../blurDetector';
+import { computeSharpness } from '../blurDetector';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
-import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -190,12 +189,10 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  // Use higher thresholds for pipeline blur detection
-  // Default 15/50 is too conservative for underwater/low-contrast photos
+  // Raised thresholds for underwater/low-contrast photos
   const blurThreshold = Math.max(PROCESS_THRESHOLDS.blurThreshold, 30);
   const clearThreshold = Math.max(PROCESS_THRESHOLDS.clearThreshold, 80);
 
-  // ---- Pass 1: Apply Python dual-Laplacian results with raised thresholds ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
@@ -211,7 +208,6 @@ async function runBlurStage(
     }
 
     if (score != null) {
-      // Re-classify with raised thresholds
       const status = score < blurThreshold ? 'blurry'
         : score < clearThreshold ? 'suspect'
         : 'clear';
@@ -225,59 +221,10 @@ async function runBlurStage(
     }
   }
 
-  const blurryAfterLap = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
-  const suspectAfterLap = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
-  const clearAfterLap = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
-  console.log(`[blur] Laplacian (thresh=${blurThreshold}/${clearThreshold}): ${blurryAfterLap} blurry, ${suspectAfterLap} suspect, ${clearAfterLap} clear`);
-
-  // ---- Pass 2: MUSIQ batch for suspects (skip if unavailable or crashes) ----
-  const suspectContexts = contexts.filter(
-    c => c.downloadOk && c.localPath && c.blur?.blurStatus === 'suspect'
-  );
-
-  if (suspectContexts.length > 0) {
-    const mlAvailable = await isMLServiceAvailable();
-    if (mlAvailable) {
-      const CHUNK = 10;
-      const MUSIQ_TIME_LIMIT = 180_000; // 3 minutes max for MUSIQ phase
-      const musiqStart = Date.now();
-      console.log(`[blur] MUSIQ: ${suspectContexts.length} suspects (chunks of ${CHUNK}, limit ${MUSIQ_TIME_LIMIT / 1000}s)...`);
-      let totalScored = 0;
-      let upgraded = 0;
-
-      for (let start = 0; start < suspectContexts.length; start += CHUNK) {
-        // Time check — stop MUSIQ if we've exceeded the limit
-        if (Date.now() - musiqStart > MUSIQ_TIME_LIMIT) {
-          console.log(`[blur] MUSIQ time limit reached after ${Math.round((Date.now() - musiqStart) / 1000)}s, skipping remaining ${suspectContexts.length - start} suspects`);
-          break;
-        }
-
-        const chunk = suspectContexts.slice(start, start + CHUNK);
-        try {
-          const results = await batchMLQuality(chunk.map(c => c.localPath!));
-          for (let i = 0; i < chunk.length; i++) {
-            const musiq = results[i]?.musiq_score ?? null;
-            if (musiq != null) {
-              totalScored++;
-              chunk[i].blur!.musiqScore = musiq;
-              if (musiq < 25) {
-                chunk[i].blur!.blurStatus = 'blurry';
-                upgraded++;
-              }
-            }
-          }
-          console.log(`[blur] MUSIQ chunk ${start}: ok (${Math.round((Date.now() - musiqStart) / 1000)}s elapsed)`);
-        } catch (err) {
-          console.warn(`[blur] MUSIQ chunk ${start} failed: ${err}`);
-          // Don't try single-image fallback — too slow, just skip
-        }
-      }
-      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded, ${Math.round((Date.now() - musiqStart) / 1000)}s total`);
-    }
-  }
-
-  const blurryFinal = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
-  console.log(`[blur] final: ${blurryFinal} blurry`);
+  const blurry = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
+  const suspect = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
+  const clear = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
+  console.log(`[blur] Laplacian (thresh=${blurThreshold}/${clearThreshold}): ${blurry} blurry, ${suspect} suspect, ${clear} clear`);
 }
 
 // ---------------------------------------------------------------------------
