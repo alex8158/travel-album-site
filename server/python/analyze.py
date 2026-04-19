@@ -116,7 +116,12 @@ def softmax(scores):
 
 
 def detect_blur(image_path, blur_threshold=15, clear_threshold=50):
-    """Detect blur using CLAHE-normalized Laplacian variance.
+    """Detect blur using dual Laplacian variance (with and without CLAHE).
+
+    Uses the MINIMUM of two scores:
+    - CLAHE-normalized Laplacian (good for well-lit photos)
+    - Plain grayscale Laplacian (good for underwater/low-contrast photos
+      where CLAHE inflates noise variance)
 
     Three-tier classification:
       blur_score < blur_threshold → blurry
@@ -130,10 +135,18 @@ def detect_blur(image_path, blur_threshold=15, clear_threshold=50):
         if img is None:
             return "unknown", None
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Score 1: CLAHE-normalized (original method)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         normalized = clahe.apply(gray)
-        laplacian = cv2.Laplacian(normalized, cv2.CV_64F)
-        blur_score = float(laplacian.var())
+        clahe_score = float(cv2.Laplacian(normalized, cv2.CV_64F).var())
+
+        # Score 2: Plain grayscale (catches underwater blur that CLAHE misses)
+        plain_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        # Use the lower score — if either method thinks it's blurry, it probably is
+        blur_score = min(clahe_score, plain_score)
+
         if blur_score < blur_threshold:
             blur_status = "blurry"
         elif blur_score < clear_threshold:
