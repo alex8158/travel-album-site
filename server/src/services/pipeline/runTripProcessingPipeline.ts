@@ -8,7 +8,9 @@ import {
   PythonAnalyzeResult,
 } from '../pythonAnalyzer';
 import { assessClassification } from '../imageClassifier';
-import { assessBlur } from '../blurDetector';
+import { computeSharpness, classifyBlur } from '../blurDetector';
+import { PROCESS_THRESHOLDS } from '../dedupThresholds';
+import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -188,55 +190,71 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  // For each image: try Python blur first, then fall back to assessBlur() (Laplacian+MUSIQ)
+  // ---- Pass 1: Apply Python dual-Laplacian results ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
-    try {
-      // Try Python result first
-      const pyResult = pythonResults.get(ctx.mediaId);
-      const pyOk = pyResult && !pyResult.blurError && pyResult.blurScore != null
-        && pyResult.blurStatus && pyResult.blurStatus !== 'unknown';
-
-      if (pyOk && pyResult!.blurStatus === 'blurry') {
-        // Python says blurry — trust it
-        ctx.blur = {
-          sharpnessScore: pyResult!.blurScore!,
-          blurStatus: 'blurry',
-          source: 'python',
-        };
-        console.log(`[blur] ${ctx.mediaId} python=blurry(${pyResult!.blurScore!.toFixed(1)})`);
-        continue;
+    const pyResult = pythonResults.get(ctx.mediaId);
+    if (pyResult && !pyResult.blurError && pyResult.blurScore != null
+        && pyResult.blurStatus && pyResult.blurStatus !== 'unknown') {
+      ctx.blur = {
+        sharpnessScore: pyResult.blurScore,
+        blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
+        source: 'python',
+      };
+    } else {
+      // No Python result — use Node.js Laplacian (fast, no MUSIQ)
+      try {
+        const sharpness = await computeSharpness(ctx.localPath);
+        const status = classifyBlur(sharpness, PROCESS_THRESHOLDS.blurThreshold, PROCESS_THRESHOLDS.clearThreshold);
+        ctx.blur = { sharpnessScore: sharpness, blurStatus: status, source: 'node' };
+      } catch {
+        ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node' };
       }
-
-      // For clear/suspect from Python, or no Python result: use assessBlur (Laplacian+MUSIQ)
-      const nodeResult = await assessBlur(ctx.localPath);
-      console.log(`[blur] ${ctx.mediaId} py=${pyOk ? pyResult!.blurStatus + '(' + pyResult!.blurScore!.toFixed(1) + ')' : 'n/a'} node=${nodeResult.blurStatus}(lap=${nodeResult.sharpnessScore?.toFixed(1)},musiq=${nodeResult.musiqScore ?? 'n/a'})`);
-
-      // If Python said clear but Node says blurry, trust Node (MUSIQ is more reliable)
-      if (pyOk && nodeResult.blurStatus === 'blurry') {
-        ctx.blur = nodeResult;
-      } else if (pyOk && nodeResult.blurStatus !== 'blurry') {
-        // Both agree not blurry — use Python score with Node status (may be suspect)
-        const moreConservative = nodeResult.blurStatus === 'suspect' ? 'suspect' : pyResult!.blurStatus as 'clear' | 'suspect';
-        ctx.blur = {
-          sharpnessScore: pyResult!.blurScore!,
-          blurStatus: moreConservative,
-          musiqScore: nodeResult.musiqScore,
-          source: 'python',
-        };
-      } else {
-        // No Python — use Node result directly
-        ctx.blur = nodeResult;
-      }
-
-      console.log(`[blur] ${ctx.mediaId} → ${ctx.blur.blurStatus}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.processingErrors.push(`[blur] ${msg}`);
-      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node', error: msg };
     }
   }
+
+  // ---- Pass 2: For suspect images, batch-check with MUSIQ in small chunks ----
+  const suspectContexts = contexts.filter(
+    c => c.downloadOk && c.localPath && c.blur?.blurStatus === 'suspect'
+  );
+
+  if (suspectContexts.length > 0) {
+    const CHUNK = 15;
+    console.log(`[blur] ${suspectContexts.length} suspect images, MUSIQ batch (chunks of ${CHUNK})...`);
+    let totalScored = 0;
+    let upgraded = 0;
+
+    for (let start = 0; start < suspectContexts.length; start += CHUNK) {
+      const chunk = suspectContexts.slice(start, start + CHUNK);
+      const paths = chunk.map(c => c.localPath!);
+      try {
+        const results = await batchMLQuality(paths);
+        for (let i = 0; i < chunk.length; i++) {
+          const musiqScore = results[i]?.musiq_score ?? null;
+          if (musiqScore != null) {
+            totalScored++;
+            chunk[i].blur!.musiqScore = musiqScore;
+            if (musiqScore < 20) {
+              chunk[i].blur!.blurStatus = 'blurry';
+              upgraded++;
+            }
+            console.log(`[blur] ${chunk[i].mediaId} musiq=${musiqScore.toFixed(1)} → ${chunk[i].blur!.blurStatus}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
+        // Continue with next chunk — don't abort
+      }
+    }
+    console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded to blurry`);
+  }
+
+  // Log summary
+  const blurryCount = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
+  const suspectCount = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
+  const clearCount = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
+  console.log(`[blur] summary: ${blurryCount} blurry, ${suspectCount} suspect, ${clearCount} clear`);
 }
 
 // ---------------------------------------------------------------------------
