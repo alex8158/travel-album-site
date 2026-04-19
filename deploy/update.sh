@@ -145,6 +145,38 @@ print('All ML models ready.', file=sys.stderr)
     warn "Python3 不可用，将使用 Node.js 回退算法"
   fi
 
+  # 更新 Nginx 配置（SSE 长连接需要更长超时）
+  log "更新 Nginx 配置..."
+  if [ -f /etc/nginx/sites-available/default ]; then
+    sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINX'
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 500M;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+NGINX
+    sudo nginx -t && sudo systemctl reload nginx
+    log "Nginx 配置已更新（proxy_read_timeout=1800s）"
+  fi
+
   log "重启服务..."
   pm2 delete travel-album 2>/dev/null || true
   pm2 start "$APP_DIR/server/dist/index.js" --name travel-album --cwd "$APP_DIR/server"
@@ -286,6 +318,37 @@ print('All ML models ready.', file=sys.stderr)
   fi
 else
   echo ">> 警告：Python3 不可用，将使用 Node.js 回退算法"
+fi
+
+echo ">> 更新 Nginx 配置..."
+if [ -f /etc/nginx/sites-available/default ]; then
+  sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINX'
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 500M;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+NGINX
+  sudo nginx -t && sudo systemctl reload nginx
+  echo ">> Nginx 配置已更新"
 fi
 
 echo ">> 重启服务..."
