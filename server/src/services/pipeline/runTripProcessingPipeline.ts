@@ -205,67 +205,83 @@ async function runBlurStage(
       for (let i = 0; i < downloadedContexts.length; i++) {
         musiqScores.set(downloadedContexts[i].mediaId, results[i]?.musiq_score ?? null);
       }
-      console.log(`[blur] MUSIQ batch complete: ${results.filter(r => r.musiq_score != null).length}/${results.length} scored`);
+      const scored = results.filter(r => r.musiq_score != null).length;
+      console.log(`[blur] MUSIQ batch complete: ${scored}/${results.length} scored`);
     } catch (err) {
-      console.warn(`[blur] Batch MUSIQ failed: ${err}`);
+      console.warn(`[blur] Batch MUSIQ failed (OOM?): ${err}`);
     }
   }
 
-  // ---- Step 2: Per-image blur decision using Python Laplacian + MUSIQ ----
+  // ---- Step 2: Collect Laplacian scores for relative threshold ----
+  const scoreMap = new Map<string, number>();
+  for (const ctx of downloadedContexts) {
+    const pyResult = pythonResults.get(ctx.mediaId);
+    if (pyResult && !pyResult.blurError && pyResult.blurScore != null) {
+      scoreMap.set(ctx.mediaId, pyResult.blurScore);
+    }
+  }
+  const allScores = Array.from(scoreMap.values()).sort((a, b) => a - b);
+  const median = allScores.length > 0 ? allScores[Math.floor(allScores.length / 2)] : 50;
+  const relativeThreshold = median * 0.30;
+  const hasMusiq = musiqScores.size > 0 && Array.from(musiqScores.values()).some(v => v != null);
+
+  console.log(`[blur] ${allScores.length} laplacian scores, median=${median.toFixed(1)}, relThresh=${relativeThreshold.toFixed(1)}, musiqAvailable=${hasMusiq}`);
+
+  // ---- Step 3: Per-image blur decision ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
     try {
+      const laplacianScore = scoreMap.get(ctx.mediaId) ?? null;
       const musiqScore = musiqScores.get(ctx.mediaId) ?? null;
+      const source = laplacianScore != null ? 'python' : 'node';
 
-      // Get Python Laplacian result
-      const pyResult = pythonResults.get(ctx.mediaId);
-      const pyScore = (pyResult && !pyResult.blurError && pyResult.blurScore != null)
-        ? pyResult.blurScore : null;
-      const pyStatus = (pyResult && !pyResult.blurError && pyResult.blurStatus && pyResult.blurStatus !== 'unknown')
-        ? pyResult.blurStatus : null;
+      // Fallback: compute Node.js Laplacian if Python didn't provide one
+      let effectiveScore = laplacianScore;
+      if (effectiveScore == null) {
+        try {
+          effectiveScore = await computeSharpness(ctx.localPath);
+        } catch { /* skip */ }
+      }
 
-      // Get Node.js Laplacian result (as fallback / cross-check)
-      let nodeScore: number | null = null;
-      try {
-        nodeScore = await computeSharpness(ctx.localPath);
-      } catch { /* ignore */ }
+      console.log(`[blur] ${ctx.mediaId} laplacian=${effectiveScore?.toFixed(1) ?? 'n/a'} musiq=${musiqScore?.toFixed(1) ?? 'n/a'} median=${median.toFixed(1)}`);
 
-      const laplacianScore = pyScore ?? nodeScore;
-      const source = pyScore != null ? 'python' : 'node';
-
-      console.log(`[blur] ${ctx.mediaId} laplacian=${laplacianScore?.toFixed(1) ?? 'n/a'}(${source}) musiq=${musiqScore?.toFixed(1) ?? 'n/a'} pyStatus=${pyStatus ?? 'n/a'}`);
-
-      // ---- Decision logic ----
       let blurStatus: 'clear' | 'suspect' | 'blurry';
 
-      // Hard MUSIQ gate: very low MUSIQ = definitely blurry
-      if (musiqScore != null && musiqScore < 15) {
-        blurStatus = 'blurry';
-      }
-      // MUSIQ < 20 + Laplacian not clearly sharp = blurry
-      else if (musiqScore != null && musiqScore < 20 && laplacianScore != null && laplacianScore < PROCESS_THRESHOLDS.clearThreshold) {
-        blurStatus = 'blurry';
-      }
-      // MUSIQ < 30 + Laplacian says blurry = blurry (dual condition)
-      else if (musiqScore != null && musiqScore < PROCESS_THRESHOLDS.musiqBlurThreshold && laplacianScore != null && laplacianScore < PROCESS_THRESHOLDS.blurThreshold) {
-        blurStatus = 'blurry';
-      }
-      // No MUSIQ available — use Laplacian only
-      else if (laplacianScore != null) {
-        blurStatus = classifyBlur(laplacianScore, PROCESS_THRESHOLDS.blurThreshold, PROCESS_THRESHOLDS.clearThreshold);
-      }
-      // Python gave a status directly
-      else if (pyStatus) {
-        blurStatus = pyStatus as 'clear' | 'suspect' | 'blurry';
-      }
-      // Nothing available
-      else {
+      if (effectiveScore != null) {
+        if (musiqScore != null) {
+          // ---- MUSIQ available: use as primary signal ----
+          if (musiqScore < 15) {
+            blurStatus = 'blurry';
+          } else if (musiqScore < 25 && effectiveScore < median * 0.5) {
+            blurStatus = 'blurry';
+          } else if (musiqScore < PROCESS_THRESHOLDS.musiqBlurThreshold && effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
+            blurStatus = 'blurry';
+          } else if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
+            blurStatus = 'blurry';
+          } else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
+            blurStatus = 'suspect';
+          } else {
+            blurStatus = 'clear';
+          }
+        } else {
+          // ---- No MUSIQ: absolute + relative thresholds ----
+          if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
+            blurStatus = 'blurry';
+          } else if (allScores.length >= 5 && effectiveScore < relativeThreshold) {
+            blurStatus = 'blurry';
+          } else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
+            blurStatus = 'suspect';
+          } else {
+            blurStatus = 'clear';
+          }
+        }
+      } else {
         blurStatus = 'suspect';
       }
 
       ctx.blur = {
-        sharpnessScore: laplacianScore,
+        sharpnessScore: effectiveScore,
         blurStatus,
         musiqScore,
         source,
