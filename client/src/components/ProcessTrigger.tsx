@@ -120,12 +120,19 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
   }
 
   const isProcessing = status === 'processing';
+  const canRetry = status === 'error' || status === 'disconnected';
 
   return (
     <div aria-label="素材处理">
-      {!autoStart && (
+      {!autoStart && !canRetry && (
         <button onClick={handleProcess} disabled={isProcessing}>
           {isProcessing ? '处理中...' : '开始处理'}
+        </button>
+      )}
+
+      {canRetry && (
+        <button onClick={handleProcess}>
+          重新处理
         </button>
       )}
 
