@@ -190,36 +190,47 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  // ---- Pass 1: Apply Python dual-Laplacian results ----
+  // Use higher thresholds for pipeline blur detection
+  // Default 15/50 is too conservative for underwater/low-contrast photos
+  const blurThreshold = Math.max(PROCESS_THRESHOLDS.blurThreshold, 30);
+  const clearThreshold = Math.max(PROCESS_THRESHOLDS.clearThreshold, 80);
+
+  // ---- Pass 1: Apply Python dual-Laplacian results with raised thresholds ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
     const pyResult = pythonResults.get(ctx.mediaId);
-    if (pyResult && !pyResult.blurError && pyResult.blurScore != null
-        && pyResult.blurStatus && pyResult.blurStatus !== 'unknown') {
+    let score: number | null = null;
+
+    if (pyResult && !pyResult.blurError && pyResult.blurScore != null) {
+      score = pyResult.blurScore;
+    } else {
+      try {
+        score = await computeSharpness(ctx.localPath);
+      } catch { /* skip */ }
+    }
+
+    if (score != null) {
+      // Re-classify with raised thresholds
+      const status = score < blurThreshold ? 'blurry'
+        : score < clearThreshold ? 'suspect'
+        : 'clear';
       ctx.blur = {
-        sharpnessScore: pyResult.blurScore,
-        blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
-        source: 'python',
+        sharpnessScore: score,
+        blurStatus: status,
+        source: pyResult?.blurScore != null ? 'python' : 'node',
       };
     } else {
-      // No Python result — use Node.js Laplacian
-      try {
-        const sharpness = await computeSharpness(ctx.localPath);
-        const status = classifyBlur(sharpness, PROCESS_THRESHOLDS.blurThreshold, PROCESS_THRESHOLDS.clearThreshold);
-        ctx.blur = { sharpnessScore: sharpness, blurStatus: status, source: 'node' };
-      } catch {
-        ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node' };
-      }
+      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node' };
     }
   }
 
   const blurryAfterLap = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
   const suspectAfterLap = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
-  console.log(`[blur] Laplacian pass: ${blurryAfterLap} blurry, ${suspectAfterLap} suspect`);
+  const clearAfterLap = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
+  console.log(`[blur] Laplacian (thresh=${blurThreshold}/${clearThreshold}): ${blurryAfterLap} blurry, ${suspectAfterLap} suspect, ${clearAfterLap} clear`);
 
-  // ---- Pass 2: MUSIQ for suspect images with low-ish Laplacian (< clearThreshold) ----
-  // Only check suspects that actually need MUSIQ — high-score suspects are fine
+  // ---- Pass 2: MUSIQ batch for suspects (skip if unavailable or crashes) ----
   const suspectContexts = contexts.filter(
     c => c.downloadOk && c.localPath && c.blur?.blurStatus === 'suspect'
   );
@@ -227,44 +238,37 @@ async function runBlurStage(
   if (suspectContexts.length > 0) {
     const mlAvailable = await isMLServiceAvailable();
     if (mlAvailable) {
-      const CHUNK = 15;
-      console.log(`[blur] MUSIQ pass: ${suspectContexts.length} suspects (chunks of ${CHUNK})...`);
+      const CHUNK = 10;
+      console.log(`[blur] MUSIQ: ${suspectContexts.length} suspects (chunks of ${CHUNK})...`);
       let totalScored = 0;
       let upgraded = 0;
 
       for (let start = 0; start < suspectContexts.length; start += CHUNK) {
         const chunk = suspectContexts.slice(start, start + CHUNK);
-        const paths = chunk.map(c => c.localPath!);
         try {
-          const results = await batchMLQuality(paths);
+          const results = await batchMLQuality(chunk.map(c => c.localPath!));
           for (let i = 0; i < chunk.length; i++) {
-            const musiqScore = results[i]?.musiq_score ?? null;
-            if (musiqScore != null) {
+            const musiq = results[i]?.musiq_score ?? null;
+            if (musiq != null) {
               totalScored++;
-              chunk[i].blur!.musiqScore = musiqScore;
-              // MUSIQ < 20 → upgrade suspect to blurry
-              if (musiqScore < 20) {
+              chunk[i].blur!.musiqScore = musiq;
+              if (musiq < 25) {
                 chunk[i].blur!.blurStatus = 'blurry';
                 upgraded++;
               }
-              console.log(`[blur] ${chunk[i].mediaId} musiq=${musiqScore.toFixed(1)} → ${chunk[i].blur!.blurStatus}`);
             }
           }
-          console.log(`[blur] MUSIQ chunk ${start}-${start + chunk.length}: ${chunk.length} processed`);
+          console.log(`[blur] MUSIQ chunk ${start}: ok`);
         } catch (err) {
-          console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
+          console.warn(`[blur] MUSIQ chunk ${start} failed: ${err}`);
         }
       }
-      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded to blurry`);
-    } else {
-      console.log(`[blur] MUSIQ unavailable, keeping Laplacian results`);
+      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded`);
     }
   }
 
   const blurryFinal = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
-  const suspectFinal = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
-  const clearFinal = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
-  console.log(`[blur] final: ${blurryFinal} blurry, ${suspectFinal} suspect, ${clearFinal} clear`);
+  console.log(`[blur] final: ${blurryFinal} blurry`);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,18 +279,22 @@ async function runDedupStage(
   contexts: ImageProcessContext[],
   tempCache: TempPathCache,
 ): Promise<DedupAssessment | null> {
-  // Filter out blurry images — they're already trashed, no need to dedup them
-  const nonBlurryContexts = contexts.filter(
-    ctx => ctx.blur?.blurStatus !== 'blurry'
-  );
+  // Filter out blurry images AND low-quality suspects (sharpness < 30)
+  const dedupContexts = contexts.filter(ctx => {
+    if (ctx.blur?.blurStatus === 'blurry') return false;
+    // Also exclude suspects with very low sharpness — they're borderline blurry
+    if (ctx.blur?.blurStatus === 'suspect' && ctx.blur.sharpnessScore != null && ctx.blur.sharpnessScore < 30) return false;
+    return true;
+  });
 
-  console.log(`[dedup] ${contexts.length} total, ${contexts.length - nonBlurryContexts.length} blurry excluded, ${nonBlurryContexts.length} entering dedup`);
+  const excluded = contexts.length - dedupContexts.length;
+  console.log(`[dedup] ${contexts.length} total, ${excluded} excluded (blurry + low-quality suspect), ${dedupContexts.length} entering dedup`);
 
-  if (nonBlurryContexts.length < 2) {
+  if (dedupContexts.length < 2) {
     return {
       confirmedPairs: [],
       groups: [],
-      kept: nonBlurryContexts.map(c => c.mediaId),
+      kept: dedupContexts.map(c => c.mediaId),
       removed: [],
       skippedIndices: [],
       skippedReasons: {},
@@ -295,8 +303,7 @@ async function runDedupStage(
     };
   }
 
-  // Build ImageRow-compatible objects from non-blurry contexts
-  const rows: ImageRow[] = nonBlurryContexts.map(ctx => ({
+  const rows: ImageRow[] = dedupContexts.map(ctx => ({
     id: ctx.mediaId,
     file_path: ctx.filePath,
     original_filename: '',
@@ -310,12 +317,11 @@ async function runDedupStage(
     created_at: '',
   }));
 
-  // Enrich rows with DB data for quality selection (resolution, file_size)
   const db = getDb();
-  for (let i = 0; i < nonBlurryContexts.length; i++) {
+  for (let i = 0; i < dedupContexts.length; i++) {
     const dbRow = db.prepare(
       'SELECT width, height, file_size, original_filename, created_at FROM media_items WHERE id = ?'
-    ).get(nonBlurryContexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
+    ).get(dedupContexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
     if (dbRow) {
       rows[i].width = dbRow.width;
       rows[i].height = dbRow.height;

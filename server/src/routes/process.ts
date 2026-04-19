@@ -40,21 +40,6 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     return res.status(409).json({ error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中，请稍后再试' } });
   }
 
-  // For large trips, recommend using SSE stream instead
-  const imageCount = (db.prepare(
-    "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image'"
-  ).get(tripId) as { cnt: number }).cnt;
-
-  if (imageCount > 80) {
-    return res.status(400).json({
-      error: {
-        code: 'USE_STREAM',
-        message: `该旅行有 ${imageCount} 张图片，请使用 /process/stream 接口`,
-        imageCount,
-      },
-    });
-  }
-
   processingTrips.add(tripId);
 
   // Parse optional query parameters
