@@ -193,23 +193,29 @@ async function runBlurStage(
   const downloadedContexts = contexts.filter(c => c.downloadOk && c.localPath);
   if (downloadedContexts.length === 0) return;
 
-  // ---- Step 1: Batch-fetch MUSIQ scores (one Python call for all images) ----
+  // ---- Step 1: Batch-fetch MUSIQ scores in chunks (avoid OOM/timeout) ----
+  const MUSIQ_BATCH_SIZE = 30;
   const musiqScores = new Map<string, number | null>();
   const mlAvailable = await isMLServiceAvailable();
 
   if (mlAvailable) {
-    const paths = downloadedContexts.map(c => c.localPath!);
-    try {
-      console.log(`[blur] Batch MUSIQ scoring for ${paths.length} images...`);
-      const results = await batchMLQuality(paths);
-      for (let i = 0; i < downloadedContexts.length; i++) {
-        musiqScores.set(downloadedContexts[i].mediaId, results[i]?.musiq_score ?? null);
+    console.log(`[blur] Batch MUSIQ scoring for ${downloadedContexts.length} images (chunks of ${MUSIQ_BATCH_SIZE})...`);
+    for (let start = 0; start < downloadedContexts.length; start += MUSIQ_BATCH_SIZE) {
+      const chunk = downloadedContexts.slice(start, start + MUSIQ_BATCH_SIZE);
+      const paths = chunk.map(c => c.localPath!);
+      try {
+        const results = await batchMLQuality(paths);
+        for (let i = 0; i < chunk.length; i++) {
+          musiqScores.set(chunk[i].mediaId, results[i]?.musiq_score ?? null);
+        }
+        console.log(`[blur] MUSIQ chunk ${start}-${start + chunk.length}: ${results.filter(r => r.musiq_score != null).length}/${chunk.length} scored`);
+      } catch (err) {
+        console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
+        // Mark this chunk as no-MUSIQ, continue with next chunk
       }
-      const scored = results.filter(r => r.musiq_score != null).length;
-      console.log(`[blur] MUSIQ batch complete: ${scored}/${results.length} scored`);
-    } catch (err) {
-      console.warn(`[blur] Batch MUSIQ failed (OOM?): ${err}`);
     }
+    const totalScored = Array.from(musiqScores.values()).filter(v => v != null).length;
+    console.log(`[blur] MUSIQ total: ${totalScored}/${downloadedContexts.length} scored`);
   }
 
   // ---- Step 2: Collect Laplacian scores for relative threshold ----
@@ -223,7 +229,7 @@ async function runBlurStage(
   const allScores = Array.from(scoreMap.values()).sort((a, b) => a - b);
   const median = allScores.length > 0 ? allScores[Math.floor(allScores.length / 2)] : 50;
   const relativeThreshold = median * 0.30;
-  const hasMusiq = musiqScores.size > 0 && Array.from(musiqScores.values()).some(v => v != null);
+  const hasMusiq = Array.from(musiqScores.values()).some(v => v != null);
 
   console.log(`[blur] ${allScores.length} laplacian scores, median=${median.toFixed(1)}, relThresh=${relativeThreshold.toFixed(1)}, musiqAvailable=${hasMusiq}`);
 
@@ -236,7 +242,6 @@ async function runBlurStage(
       const musiqScore = musiqScores.get(ctx.mediaId) ?? null;
       const source = laplacianScore != null ? 'python' : 'node';
 
-      // Fallback: compute Node.js Laplacian if Python didn't provide one
       let effectiveScore = laplacianScore;
       if (effectiveScore == null) {
         try {
@@ -244,13 +249,12 @@ async function runBlurStage(
         } catch { /* skip */ }
       }
 
-      console.log(`[blur] ${ctx.mediaId} laplacian=${effectiveScore?.toFixed(1) ?? 'n/a'} musiq=${musiqScore?.toFixed(1) ?? 'n/a'} median=${median.toFixed(1)}`);
+      console.log(`[blur] ${ctx.mediaId} lap=${effectiveScore?.toFixed(1) ?? 'n/a'} musiq=${musiqScore?.toFixed(1) ?? 'n/a'} med=${median.toFixed(1)}`);
 
       let blurStatus: 'clear' | 'suspect' | 'blurry';
 
       if (effectiveScore != null) {
         if (musiqScore != null) {
-          // ---- MUSIQ available: use as primary signal ----
           if (musiqScore < 15) {
             blurStatus = 'blurry';
           } else if (musiqScore < 25 && effectiveScore < median * 0.5) {
@@ -265,7 +269,6 @@ async function runBlurStage(
             blurStatus = 'clear';
           }
         } else {
-          // ---- No MUSIQ: absolute + relative thresholds ----
           if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
             blurStatus = 'blurry';
           } else if (allScores.length >= 5 && effectiveScore < relativeThreshold) {
@@ -280,23 +283,12 @@ async function runBlurStage(
         blurStatus = 'suspect';
       }
 
-      ctx.blur = {
-        sharpnessScore: effectiveScore,
-        blurStatus,
-        musiqScore,
-        source,
-      };
-
-      console.log(`[blur] ${ctx.mediaId} final: status=${blurStatus} source=${source}`);
+      ctx.blur = { sharpnessScore: effectiveScore, blurStatus, musiqScore, source };
+      console.log(`[blur] ${ctx.mediaId} final: status=${blurStatus}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.processingErrors.push(`[blur] ${msg}`);
-      ctx.blur = {
-        blurStatus: 'suspect',
-        sharpnessScore: null,
-        source: 'node',
-        error: msg,
-      };
+      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node', error: msg };
     }
   }
 }
