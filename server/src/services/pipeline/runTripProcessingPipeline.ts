@@ -8,7 +8,9 @@ import {
   PythonAnalyzeResult,
 } from '../pythonAnalyzer';
 import { assessClassification } from '../imageClassifier';
-import { assessBlur } from '../blurDetector';
+import { assessBlur, computeSharpness, classifyBlur } from '../blurDetector';
+import { PROCESS_THRESHOLDS } from '../dedupThresholds';
+import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -188,64 +190,88 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
+  const downloadedContexts = contexts.filter(c => c.downloadOk && c.localPath);
+  if (downloadedContexts.length === 0) return;
+
+  // ---- Step 1: Batch-fetch MUSIQ scores (one Python call for all images) ----
+  const musiqScores = new Map<string, number | null>();
+  const mlAvailable = await isMLServiceAvailable();
+
+  if (mlAvailable) {
+    const paths = downloadedContexts.map(c => c.localPath!);
+    try {
+      console.log(`[blur] Batch MUSIQ scoring for ${paths.length} images...`);
+      const results = await batchMLQuality(paths);
+      for (let i = 0; i < downloadedContexts.length; i++) {
+        musiqScores.set(downloadedContexts[i].mediaId, results[i]?.musiq_score ?? null);
+      }
+      console.log(`[blur] MUSIQ batch complete: ${results.filter(r => r.musiq_score != null).length}/${results.length} scored`);
+    } catch (err) {
+      console.warn(`[blur] Batch MUSIQ failed: ${err}`);
+    }
+  }
+
+  // ---- Step 2: Per-image blur decision using Python Laplacian + MUSIQ ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
     try {
-      // Try Python result first (from shared analyzeImages call)
+      const musiqScore = musiqScores.get(ctx.mediaId) ?? null;
+
+      // Get Python Laplacian result
       const pyResult = pythonResults.get(ctx.mediaId);
-      if (
-        pyResult &&
-        !pyResult.blurError &&
-        pyResult.blurScore != null &&
-        pyResult.blurStatus &&
-        pyResult.blurStatus !== 'unknown'
-      ) {
-        console.log(`[blur] ${ctx.mediaId} python: score=${pyResult.blurScore.toFixed(1)} status=${pyResult.blurStatus}`);
+      const pyScore = (pyResult && !pyResult.blurError && pyResult.blurScore != null)
+        ? pyResult.blurScore : null;
+      const pyStatus = (pyResult && !pyResult.blurError && pyResult.blurStatus && pyResult.blurStatus !== 'unknown')
+        ? pyResult.blurStatus : null;
 
-        // Always cross-check with Node.js assessBlur (which includes MUSIQ)
-        // Python Laplacian alone is unreliable for underwater/low-contrast photos
-        try {
-          const nodeResult = await assessBlur(ctx.localPath);
-          console.log(`[blur] ${ctx.mediaId} node: score=${nodeResult.sharpnessScore?.toFixed(1)} musiq=${nodeResult.musiqScore ?? 'n/a'} status=${nodeResult.blurStatus}`);
+      // Get Node.js Laplacian result (as fallback / cross-check)
+      let nodeScore: number | null = null;
+      try {
+        nodeScore = await computeSharpness(ctx.localPath);
+      } catch { /* ignore */ }
 
-          // Use the more aggressive result (prefer blurry over suspect over clear)
-          const statusRank = { blurry: 0, suspect: 1, clear: 2 };
-          const pyRank = statusRank[pyResult.blurStatus as keyof typeof statusRank] ?? 2;
-          const nodeRank = statusRank[nodeResult.blurStatus] ?? 2;
+      const laplacianScore = pyScore ?? nodeScore;
+      const source = pyScore != null ? 'python' : 'node';
 
-          if (nodeRank < pyRank) {
-            // Node.js (with MUSIQ) says worse — use Node result
-            ctx.blur = nodeResult;
-          } else {
-            // Python result is same or worse — use Python
-            ctx.blur = {
-              sharpnessScore: pyResult.blurScore,
-              blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
-              source: 'python',
-            };
-          }
-        } catch {
-          // Node.js failed — use Python result as-is
-          ctx.blur = {
-            sharpnessScore: pyResult.blurScore,
-            blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
-            source: 'python',
-          };
-        }
+      console.log(`[blur] ${ctx.mediaId} laplacian=${laplacianScore?.toFixed(1) ?? 'n/a'}(${source}) musiq=${musiqScore?.toFixed(1) ?? 'n/a'} pyStatus=${pyStatus ?? 'n/a'}`);
 
-        console.log(`[blur] ${ctx.mediaId} final: status=${ctx.blur.blurStatus} source=${ctx.blur.source}`);
-        continue;
+      // ---- Decision logic ----
+      let blurStatus: 'clear' | 'suspect' | 'blurry';
+
+      // Hard MUSIQ gate: very low MUSIQ = definitely blurry
+      if (musiqScore != null && musiqScore < 15) {
+        blurStatus = 'blurry';
+      }
+      // MUSIQ < 20 + Laplacian not clearly sharp = blurry
+      else if (musiqScore != null && musiqScore < 20 && laplacianScore != null && laplacianScore < PROCESS_THRESHOLDS.clearThreshold) {
+        blurStatus = 'blurry';
+      }
+      // MUSIQ < 30 + Laplacian says blurry = blurry (dual condition)
+      else if (musiqScore != null && musiqScore < PROCESS_THRESHOLDS.musiqBlurThreshold && laplacianScore != null && laplacianScore < PROCESS_THRESHOLDS.blurThreshold) {
+        blurStatus = 'blurry';
+      }
+      // No MUSIQ available — use Laplacian only
+      else if (laplacianScore != null) {
+        blurStatus = classifyBlur(laplacianScore, PROCESS_THRESHOLDS.blurThreshold, PROCESS_THRESHOLDS.clearThreshold);
+      }
+      // Python gave a status directly
+      else if (pyStatus) {
+        blurStatus = pyStatus as 'clear' | 'suspect' | 'blurry';
+      }
+      // Nothing available
+      else {
+        blurStatus = 'suspect';
       }
 
-      // Python blur failed or unavailable — try Node.js (includes MUSIQ dual-condition)
-      const blurError = pyResult?.blurError;
-      if (blurError) {
-        ctx.processingErrors.push(`[python-blur] ${blurError}`);
-      }
+      ctx.blur = {
+        sharpnessScore: laplacianScore,
+        blurStatus,
+        musiqScore,
+        source,
+      };
 
-      ctx.blur = await assessBlur(ctx.localPath);
-      console.log(`[blur] ${ctx.mediaId} node-only: score=${ctx.blur.sharpnessScore?.toFixed(1)} musiq=${ctx.blur.musiqScore ?? 'n/a'} status=${ctx.blur.blurStatus}`);
+      console.log(`[blur] ${ctx.mediaId} final: status=${blurStatus} source=${source}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.processingErrors.push(`[blur] ${msg}`);
