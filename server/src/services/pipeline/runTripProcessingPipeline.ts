@@ -203,7 +203,7 @@ async function runBlurStage(
         source: 'python',
       };
     } else {
-      // No Python result — use Node.js Laplacian (fast, no MUSIQ)
+      // No Python result — use Node.js Laplacian
       try {
         const sharpness = await computeSharpness(ctx.localPath);
         const status = classifyBlur(sharpness, PROCESS_THRESHOLDS.blurThreshold, PROCESS_THRESHOLDS.clearThreshold);
@@ -214,47 +214,57 @@ async function runBlurStage(
     }
   }
 
-  // ---- Pass 2: For suspect images, batch-check with MUSIQ in small chunks ----
+  const blurryAfterLap = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
+  const suspectAfterLap = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
+  console.log(`[blur] Laplacian pass: ${blurryAfterLap} blurry, ${suspectAfterLap} suspect`);
+
+  // ---- Pass 2: MUSIQ for suspect images with low-ish Laplacian (< clearThreshold) ----
+  // Only check suspects that actually need MUSIQ — high-score suspects are fine
   const suspectContexts = contexts.filter(
     c => c.downloadOk && c.localPath && c.blur?.blurStatus === 'suspect'
   );
 
   if (suspectContexts.length > 0) {
-    const CHUNK = 15;
-    console.log(`[blur] ${suspectContexts.length} suspect images, MUSIQ batch (chunks of ${CHUNK})...`);
-    let totalScored = 0;
-    let upgraded = 0;
+    const mlAvailable = await isMLServiceAvailable();
+    if (mlAvailable) {
+      const CHUNK = 15;
+      console.log(`[blur] MUSIQ pass: ${suspectContexts.length} suspects (chunks of ${CHUNK})...`);
+      let totalScored = 0;
+      let upgraded = 0;
 
-    for (let start = 0; start < suspectContexts.length; start += CHUNK) {
-      const chunk = suspectContexts.slice(start, start + CHUNK);
-      const paths = chunk.map(c => c.localPath!);
-      try {
-        const results = await batchMLQuality(paths);
-        for (let i = 0; i < chunk.length; i++) {
-          const musiqScore = results[i]?.musiq_score ?? null;
-          if (musiqScore != null) {
-            totalScored++;
-            chunk[i].blur!.musiqScore = musiqScore;
-            if (musiqScore < 20) {
-              chunk[i].blur!.blurStatus = 'blurry';
-              upgraded++;
+      for (let start = 0; start < suspectContexts.length; start += CHUNK) {
+        const chunk = suspectContexts.slice(start, start + CHUNK);
+        const paths = chunk.map(c => c.localPath!);
+        try {
+          const results = await batchMLQuality(paths);
+          for (let i = 0; i < chunk.length; i++) {
+            const musiqScore = results[i]?.musiq_score ?? null;
+            if (musiqScore != null) {
+              totalScored++;
+              chunk[i].blur!.musiqScore = musiqScore;
+              // MUSIQ < 20 → upgrade suspect to blurry
+              if (musiqScore < 20) {
+                chunk[i].blur!.blurStatus = 'blurry';
+                upgraded++;
+              }
+              console.log(`[blur] ${chunk[i].mediaId} musiq=${musiqScore.toFixed(1)} → ${chunk[i].blur!.blurStatus}`);
             }
-            console.log(`[blur] ${chunk[i].mediaId} musiq=${musiqScore.toFixed(1)} → ${chunk[i].blur!.blurStatus}`);
           }
+          console.log(`[blur] MUSIQ chunk ${start}-${start + chunk.length}: ${chunk.length} processed`);
+        } catch (err) {
+          console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
         }
-      } catch (err) {
-        console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
-        // Continue with next chunk — don't abort
       }
+      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded to blurry`);
+    } else {
+      console.log(`[blur] MUSIQ unavailable, keeping Laplacian results`);
     }
-    console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded to blurry`);
   }
 
-  // Log summary
-  const blurryCount = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
-  const suspectCount = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
-  const clearCount = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
-  console.log(`[blur] summary: ${blurryCount} blurry, ${suspectCount} suspect, ${clearCount} clear`);
+  const blurryFinal = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
+  const suspectFinal = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
+  const clearFinal = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
+  console.log(`[blur] final: ${blurryFinal} blurry, ${suspectFinal} suspect, ${clearFinal} clear`);
 }
 
 // ---------------------------------------------------------------------------

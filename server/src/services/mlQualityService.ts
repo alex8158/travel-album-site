@@ -28,14 +28,23 @@ interface EmbeddingResult {
 
 /**
  * Run a Python quality_service.py command and return parsed JSON output.
- * When stdinData is provided, it is written to the process's stdin to avoid
- * E2BIG errors from large CLI arguments (e.g., 100+ image paths or embeddings).
+ * 
+ * Handles stderr/stdout separation carefully:
+ * - Python model loading messages go to stderr (logged but ignored)
+ * - Only the last line of stdout is parsed as JSON (avoids progress bar corruption)
+ * - stdin is used for large payloads to avoid E2BIG
  */
 async function runPythonCommand(args: string[], stdinData?: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const proc = spawn(getPythonPath(), [PYTHON_SCRIPT, ...args], {
       cwd: path.dirname(PYTHON_SCRIPT),
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        // Suppress Python warnings and progress bars that corrupt stdout
+        PYTHONUNBUFFERED: '1',
+        TRANSFORMERS_NO_ADVISORY_WARNINGS: '1',
+        TOKENIZERS_PARALLELISM: 'false',
+      },
     });
 
     let stdout = '';
@@ -46,14 +55,30 @@ async function runPythonCommand(args: string[], stdinData?: string): Promise<unk
 
     proc.on('close', (code) => {
       if (stderr) {
-        console.log(`[mlQuality] stderr: ${stderr.trim()}`);
+        // Only log first 500 chars of stderr to avoid flooding
+        console.log(`[mlQuality] stderr: ${stderr.trim().slice(0, 500)}`);
       }
       if (code !== 0) {
-        reject(new Error(`Python quality_service exited with code ${code}: ${stderr}`));
+        reject(new Error(`Python quality_service exited with code ${code}: ${stderr.slice(0, 300)}`));
         return;
       }
       try {
-        resolve(JSON.parse(stdout));
+        // Find the last complete JSON line in stdout
+        // (pyiqa/transformers may print progress bars to stdout before the JSON)
+        const lines = stdout.trim().split('\n');
+        let jsonStr = '';
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (line.startsWith('{') || line.startsWith('[')) {
+            jsonStr = line;
+            break;
+          }
+        }
+        if (!jsonStr) {
+          reject(new Error(`No JSON found in Python output: ${stdout.slice(0, 200)}`));
+          return;
+        }
+        resolve(JSON.parse(jsonStr));
       } catch (e) {
         reject(new Error(`Failed to parse Python output: ${stdout.slice(0, 200)}`));
       }
@@ -63,7 +88,6 @@ async function runPythonCommand(args: string[], stdinData?: string): Promise<unk
       reject(new Error(`Failed to spawn Python: ${err.message}`));
     });
 
-    // Write large data via stdin to avoid E2BIG
     if (stdinData) {
       proc.stdin.write(stdinData);
       proc.stdin.end();

@@ -12,12 +12,17 @@ Usage:
   python quality_service.py quality <image_path>
   python quality_service.py batch_quality <image_paths_json>
 
-All output is JSON to stdout.
+All output is JSON to stdout. Model loading messages go to stderr.
 """
 
 import sys
 import json
 import os
+
+# Redirect all library output (progress bars, warnings) to stderr
+# so stdout stays clean for JSON output
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import warnings
 import numpy as np
 
@@ -293,18 +298,22 @@ def main():
     command = sys.argv[1]
     use_stdin = '--stdin' in sys.argv
 
+    # Compute result first, then flush stderr, then write JSON to stdout
+    # This ensures no stderr leaks into stdout
+    result_json = None
+
     if command == "embeddings":
         if use_stdin:
             paths = json.loads(sys.stdin.read())
         else:
             paths = json.loads(sys.argv[2])
         results = extract_embeddings(paths)
-        print(json.dumps(results))
+        result_json = json.dumps(results)
 
     elif command == "quality":
         path = sys.argv[2]
         result = compute_quality(path)
-        print(json.dumps(result))
+        result_json = json.dumps(result)
 
     elif command == "batch_quality":
         if use_stdin:
@@ -312,7 +321,7 @@ def main():
         else:
             paths = json.loads(sys.argv[2])
         results = batch_quality(paths)
-        print(json.dumps(results))
+        result_json = json.dumps(results)
 
     elif command == "find_duplicates":
         if use_stdin:
@@ -323,11 +332,16 @@ def main():
             data = json.loads(sys.argv[2])
             threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.92
         groups = find_duplicates(data, threshold)
-        print(json.dumps(groups))
+        result_json = json.dumps(groups)
 
     else:
         print(json.dumps({"error": f"Unknown command: {command}"}))
         sys.exit(1)
+
+    # Flush stderr first, then write clean JSON to stdout
+    sys.stderr.flush()
+    sys.stdout.write(result_json + "\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
