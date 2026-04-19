@@ -346,79 +346,100 @@ export async function runTripProcessingPipeline(
   let dedupAssessment: DedupAssessment | null = null;
 
   try {
+    const pipelineStart = Date.now();
+
     // ---- Stage: collectInputs ----
+    console.log(`[pipeline] ===== START trip=${tripId} =====`);
     onProgress('collectInputs', 'start');
+    let t0 = Date.now();
     try {
       contexts = await collectInputs(tripId, tempCache);
+      console.log(`[pipeline] collectInputs: ${contexts.length} images, ${contexts.filter(c => c.downloadOk).length} downloaded, ${Date.now() - t0}ms`);
       onProgress('collectInputs', 'complete', `${contexts.length} images collected`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'collectInputs', error: msg });
+      console.error(`[pipeline] collectInputs FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('collectInputs', 'complete', `failed: ${msg}`);
     }
 
     // ---- Stage: classify ----
     onProgress('classify', 'start');
+    t0 = Date.now();
     try {
       await runClassifyStage(contexts, pythonResults);
       const classifiedCount = contexts.filter(c => c.classification !== null).length;
+      console.log(`[pipeline] classify: ${classifiedCount}/${contexts.length} classified, ${Date.now() - t0}ms`);
       onProgress('classify', 'complete', `${classifiedCount} classified`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'classify', error: msg });
+      console.error(`[pipeline] classify FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('classify', 'complete', `failed: ${msg}`);
     }
 
     // ---- Stage: blur ----
     onProgress('blur', 'start');
+    t0 = Date.now();
     try {
       await runBlurStage(contexts, pythonResults);
       const blurCount = contexts.filter(c => c.blur !== null).length;
+      const blurryCount = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
+      console.log(`[pipeline] blur: ${blurCount} assessed, ${blurryCount} blurry, ${Date.now() - t0}ms`);
       onProgress('blur', 'complete', `${blurCount} blur-assessed`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'blur', error: msg });
+      console.error(`[pipeline] blur FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('blur', 'complete', `failed: ${msg}`);
     }
 
     // ---- Stage: dedup ----
     onProgress('dedup', 'start');
+    t0 = Date.now();
     try {
       dedupAssessment = await runDedupStage(contexts, tempCache);
       const removedCount = dedupAssessment?.removed.length ?? 0;
+      console.log(`[pipeline] dedup: ${removedCount} removed, ${Date.now() - t0}ms`);
       onProgress('dedup', 'complete', `${removedCount} duplicates found`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'dedup', error: msg });
       dedupAssessment = null;
+      console.error(`[pipeline] dedup FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('dedup', 'complete', `failed: ${msg}`);
     }
 
     // ---- Stage: reduce ----
     let decisions: ReturnType<typeof reduce> = [];
     onProgress('reduce', 'start');
+    t0 = Date.now();
     try {
       decisions = reduce(contexts, dedupAssessment);
+      console.log(`[pipeline] reduce: ${decisions.length} decisions, ${Date.now() - t0}ms`);
       onProgress('reduce', 'complete', `${decisions.length} decisions`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'reduce', error: msg });
-      console.error(`[pipeline] reduce failed: ${msg}`);
+      console.error(`[pipeline] reduce FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('reduce', 'complete', `failed: ${msg}`);
     }
 
     // ---- Stage: write ----
     onProgress('write', 'start');
+    t0 = Date.now();
     try {
       const writeResult = writeDecisions(tripId, decisions);
       if (writeResult.error) {
         stageErrors.push({ stage: 'write', error: writeResult.error });
+        console.error(`[pipeline] write error: ${writeResult.error}`);
       }
+      console.log(`[pipeline] write: ${writeResult.updatedCount} updated, ${Date.now() - t0}ms`);
       onProgress('write', 'complete', `${writeResult.updatedCount} updated`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'write', error: msg });
-      console.error(`[pipeline] write failed: ${msg}`);
+      console.error(`[pipeline] write FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('write', 'complete', `failed: ${msg}`);
     }
 
@@ -453,6 +474,7 @@ export async function runTripProcessingPipeline(
 
     // analyze
     onProgress('analyze', 'start');
+    t0 = Date.now();
     try {
       await analyzeTrip(tripId);
     } catch (err) {
@@ -461,10 +483,12 @@ export async function runTripProcessingPipeline(
     const analyzedCount = (db.prepare(
       "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active' AND avg_brightness IS NOT NULL"
     ).get(tripId) as { cnt: number }).cnt;
+    console.log(`[pipeline] analyze: ${analyzedCount} analyzed, ${Date.now() - t0}ms`);
     onProgress('analyze', 'complete', `${analyzedCount} analyzed`);
 
     // optimize
     onProgress('optimize', 'start');
+    t0 = Date.now();
     let optimizedCount = 0;
     let failedCount = 0;
     try {
@@ -474,15 +498,18 @@ export async function runTripProcessingPipeline(
     } catch (err) {
       console.warn(`[pipeline] optimizeTrip failed: ${err}`);
     }
+    console.log(`[pipeline] optimize: ${optimizedCount} optimized, ${failedCount} failed, ${Date.now() - t0}ms`);
     onProgress('optimize', 'complete', `${optimizedCount} optimized`);
 
     // thumbnail
     onProgress('thumbnail', 'start');
+    t0 = Date.now();
     try {
       await generateThumbnailsForTrip(tripId);
     } catch (err) {
       console.warn(`[pipeline] generateThumbnailsForTrip failed: ${err}`);
     }
+    console.log(`[pipeline] thumbnail: ${Date.now() - t0}ms`);
     onProgress('thumbnail', 'complete');
 
     // video analysis + editing
@@ -550,12 +577,14 @@ export async function runTripProcessingPipeline(
 
     // cover
     onProgress('cover', 'start');
+    t0 = Date.now();
     let coverImageId: string | null = null;
     try {
       coverImageId = await selectCoverImage(tripId);
     } catch (err) {
       console.warn(`[pipeline] selectCoverImage failed: ${err}`);
     }
+    console.log(`[pipeline] cover: ${coverImageId ?? 'none'}, ${Date.now() - t0}ms`);
     onProgress('cover', 'complete');
 
     // Count total images (including trashed)
@@ -564,6 +593,11 @@ export async function runTripProcessingPipeline(
     ).get(tripId) as { cnt: number }).cnt;
 
     const skippedCount = dedupAssessment?.skippedIndices.length ?? 0;
+
+    console.log(`[pipeline] ===== DONE trip=${tripId} total=${Date.now() - pipelineStart}ms blur=${blurryDeletedCount} dedup=${dedupDeletedCount} errors=${stageErrors.length} =====`);
+    if (stageErrors.length > 0) {
+      console.log(`[pipeline] stage errors: ${stageErrors.map(e => `${e.stage}: ${e.error.slice(0, 100)}`).join('; ')}`);
+    }
 
     return {
       tripId,
