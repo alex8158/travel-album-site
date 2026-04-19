@@ -10,7 +10,7 @@ import {
 import { assessClassification } from '../imageClassifier';
 import { computeSharpness, classifyBlur } from '../blurDetector';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
-import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
+import { batchMLQuality, isMLServiceAvailable, computeMLQuality } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -260,7 +260,24 @@ async function runBlurStage(
           }
           console.log(`[blur] MUSIQ chunk ${start}: ok`);
         } catch (err) {
-          console.warn(`[blur] MUSIQ chunk ${start} failed: ${err}`);
+          console.warn(`[blur] MUSIQ chunk ${start} batch failed, trying single-image fallback: ${err}`);
+          // Single-image fallback for failed batch
+          for (const ctx of chunk) {
+            try {
+              const singleResult = await computeMLQuality(ctx.localPath!);
+              const musiq = singleResult?.musiq_score ?? null;
+              if (musiq != null) {
+                totalScored++;
+                ctx.blur!.musiqScore = musiq;
+                if (musiq < 25) {
+                  ctx.blur!.blurStatus = 'blurry';
+                  upgraded++;
+                }
+              }
+            } catch {
+              // Both batch and single failed — keep suspect
+            }
+          }
         }
       }
       console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded`);
@@ -279,22 +296,19 @@ async function runDedupStage(
   contexts: ImageProcessContext[],
   tempCache: TempPathCache,
 ): Promise<DedupAssessment | null> {
-  // Filter out blurry images AND low-quality suspects (sharpness < 30)
-  const dedupContexts = contexts.filter(ctx => {
-    if (ctx.blur?.blurStatus === 'blurry') return false;
-    // Also exclude suspects with very low sharpness — they're borderline blurry
-    if (ctx.blur?.blurStatus === 'suspect' && ctx.blur.sharpnessScore != null && ctx.blur.sharpnessScore < 30) return false;
-    return true;
-  });
+  // Only accept clear + downloaded images for dedup
+  const dedupEligibleContexts = contexts.filter(
+    ctx => ctx.downloadOk && !!ctx.localPath && ctx.blur?.blurStatus === 'clear'
+  );
 
-  const excluded = contexts.length - dedupContexts.length;
-  console.log(`[dedup] ${contexts.length} total, ${excluded} excluded (blurry + low-quality suspect), ${dedupContexts.length} entering dedup`);
+  const excluded = contexts.length - dedupEligibleContexts.length;
+  console.log(`[dedup] ${contexts.length} total, ${excluded} excluded by blur gate (only clear images enter dedup), ${dedupEligibleContexts.length} entering dedup`);
 
-  if (dedupContexts.length < 2) {
+  if (dedupEligibleContexts.length < 2) {
     return {
       confirmedPairs: [],
       groups: [],
-      kept: dedupContexts.map(c => c.mediaId),
+      kept: dedupEligibleContexts.map(c => c.mediaId),
       removed: [],
       skippedIndices: [],
       skippedReasons: {},
@@ -303,7 +317,7 @@ async function runDedupStage(
     };
   }
 
-  const rows: ImageRow[] = dedupContexts.map(ctx => ({
+  const rows: ImageRow[] = dedupEligibleContexts.map(ctx => ({
     id: ctx.mediaId,
     file_path: ctx.filePath,
     original_filename: '',
@@ -318,10 +332,10 @@ async function runDedupStage(
   }));
 
   const db = getDb();
-  for (let i = 0; i < dedupContexts.length; i++) {
+  for (let i = 0; i < dedupEligibleContexts.length; i++) {
     const dbRow = db.prepare(
       'SELECT width, height, file_size, original_filename, created_at FROM media_items WHERE id = ?'
-    ).get(dedupContexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
+    ).get(dedupEligibleContexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
     if (dbRow) {
       rows[i].width = dbRow.width;
       rows[i].height = dbRow.height;

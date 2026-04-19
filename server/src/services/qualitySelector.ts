@@ -492,6 +492,15 @@ export async function computeMLEnhancedQuality(
         weightedSum += 0.10 * fileSizeNorm; totalWeight += 0.10;
 
         finalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
+        // MUSIQ hard veto: blurry images can't win even through ML scoring path
+        if (ml.musiq_score != null) {
+          if (ml.musiq_score < 15) {
+            finalScore = Math.min(finalScore, 0.10);
+          } else if (ml.musiq_score < 20) {
+            finalScore = Math.min(finalScore, 0.25);
+          }
+        }
       } else {
         // ML failed for this image, fall back to traditional
         try {

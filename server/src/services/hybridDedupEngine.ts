@@ -1042,17 +1042,25 @@ function runPureLayer3(
   for (const groupIndices of rawGroups) {
     const candidateIndices = groupIndices;
 
+    // ---- Blur veto: if any candidate is 'clear', exclude 'suspect' candidates ----
+    const hasClear = candidateIndices.some(idx => rows[idx].blur_status === 'clear');
+    const effectiveCandidates = hasClear
+      ? candidateIndices.filter(idx => rows[idx].blur_status !== 'suspect')
+      : candidateIndices;
+    // If filtering removed everyone (shouldn't happen), fall back to all candidates
+    const finalCandidates = effectiveCandidates.length > 0 ? effectiveCandidates : candidateIndices;
+
     // Compute quality score for each candidate
     // Sharpness is the primary signal — blurry images should never win
     let bestIdx = 0;
-    for (let k = 1; k < candidateIndices.length; k++) {
-      const bestRow = rows[candidateIndices[bestIdx]];
-      const currRow = rows[candidateIndices[k]];
+    for (let k = 1; k < finalCandidates.length; k++) {
+      const bestRow = rows[finalCandidates[bestIdx]];
+      const currRow = rows[finalCandidates[k]];
 
       const bestSharp = bestRow.sharpness_score ?? 0;
       const currSharp = currRow.sharpness_score ?? 0;
 
-      // Primary: sharpness (higher wins)
+      // Primary: sharpness (higher wins, 20% tolerance band)
       if (currSharp > bestSharp * 1.2) {
         // Current is significantly sharper
         bestIdx = k;
@@ -1069,7 +1077,7 @@ function runPureLayer3(
           if (currRow.file_size > bestRow.file_size) {
             bestIdx = k;
           } else if (currRow.file_size === bestRow.file_size) {
-            if (candidateIndices[k] < candidateIndices[bestIdx]) {
+            if (finalCandidates[k] < finalCandidates[bestIdx]) {
               bestIdx = k;
             }
           }
@@ -1077,7 +1085,7 @@ function runPureLayer3(
       }
     }
 
-    const keepIndex = candidateIndices[bestIdx];
+    const keepIndex = finalCandidates[bestIdx];
     dedupGroups.push({ indices: groupIndices, keepIndex });
 
     for (const idx of groupIndices) {
