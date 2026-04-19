@@ -8,8 +8,7 @@ import {
   PythonAnalyzeResult,
 } from '../pythonAnalyzer';
 import { assessClassification } from '../imageClassifier';
-import { assessBlur, computeSharpness, classifyBlur } from '../blurDetector';
-import { PROCESS_THRESHOLDS } from '../dedupThresholds';
+import { assessBlur } from '../blurDetector';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -189,71 +188,49 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  const downloadedContexts = contexts.filter(c => c.downloadOk && c.localPath);
-  if (downloadedContexts.length === 0) return;
-
-  // ---- Step 1: Collect Laplacian scores from Python results ----
-  const scoreMap = new Map<string, number>();
-  for (const ctx of downloadedContexts) {
-    const pyResult = pythonResults.get(ctx.mediaId);
-    if (pyResult && !pyResult.blurError && pyResult.blurScore != null) {
-      scoreMap.set(ctx.mediaId, pyResult.blurScore);
-    }
-  }
-
-  // ---- Step 2: Compute trip-level statistics for relative blur detection ----
-  const allScores = Array.from(scoreMap.values()).sort((a, b) => a - b);
-  const n = allScores.length;
-  const median = n > 0 ? allScores[Math.floor(n / 2)] : 50;
-  // P10 = 10th percentile — images below this are outlier-blurry
-  const p10 = n >= 10 ? allScores[Math.floor(n * 0.10)] : allScores[0] ?? 15;
-  // Relative threshold: halfway between P10 and absolute threshold
-  const relativeThreshold = Math.max(PROCESS_THRESHOLDS.blurThreshold, p10 * 0.6);
-
-  console.log(`[blur] ${n} scores, median=${median.toFixed(1)}, p10=${p10.toFixed(1)}, relThresh=${relativeThreshold.toFixed(1)}, absThresh=${PROCESS_THRESHOLDS.blurThreshold}`);
-  if (n >= 5) {
-    console.log(`[blur] bottom5: ${allScores.slice(0, 5).map(s => s.toFixed(1)).join(', ')}`);
-  }
-
-  // ---- Step 3: Per-image blur decision (Laplacian only — no MUSIQ) ----
+  // For each image: try Python blur first, then fall back to assessBlur() (Laplacian+MUSIQ)
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
     try {
-      let effectiveScore = scoreMap.get(ctx.mediaId) ?? null;
-      const source = effectiveScore != null ? 'python' : 'node';
+      // Try Python result first
+      const pyResult = pythonResults.get(ctx.mediaId);
+      const pyOk = pyResult && !pyResult.blurError && pyResult.blurScore != null
+        && pyResult.blurStatus && pyResult.blurStatus !== 'unknown';
 
-      // Fallback: compute Node.js Laplacian if Python didn't provide one
-      if (effectiveScore == null) {
-        try {
-          effectiveScore = await computeSharpness(ctx.localPath);
-        } catch { /* skip */ }
+      if (pyOk && pyResult!.blurStatus === 'blurry') {
+        // Python says blurry — trust it
+        ctx.blur = {
+          sharpnessScore: pyResult!.blurScore!,
+          blurStatus: 'blurry',
+          source: 'python',
+        };
+        console.log(`[blur] ${ctx.mediaId} python=blurry(${pyResult!.blurScore!.toFixed(1)})`);
+        continue;
       }
 
-      let blurStatus: 'clear' | 'suspect' | 'blurry';
+      // For clear/suspect from Python, or no Python result: use assessBlur (Laplacian+MUSIQ)
+      const nodeResult = await assessBlur(ctx.localPath);
+      console.log(`[blur] ${ctx.mediaId} py=${pyOk ? pyResult!.blurStatus + '(' + pyResult!.blurScore!.toFixed(1) + ')' : 'n/a'} node=${nodeResult.blurStatus}(lap=${nodeResult.sharpnessScore?.toFixed(1)},musiq=${nodeResult.musiqScore ?? 'n/a'})`);
 
-      if (effectiveScore != null) {
-        // Absolute threshold (very low = definitely blurry)
-        if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
-          blurStatus = 'blurry';
-        }
-        // Relative threshold: outlier within this trip
-        else if (n >= 5 && effectiveScore < relativeThreshold) {
-          blurStatus = 'blurry';
-        }
-        // Suspect zone
-        else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
-          blurStatus = 'suspect';
-        }
-        else {
-          blurStatus = 'clear';
-        }
+      // If Python said clear but Node says blurry, trust Node (MUSIQ is more reliable)
+      if (pyOk && nodeResult.blurStatus === 'blurry') {
+        ctx.blur = nodeResult;
+      } else if (pyOk && nodeResult.blurStatus !== 'blurry') {
+        // Both agree not blurry — use Python score with Node status (may be suspect)
+        const moreConservative = nodeResult.blurStatus === 'suspect' ? 'suspect' : pyResult!.blurStatus as 'clear' | 'suspect';
+        ctx.blur = {
+          sharpnessScore: pyResult!.blurScore!,
+          blurStatus: moreConservative,
+          musiqScore: nodeResult.musiqScore,
+          source: 'python',
+        };
       } else {
-        blurStatus = 'suspect';
+        // No Python — use Node result directly
+        ctx.blur = nodeResult;
       }
 
-      ctx.blur = { sharpnessScore: effectiveScore, blurStatus, musiqScore: null, source };
-      console.log(`[blur] ${ctx.mediaId} lap=${effectiveScore?.toFixed(1) ?? 'n/a'} → ${blurStatus}`);
+      console.log(`[blur] ${ctx.mediaId} → ${ctx.blur.blurStatus}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.processingErrors.push(`[blur] ${msg}`);

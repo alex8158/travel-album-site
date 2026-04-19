@@ -1006,8 +1006,14 @@ export async function assessDedup(
 
 /**
  * Pure Layer 3: groups confirmed pairs via Union-Find and selects the best
- * image per group using row metadata only (resolution, file_size, index).
+ * image per group using row metadata + sharpness scoring.
  * No DB reads or writes.
+ *
+ * Quality selection priority:
+ * 1. Sharpness score (higher = sharper = better) — strongest signal
+ * 2. Resolution (width × height)
+ * 3. File size
+ * 4. Earlier index (tie-break)
  */
 function runPureLayer3(
   rows: ImageRow[],
@@ -1034,26 +1040,38 @@ function runPureLayer3(
   const removedSet = new Set<number>();
 
   for (const groupIndices of rawGroups) {
-    // Use all indices as candidates (pure — no status filtering from DB)
     const candidateIndices = groupIndices;
 
-    // Select best using row metadata: resolution → file_size → earliest index
+    // Compute quality score for each candidate
+    // Sharpness is the primary signal — blurry images should never win
     let bestIdx = 0;
     for (let k = 1; k < candidateIndices.length; k++) {
       const bestRow = rows[candidateIndices[bestIdx]];
       const currRow = rows[candidateIndices[k]];
 
-      const resA = (bestRow.width ?? 0) * (bestRow.height ?? 0);
-      const resB = (currRow.width ?? 0) * (currRow.height ?? 0);
+      const bestSharp = bestRow.sharpness_score ?? 0;
+      const currSharp = currRow.sharpness_score ?? 0;
 
-      if (resB > resA) {
+      // Primary: sharpness (higher wins)
+      if (currSharp > bestSharp * 1.2) {
+        // Current is significantly sharper
         bestIdx = k;
-      } else if (resB === resA) {
-        if (currRow.file_size > bestRow.file_size) {
+      } else if (currSharp < bestSharp * 0.8) {
+        // Best is significantly sharper — keep best
+      } else {
+        // Similar sharpness — use resolution as tie-break
+        const resA = (bestRow.width ?? 0) * (bestRow.height ?? 0);
+        const resB = (currRow.width ?? 0) * (currRow.height ?? 0);
+
+        if (resB > resA) {
           bestIdx = k;
-        } else if (currRow.file_size === bestRow.file_size) {
-          if (candidateIndices[k] < candidateIndices[bestIdx]) {
+        } else if (resB === resA) {
+          if (currRow.file_size > bestRow.file_size) {
             bestIdx = k;
+          } else if (currRow.file_size === bestRow.file_size) {
+            if (candidateIndices[k] < candidateIndices[bestIdx]) {
+              bestIdx = k;
+            }
           }
         }
       }
