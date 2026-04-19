@@ -10,7 +10,7 @@ import {
 import { assessClassification } from '../imageClassifier';
 import { computeSharpness, classifyBlur } from '../blurDetector';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
-import { batchMLQuality, isMLServiceAvailable, computeMLQuality } from '../mlQualityService';
+import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -239,11 +239,19 @@ async function runBlurStage(
     const mlAvailable = await isMLServiceAvailable();
     if (mlAvailable) {
       const CHUNK = 10;
-      console.log(`[blur] MUSIQ: ${suspectContexts.length} suspects (chunks of ${CHUNK})...`);
+      const MUSIQ_TIME_LIMIT = 180_000; // 3 minutes max for MUSIQ phase
+      const musiqStart = Date.now();
+      console.log(`[blur] MUSIQ: ${suspectContexts.length} suspects (chunks of ${CHUNK}, limit ${MUSIQ_TIME_LIMIT / 1000}s)...`);
       let totalScored = 0;
       let upgraded = 0;
 
       for (let start = 0; start < suspectContexts.length; start += CHUNK) {
+        // Time check — stop MUSIQ if we've exceeded the limit
+        if (Date.now() - musiqStart > MUSIQ_TIME_LIMIT) {
+          console.log(`[blur] MUSIQ time limit reached after ${Math.round((Date.now() - musiqStart) / 1000)}s, skipping remaining ${suspectContexts.length - start} suspects`);
+          break;
+        }
+
         const chunk = suspectContexts.slice(start, start + CHUNK);
         try {
           const results = await batchMLQuality(chunk.map(c => c.localPath!));
@@ -258,29 +266,13 @@ async function runBlurStage(
               }
             }
           }
-          console.log(`[blur] MUSIQ chunk ${start}: ok`);
+          console.log(`[blur] MUSIQ chunk ${start}: ok (${Math.round((Date.now() - musiqStart) / 1000)}s elapsed)`);
         } catch (err) {
-          console.warn(`[blur] MUSIQ chunk ${start} batch failed, trying single-image fallback: ${err}`);
-          // Single-image fallback for failed batch
-          for (const ctx of chunk) {
-            try {
-              const singleResult = await computeMLQuality(ctx.localPath!);
-              const musiq = singleResult?.musiq_score ?? null;
-              if (musiq != null) {
-                totalScored++;
-                ctx.blur!.musiqScore = musiq;
-                if (musiq < 25) {
-                  ctx.blur!.blurStatus = 'blurry';
-                  upgraded++;
-                }
-              }
-            } catch {
-              // Both batch and single failed — keep suspect
-            }
-          }
+          console.warn(`[blur] MUSIQ chunk ${start} failed: ${err}`);
+          // Don't try single-image fallback — too slow, just skip
         }
       }
-      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded`);
+      console.log(`[blur] MUSIQ: ${totalScored} scored, ${upgraded} upgraded, ${Math.round((Date.now() - musiqStart) / 1000)}s total`);
     }
   }
 
