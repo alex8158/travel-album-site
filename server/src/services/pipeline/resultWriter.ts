@@ -49,16 +49,17 @@ export function writeDecisions(
   );
 
   try {
-    const runAll = db.transaction(() => {
-      let count = 0;
-      const now = new Date().toISOString();
+    // Process each decision individually to avoid one bad item killing everything
+    let count = 0;
+    const now = new Date().toISOString();
 
-      for (const d of decisions) {
-        const trashedReason =
-          d.trashedReasons.length > 0
-            ? d.trashedReasons.join(',')
-            : null;
+    for (const d of decisions) {
+      const trashedReason =
+        d.trashedReasons.length > 0
+          ? d.trashedReasons.join(',')
+          : null;
 
+      try {
         const result = updateMediaStmt.run(
           d.finalBlurStatus,
           d.sharpnessScore,
@@ -71,21 +72,24 @@ export function writeDecisions(
         );
         count += result.changes;
 
-        // Replace category tags
-        deleteCategoryTagsStmt.run(d.mediaId);
-        insertTagStmt.run(
-          uuidv4(),
-          d.mediaId,
-          `category:${d.finalCategory}`,
-          now,
-        );
+        // Only update tags if the media item exists
+        if (result.changes > 0) {
+          deleteCategoryTagsStmt.run(d.mediaId);
+          insertTagStmt.run(
+            uuidv4(),
+            d.mediaId,
+            `category:${d.finalCategory}`,
+            now,
+          );
+        }
+      } catch (perItemErr) {
+        console.warn(`[resultWriter] Failed for ${d.mediaId}: ${perItemErr}`);
       }
+    }
 
-      return count;
-    });
+    return { updatedCount: count };
 
-    const updatedCount = runAll();
-    return { updatedCount };
+    return { updatedCount: count };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { updatedCount: 0, error: message };
