@@ -240,6 +240,22 @@ function initTables(db: Database.Database): void {
   } catch {
     // Column already exists — ignore for idempotency
   }
+
+  // Migration: clean orphan duplicate_group_id references
+  // The new pipeline doesn't maintain duplicate_groups table, but old data may have
+  // dangling references that cause FOREIGN KEY constraint failures on UPDATE.
+  try {
+    const cleaned = db.prepare(
+      `UPDATE media_items SET duplicate_group_id = NULL
+       WHERE duplicate_group_id IS NOT NULL
+       AND duplicate_group_id NOT IN (SELECT id FROM duplicate_groups)`
+    ).run();
+    if (cleaned.changes > 0) {
+      console.log(`[database] Cleaned ${cleaned.changes} orphan duplicate_group_id references`);
+    }
+  } catch {
+    // Ignore — table might not exist yet
+  }
 }
 
 export function closeDb(): void {

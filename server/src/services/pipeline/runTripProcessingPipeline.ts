@@ -433,6 +433,17 @@ export async function runTripProcessingPipeline(
     t0 = Date.now();
     try {
       decisions = reduce(contexts, dedupAssessment);
+      // Sanity check: decisions should have unique mediaIds
+      const uniqueIds = new Set(decisions.map(d => d.mediaId));
+      if (uniqueIds.size !== decisions.length) {
+        console.warn(`[pipeline] reduce produced ${decisions.length} decisions but only ${uniqueIds.size} unique mediaIds — deduplicating`);
+        const seen = new Set<string>();
+        decisions = decisions.filter(d => {
+          if (seen.has(d.mediaId)) return false;
+          seen.add(d.mediaId);
+          return true;
+        });
+      }
       console.log(`[pipeline] reduce: ${decisions.length} decisions, ${Date.now() - t0}ms`);
       onProgress('reduce', 'complete', `${decisions.length} decisions`);
     } catch (err) {
@@ -451,7 +462,7 @@ export async function runTripProcessingPipeline(
         stageErrors.push({ stage: 'write', error: writeResult.error });
         console.error(`[pipeline] write error: ${writeResult.error}`);
       }
-      console.log(`[pipeline] write: ${writeResult.updatedCount} updated, ${Date.now() - t0}ms`);
+      console.log(`[pipeline] write: ${writeResult.updatedCount} updated, ${writeResult.skippedCount} skipped, ${Date.now() - t0}ms`);
       onProgress('write', 'complete', `${writeResult.updatedCount} updated`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

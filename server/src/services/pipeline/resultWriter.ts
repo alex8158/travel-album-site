@@ -4,30 +4,37 @@ import type { PerImageFinalDecision } from './types';
 
 export interface WriteResult {
   updatedCount: number;
+  skippedCount: number;
   error?: string;
 }
 
 /**
- * Write all final decisions to the database in a single transaction.
+ * Write final decisions to the database.
  *
- * Updates media_items: blur_status, sharpness_score, category, status,
- * trashed_reason, processing_error.
- * Replaces category tags in media_tags.
- *
- * NOTE: Current version does NOT maintain duplicate_groups table.
- * Dedup results are reflected only in media_items.status and trashed_reason.
- *
- * On failure: rolls back all changes and returns error in WriteResult.
+ * Processes each decision individually — one bad row doesn't block the rest.
+ * Only inserts category tags when UPDATE actually hit a row (changes > 0).
+ * Clears orphan duplicate_group_id before writing to avoid FK constraint errors.
  */
 export function writeDecisions(
   tripId: string,
   decisions: PerImageFinalDecision[],
 ): WriteResult {
   if (decisions.length === 0) {
-    return { updatedCount: 0 };
+    return { updatedCount: 0, skippedCount: 0 };
   }
 
   const db = getDb();
+
+  // Clean orphan duplicate_group_id for this trip to avoid FK constraint errors
+  try {
+    db.prepare(
+      `UPDATE media_items SET duplicate_group_id = NULL
+       WHERE trip_id = ? AND duplicate_group_id IS NOT NULL
+       AND duplicate_group_id NOT IN (SELECT id FROM duplicate_groups)`
+    ).run(tripId);
+  } catch (cleanErr) {
+    console.warn(`[resultWriter] Failed to clean orphan duplicate_group_id: ${cleanErr}`);
+  }
 
   const updateMediaStmt = db.prepare(`
     UPDATE media_items
@@ -48,50 +55,53 @@ export function writeDecisions(
     'INSERT INTO media_tags (id, media_id, tag_name, created_at) VALUES (?, ?, ?, ?)'
   );
 
-  try {
-    // Process each decision individually to avoid one bad item killing everything
-    let count = 0;
-    const now = new Date().toISOString();
+  let count = 0;
+  let skipped = 0;
+  const now = new Date().toISOString();
 
-    for (const d of decisions) {
-      const trashedReason =
-        d.trashedReasons.length > 0
-          ? d.trashedReasons.join(',')
-          : null;
+  for (const d of decisions) {
+    const trashedReason =
+      d.trashedReasons.length > 0
+        ? d.trashedReasons.join(',')
+        : null;
 
-      try {
-        const result = updateMediaStmt.run(
-          d.finalBlurStatus,
-          d.sharpnessScore,
-          d.finalCategory,
-          d.finalStatus,
-          trashedReason,
-          d.processingError,
-          d.mediaId,
-          tripId,
-        );
-        count += result.changes;
+    try {
+      const result = updateMediaStmt.run(
+        d.finalBlurStatus,
+        d.sharpnessScore,
+        d.finalCategory,
+        d.finalStatus,
+        trashedReason,
+        d.processingError,
+        d.mediaId,
+        tripId,
+      );
 
-        // Only update tags if the media item exists
-        if (result.changes > 0) {
-          deleteCategoryTagsStmt.run(d.mediaId);
-          insertTagStmt.run(
-            uuidv4(),
-            d.mediaId,
-            `category:${d.finalCategory}`,
-            now,
-          );
-        }
-      } catch (perItemErr) {
-        console.warn(`[resultWriter] Failed for ${d.mediaId}: ${perItemErr}`);
+      if (result.changes === 0) {
+        // Row not found or trip mismatch — skip tag update
+        skipped++;
+        continue;
       }
+
+      count += result.changes;
+
+      // Safe to update tags — we know the media_item exists
+      deleteCategoryTagsStmt.run(d.mediaId);
+      insertTagStmt.run(
+        uuidv4(),
+        d.mediaId,
+        `category:${d.finalCategory}`,
+        now,
+      );
+    } catch (perItemErr) {
+      console.warn(`[resultWriter] Failed for ${d.mediaId}: ${perItemErr}`);
+      skipped++;
     }
-
-    return { updatedCount: count };
-
-    return { updatedCount: count };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { updatedCount: 0, error: message };
   }
+
+  if (skipped > 0) {
+    console.warn(`[resultWriter] ${skipped}/${decisions.length} decisions skipped (row not found or FK error)`);
+  }
+
+  return { updatedCount: count, skippedCount: skipped };
 }
