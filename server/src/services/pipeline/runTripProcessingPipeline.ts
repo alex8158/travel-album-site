@@ -203,25 +203,38 @@ async function runBlurStage(
       ) {
         console.log(`[blur] ${ctx.mediaId} python: score=${pyResult.blurScore.toFixed(1)} status=${pyResult.blurStatus}`);
 
-        ctx.blur = {
-          sharpnessScore: pyResult.blurScore,
-          blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
-          source: 'python',
-        };
+        // Always cross-check with Node.js assessBlur (which includes MUSIQ)
+        // Python Laplacian alone is unreliable for underwater/low-contrast photos
+        try {
+          const nodeResult = await assessBlur(ctx.localPath);
+          console.log(`[blur] ${ctx.mediaId} node: score=${nodeResult.sharpnessScore?.toFixed(1)} musiq=${nodeResult.musiqScore ?? 'n/a'} status=${nodeResult.blurStatus}`);
 
-        // If Python says suspect, use Node.js assessBlur (which includes MUSIQ)
-        // to potentially upgrade to blurry for genuinely bad quality images
-        if (ctx.blur.blurStatus === 'suspect') {
-          try {
-            const nodeResult = await assessBlur(ctx.localPath);
-            console.log(`[blur] ${ctx.mediaId} node cross-check: score=${nodeResult.sharpnessScore?.toFixed(1)} musiq=${nodeResult.musiqScore ?? 'n/a'} status=${nodeResult.blurStatus}`);
-            if (nodeResult.blurStatus === 'blurry') {
-              ctx.blur = nodeResult;
-            }
-          } catch {
-            // Keep Python result on Node.js failure
+          // Use the more aggressive result (prefer blurry over suspect over clear)
+          const statusRank = { blurry: 0, suspect: 1, clear: 2 };
+          const pyRank = statusRank[pyResult.blurStatus as keyof typeof statusRank] ?? 2;
+          const nodeRank = statusRank[nodeResult.blurStatus] ?? 2;
+
+          if (nodeRank < pyRank) {
+            // Node.js (with MUSIQ) says worse — use Node result
+            ctx.blur = nodeResult;
+          } else {
+            // Python result is same or worse — use Python
+            ctx.blur = {
+              sharpnessScore: pyResult.blurScore,
+              blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
+              source: 'python',
+            };
           }
+        } catch {
+          // Node.js failed — use Python result as-is
+          ctx.blur = {
+            sharpnessScore: pyResult.blurScore,
+            blurStatus: pyResult.blurStatus as 'clear' | 'suspect' | 'blurry',
+            source: 'python',
+          };
         }
+
+        console.log(`[blur] ${ctx.mediaId} final: status=${ctx.blur.blurStatus} source=${ctx.blur.source}`);
         continue;
       }
 
