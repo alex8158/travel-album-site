@@ -35,12 +35,13 @@ interface EmbeddingResult {
  * - stdin is used for large payloads to avoid E2BIG
  */
 async function runPythonCommand(args: string[], stdinData?: string): Promise<unknown> {
+  const TIMEOUT = 120_000; // 120 seconds max per Python call
+
   return new Promise((resolve, reject) => {
     const proc = spawn(getPythonPath(), [PYTHON_SCRIPT, ...args], {
       cwd: path.dirname(PYTHON_SCRIPT),
       env: {
         ...process.env,
-        // Suppress Python warnings and progress bars that corrupt stdout
         PYTHONUNBUFFERED: '1',
         TRANSFORMERS_NO_ADVISORY_WARNINGS: '1',
         TOKENIZERS_PARALLELISM: 'false',
@@ -49,13 +50,23 @@ async function runPythonCommand(args: string[], stdinData?: string): Promise<unk
 
     let stdout = '';
     let stderr = '';
+    let killed = false;
+
+    // Kill process if it takes too long
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill('SIGKILL');
+      reject(new Error(`Python quality_service timed out after ${TIMEOUT / 1000}s`));
+    }, TIMEOUT);
 
     proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (killed) return; // Already rejected by timeout
+
       if (stderr) {
-        // Only log first 500 chars of stderr to avoid flooding
         console.log(`[mlQuality] stderr: ${stderr.trim().slice(0, 500)}`);
       }
       if (code !== 0) {
