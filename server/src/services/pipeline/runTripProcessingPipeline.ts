@@ -10,7 +10,6 @@ import {
 import { assessClassification } from '../imageClassifier';
 import { assessBlur, computeSharpness, classifyBlur } from '../blurDetector';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
-import { batchMLQuality, isMLServiceAvailable } from '../mlQualityService';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
@@ -193,32 +192,7 @@ async function runBlurStage(
   const downloadedContexts = contexts.filter(c => c.downloadOk && c.localPath);
   if (downloadedContexts.length === 0) return;
 
-  // ---- Step 1: Batch-fetch MUSIQ scores in chunks (avoid OOM/timeout) ----
-  const MUSIQ_BATCH_SIZE = 30;
-  const musiqScores = new Map<string, number | null>();
-  const mlAvailable = await isMLServiceAvailable();
-
-  if (mlAvailable) {
-    console.log(`[blur] Batch MUSIQ scoring for ${downloadedContexts.length} images (chunks of ${MUSIQ_BATCH_SIZE})...`);
-    for (let start = 0; start < downloadedContexts.length; start += MUSIQ_BATCH_SIZE) {
-      const chunk = downloadedContexts.slice(start, start + MUSIQ_BATCH_SIZE);
-      const paths = chunk.map(c => c.localPath!);
-      try {
-        const results = await batchMLQuality(paths);
-        for (let i = 0; i < chunk.length; i++) {
-          musiqScores.set(chunk[i].mediaId, results[i]?.musiq_score ?? null);
-        }
-        console.log(`[blur] MUSIQ chunk ${start}-${start + chunk.length}: ${results.filter(r => r.musiq_score != null).length}/${chunk.length} scored`);
-      } catch (err) {
-        console.warn(`[blur] MUSIQ chunk ${start}-${start + chunk.length} failed: ${err}`);
-        // Mark this chunk as no-MUSIQ, continue with next chunk
-      }
-    }
-    const totalScored = Array.from(musiqScores.values()).filter(v => v != null).length;
-    console.log(`[blur] MUSIQ total: ${totalScored}/${downloadedContexts.length} scored`);
-  }
-
-  // ---- Step 2: Collect Laplacian scores for relative threshold ----
+  // ---- Step 1: Collect Laplacian scores from Python results ----
   const scoreMap = new Map<string, number>();
   for (const ctx of downloadedContexts) {
     const pyResult = pythonResults.get(ctx.mediaId);
@@ -226,65 +200,60 @@ async function runBlurStage(
       scoreMap.set(ctx.mediaId, pyResult.blurScore);
     }
   }
+
+  // ---- Step 2: Compute trip-level statistics for relative blur detection ----
   const allScores = Array.from(scoreMap.values()).sort((a, b) => a - b);
-  const median = allScores.length > 0 ? allScores[Math.floor(allScores.length / 2)] : 50;
-  const relativeThreshold = median * 0.30;
-  const hasMusiq = Array.from(musiqScores.values()).some(v => v != null);
+  const n = allScores.length;
+  const median = n > 0 ? allScores[Math.floor(n / 2)] : 50;
+  // P10 = 10th percentile — images below this are outlier-blurry
+  const p10 = n >= 10 ? allScores[Math.floor(n * 0.10)] : allScores[0] ?? 15;
+  // Relative threshold: halfway between P10 and absolute threshold
+  const relativeThreshold = Math.max(PROCESS_THRESHOLDS.blurThreshold, p10 * 0.6);
 
-  console.log(`[blur] ${allScores.length} laplacian scores, median=${median.toFixed(1)}, relThresh=${relativeThreshold.toFixed(1)}, musiqAvailable=${hasMusiq}`);
+  console.log(`[blur] ${n} scores, median=${median.toFixed(1)}, p10=${p10.toFixed(1)}, relThresh=${relativeThreshold.toFixed(1)}, absThresh=${PROCESS_THRESHOLDS.blurThreshold}`);
+  if (n >= 5) {
+    console.log(`[blur] bottom5: ${allScores.slice(0, 5).map(s => s.toFixed(1)).join(', ')}`);
+  }
 
-  // ---- Step 3: Per-image blur decision ----
+  // ---- Step 3: Per-image blur decision (Laplacian only — no MUSIQ) ----
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
     try {
-      const laplacianScore = scoreMap.get(ctx.mediaId) ?? null;
-      const musiqScore = musiqScores.get(ctx.mediaId) ?? null;
-      const source = laplacianScore != null ? 'python' : 'node';
+      let effectiveScore = scoreMap.get(ctx.mediaId) ?? null;
+      const source = effectiveScore != null ? 'python' : 'node';
 
-      let effectiveScore = laplacianScore;
+      // Fallback: compute Node.js Laplacian if Python didn't provide one
       if (effectiveScore == null) {
         try {
           effectiveScore = await computeSharpness(ctx.localPath);
         } catch { /* skip */ }
       }
 
-      console.log(`[blur] ${ctx.mediaId} lap=${effectiveScore?.toFixed(1) ?? 'n/a'} musiq=${musiqScore?.toFixed(1) ?? 'n/a'} med=${median.toFixed(1)}`);
-
       let blurStatus: 'clear' | 'suspect' | 'blurry';
 
       if (effectiveScore != null) {
-        if (musiqScore != null) {
-          if (musiqScore < 15) {
-            blurStatus = 'blurry';
-          } else if (musiqScore < 25 && effectiveScore < median * 0.5) {
-            blurStatus = 'blurry';
-          } else if (musiqScore < PROCESS_THRESHOLDS.musiqBlurThreshold && effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
-            blurStatus = 'blurry';
-          } else if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
-            blurStatus = 'blurry';
-          } else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
-            blurStatus = 'suspect';
-          } else {
-            blurStatus = 'clear';
-          }
-        } else {
-          if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
-            blurStatus = 'blurry';
-          } else if (allScores.length >= 5 && effectiveScore < relativeThreshold) {
-            blurStatus = 'blurry';
-          } else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
-            blurStatus = 'suspect';
-          } else {
-            blurStatus = 'clear';
-          }
+        // Absolute threshold (very low = definitely blurry)
+        if (effectiveScore < PROCESS_THRESHOLDS.blurThreshold) {
+          blurStatus = 'blurry';
+        }
+        // Relative threshold: outlier within this trip
+        else if (n >= 5 && effectiveScore < relativeThreshold) {
+          blurStatus = 'blurry';
+        }
+        // Suspect zone
+        else if (effectiveScore < PROCESS_THRESHOLDS.clearThreshold) {
+          blurStatus = 'suspect';
+        }
+        else {
+          blurStatus = 'clear';
         }
       } else {
         blurStatus = 'suspect';
       }
 
-      ctx.blur = { sharpnessScore: effectiveScore, blurStatus, musiqScore, source };
-      console.log(`[blur] ${ctx.mediaId} final: status=${blurStatus}`);
+      ctx.blur = { sharpnessScore: effectiveScore, blurStatus, musiqScore: null, source };
+      console.log(`[blur] ${ctx.mediaId} lap=${effectiveScore?.toFixed(1) ?? 'n/a'} → ${blurStatus}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.processingErrors.push(`[blur] ${msg}`);
