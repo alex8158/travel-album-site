@@ -267,8 +267,28 @@ async function runDedupStage(
   contexts: ImageProcessContext[],
   tempCache: TempPathCache,
 ): Promise<DedupAssessment | null> {
-  // Build ImageRow-compatible objects from contexts
-  const rows: ImageRow[] = contexts.map(ctx => ({
+  // Filter out blurry images — they're already trashed, no need to dedup them
+  const nonBlurryContexts = contexts.filter(
+    ctx => ctx.blur?.blurStatus !== 'blurry'
+  );
+
+  console.log(`[dedup] ${contexts.length} total, ${contexts.length - nonBlurryContexts.length} blurry excluded, ${nonBlurryContexts.length} entering dedup`);
+
+  if (nonBlurryContexts.length < 2) {
+    return {
+      confirmedPairs: [],
+      groups: [],
+      kept: nonBlurryContexts.map(c => c.mediaId),
+      removed: [],
+      skippedIndices: [],
+      skippedReasons: {},
+      capabilitiesUsed: { hash: false, clip: false, dinov2: false, llm: false },
+      evidenceByPair: [],
+    };
+  }
+
+  // Build ImageRow-compatible objects from non-blurry contexts
+  const rows: ImageRow[] = nonBlurryContexts.map(ctx => ({
     id: ctx.mediaId,
     file_path: ctx.filePath,
     original_filename: '',
@@ -284,10 +304,10 @@ async function runDedupStage(
 
   // Enrich rows with DB data for quality selection (resolution, file_size)
   const db = getDb();
-  for (let i = 0; i < contexts.length; i++) {
+  for (let i = 0; i < nonBlurryContexts.length; i++) {
     const dbRow = db.prepare(
       'SELECT width, height, file_size, original_filename, created_at FROM media_items WHERE id = ?'
-    ).get(contexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
+    ).get(nonBlurryContexts[i].mediaId) as { width: number | null; height: number | null; file_size: number; original_filename: string; created_at: string } | undefined;
     if (dbRow) {
       rows[i].width = dbRow.width;
       rows[i].height = dbRow.height;

@@ -7,12 +7,14 @@ import type {
 /**
  * Merge assessments into final decisions.
  *
- * NOTE: Multi-source fallback is already resolved within each stage.
- * The reducer only receives the winning assessment per image.
+ * Priority: blur > duplicate.
+ * If an image is both blurry AND a dedup duplicate, the primary trashed reason
+ * is 'blur' (listed first). This ensures blurry images are treated as "bad shots"
+ * rather than "redundant copies".
  *
  * Reducer responsibilities:
- * - If blurry → add 'blur' to trashedReasons
- * - If dedup removed → add 'duplicate' to trashedReasons
+ * - If blurry → add 'blur' to trashedReasons (first)
+ * - If dedup removed AND not already blurry → add 'duplicate'
  * - If trashedReasons non-empty → finalStatus = 'trashed'
  * - If all assessments null → active, category=other, blurStatus=suspect
  */
@@ -25,13 +27,14 @@ export function reduce(
   return contexts.map((ctx): PerImageFinalDecision => {
     const trashedReasons: Array<'blur' | 'duplicate'> = [];
 
-    // Blur → trash
-    if (ctx.blur?.blurStatus === 'blurry') {
+    // Blur → trash (highest priority)
+    const isBlurry = ctx.blur?.blurStatus === 'blurry';
+    if (isBlurry) {
       trashedReasons.push('blur');
     }
 
-    // Dedup removed → trash
-    if (removedSet.has(ctx.mediaId)) {
+    // Dedup removed → trash (only if not already blurry — blur is the primary reason)
+    if (removedSet.has(ctx.mediaId) && !isBlurry) {
       trashedReasons.push('duplicate');
     }
 

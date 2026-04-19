@@ -20,10 +20,10 @@ const LAPLACIAN_KERNEL = {
  * Dimension weights for overall quality score.
  */
 export const WEIGHTS: Record<string, number> = {
-  sharpness: 0.40,
+  sharpness: 0.45,
   exposure: 0.10,
   contrast: 0.10,
-  resolution: 0.20,
+  resolution: 0.15,
   noiseArtifact: 0.10,
   fileSize: 0.10,
 };
@@ -72,6 +72,10 @@ export function computeOverall(scores: {
   noiseArtifact: number | null;
   fileSize: number | null;
 }): number {
+  // Low-sharpness veto: if sharpness is very low, cap overall score
+  // This prevents blurry images from winning in dedup groups
+  const sharpnessVeto = scores.sharpness !== null && scores.sharpness < 0.15;
+
   let weightedSum = 0;
   let totalWeight = 0;
 
@@ -92,7 +96,10 @@ export function computeOverall(scores: {
   }
 
   if (totalWeight === 0) return 0;
-  return weightedSum / totalWeight;
+  const raw = weightedSum / totalWeight;
+
+  // Veto: cap at 0.20 if sharpness is critically low
+  return sharpnessVeto ? Math.min(raw, 0.20) : raw;
 }
 
 
