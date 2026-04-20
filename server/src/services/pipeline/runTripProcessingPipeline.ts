@@ -8,7 +8,7 @@ import {
   PythonAnalyzeResult,
 } from '../pythonAnalyzer';
 import { assessClassification } from '../imageClassifier';
-import { computeSharpness } from '../blurDetector';
+import { computeSharpness, assessBlur } from '../blurDetector';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
@@ -189,34 +189,19 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  // Raised thresholds for underwater/low-contrast photos
-  const blurThreshold = Math.max(PROCESS_THRESHOLDS.blurThreshold, 30);
-  const clearThreshold = Math.max(PROCESS_THRESHOLDS.clearThreshold, 80);
-
   for (const ctx of contexts) {
     if (!ctx.downloadOk || !ctx.localPath) continue;
 
-    const pyResult = pythonResults.get(ctx.mediaId);
-    let score: number | null = null;
-
-    if (pyResult && !pyResult.blurError && pyResult.blurScore != null) {
-      score = pyResult.blurScore;
-    } else {
-      try {
-        score = await computeSharpness(ctx.localPath);
-      } catch { /* skip */ }
-    }
-
-    if (score != null) {
-      const status = score < blurThreshold ? 'blurry'
-        : score < clearThreshold ? 'suspect'
-        : 'clear';
+    try {
+      // Use full dual-condition detection (Laplacian + MUSIQ) via assessBlur
+      const assessment = await assessBlur(ctx.localPath);
       ctx.blur = {
-        sharpnessScore: score,
-        blurStatus: status,
-        source: pyResult?.blurScore != null ? 'python' : 'node',
+        sharpnessScore: assessment.sharpnessScore,
+        blurStatus: assessment.blurStatus,
+        musiqScore: assessment.musiqScore,
+        source: assessment.source,
       };
-    } else {
+    } catch {
       ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node' };
     }
   }
@@ -224,7 +209,7 @@ async function runBlurStage(
   const blurry = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
   const suspect = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
   const clear = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
-  console.log(`[blur] Laplacian (thresh=${blurThreshold}/${clearThreshold}): ${blurry} blurry, ${suspect} suspect, ${clear} clear`);
+  console.log(`[blur] dual-condition: ${blurry} blurry, ${suspect} suspect, ${clear} clear`);
 }
 
 // ---------------------------------------------------------------------------
