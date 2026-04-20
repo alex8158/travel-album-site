@@ -214,17 +214,18 @@ export async function classifyBlurDual(
  * - 30 ~ 80 → suspect
  * - >= 80 → clear
  */
-export async function assessBlur(imagePath: string): Promise<BlurAssessment> {
+export async function assessBlur(
+  imagePath: string,
+  blurThreshold = PROCESS_THRESHOLDS.blurThreshold,
+  clearThreshold = PROCESS_THRESHOLDS.clearThreshold,
+): Promise<BlurAssessment> {
   try {
     const fullScore = await computeSharpness(imagePath);
     const centerScore = await computeCenterSharpness(imagePath);
     const finalScore = Math.min(fullScore, centerScore);
 
-    const BLUR_LIMIT = PROCESS_THRESHOLDS.blurThreshold;   // default 15
-    const CLEAR_LIMIT = PROCESS_THRESHOLDS.clearThreshold; // default 50
-
-    const blurStatus: BlurStatus = finalScore < BLUR_LIMIT ? 'blurry'
-      : finalScore < CLEAR_LIMIT ? 'suspect'
+    const blurStatus: BlurStatus = finalScore < blurThreshold ? 'blurry'
+      : finalScore < clearThreshold ? 'suspect'
       : 'clear';
 
     return {
@@ -294,7 +295,7 @@ export async function detectBlurry(
       const localPath = await storageProvider.downloadToTemp(row.file_path);
 
       // Use full-frame + center-crop Laplacian (no MUSIQ dependency for deletion)
-      const assessment = await assessBlur(localPath);
+      const assessment = await assessBlur(localPath, blurThreshold, clearThreshold);
       sharpnessScore = assessment.sharpnessScore ?? 0;
       blurStatus = assessment.blurStatus;
 
