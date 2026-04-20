@@ -152,7 +152,7 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
     pollingRef.current = setInterval(() => pollJob(jobId), intervalMs);
   }, [stopPolling, pollJob]);
 
-  const activeJobCheckedRef = useRef(false);
+  const [activeJobChecked, setActiveJobChecked] = useState(false);
 
   // Check for active job on mount (handles page refresh)
   useEffect(() => {
@@ -167,7 +167,7 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
             jobIdRef.current = data.jobId;
             setStatus('processing');
             startPolling(data.jobId);
-            activeJobCheckedRef.current = true;
+            setActiveJobChecked(true);
             return;
           }
         }
@@ -176,7 +176,7 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
         // Network error on mount check — ignore, user can manually start
       }
       if (!cancelled) {
-        activeJobCheckedRef.current = true;
+        setActiveJobChecked(true);
       }
     }
     checkActiveJob();
@@ -185,11 +185,11 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
 
   // Auto-start (only after active job check completes to avoid race condition)
   useEffect(() => {
-    if (autoStart && !autoStartedRef.current && status === 'idle' && activeJobCheckedRef.current) {
+    if (autoStart && !autoStartedRef.current && status === 'idle' && activeJobChecked) {
       autoStartedRef.current = true;
       handleProcess();
     }
-  }, [autoStart, status]);
+  }, [autoStart, status, activeJobChecked]);
 
   async function handleProcess() {
     // Reset state
