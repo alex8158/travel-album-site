@@ -108,6 +108,7 @@ export const jobScopedRouter = Router();
 
 tripScopedRouter.post('/:id/process-jobs', authMiddleware, requireAuth, (req: Request, res: Response) => {
   const tripId = req.params.id as string;
+  console.log(`[processJobs] POST /process-jobs for trip ${tripId}`);
   const db = getDb();
 
   // Verify trip exists
@@ -153,6 +154,7 @@ tripScopedRouter.post('/:id/process-jobs', authMiddleware, requireAuth, (req: Re
 
   // Fire-and-forget: start pipeline in background
   setImmediate(() => {
+    console.log(`[processJobs] Starting pipeline for job ${jobId}, trip ${tripId}`);
     const reporter = new JobProgressReporter(jobId);
     reporter.markRunning();
 
@@ -160,6 +162,7 @@ tripScopedRouter.post('/:id/process-jobs', authMiddleware, requireAuth, (req: Re
       onProgress: reporter.toPipelineCallback(),
     })
       .then((pipelineResult) => {
+        console.log(`[processJobs] Pipeline completed for job ${jobId}`);
         reporter.markCompleted(JSON.stringify(pipelineResult));
       })
       .catch((err) => {
