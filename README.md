@@ -104,7 +104,7 @@ cd client && npm test    # 前端
 
 ## 处理流水线
 
-上传完成后自动触发 9 步处理流水线（SSE 实时进度推送）：
+上传完成后自动触发处理流水线（异步后台执行，前端轮询进度）：
 
 ```
 1. 模糊检测 → 2. 去重 → 3. 图像分析 → 4. 自动优化
@@ -117,7 +117,7 @@ cd client && npm test    # 前端
 |------|------|------|
 | Layer 0 | MD5 + pHash + dHash | 精确匹配 + 低距离哈希 |
 | Layer 1 | DINOv2 + FAISS / CLIP | 语义相似度聚类（ML 优先） |
-| Layer 2 | Strict Threshold | 灰区对回退判定（similarity ≥ 0.955） |
+| Layer 2 | Strict Threshold | 灰区对回退判定（similarity ≥ 0.88） |
 | Layer 3 | Union-Find + 质量选择 | 分组后保留最佳，其余移入回收站 |
 
 LLM 逐对审查（Layer 2 可选）支持 OpenAI / Bedrock / DashScope，通过 `AI_REVIEW_ENABLED` 控制开关。
@@ -211,7 +211,12 @@ docker run -d -p 3001:3001 -v travel-data:/app/server/uploads travel-album
 ### 需认证接口
 - `POST /api/trips` — 创建相册
 - `POST /api/trips/:id/media` — 上传素材（并发 3）
-- `GET /api/trips/:id/process/stream` — SSE 处理进度
+- `POST /api/trips/:id/process-jobs` — 创建处理任务
+- `GET /api/trips/:id/active-job` — 查询活跃任务
+- `GET /api/process-jobs/:jobId` — 轮询任务状态
+- `GET /api/process-jobs/:jobId/events` — 任务事件日志
+- `GET /api/process-jobs/:jobId/result` — 任务结果
+- `GET /api/trips/:id/process/stream` — SSE 处理进度（兼容）
 - `POST /api/media/:id/edit` — 手动编辑图片
 - `PUT /api/media/:id/visibility` — 修改可见性
 
