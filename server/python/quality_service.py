@@ -213,8 +213,9 @@ def batch_quality(image_paths):
 
 
 def find_duplicates(embeddings, threshold=0.92):
-    """Find duplicate groups using cosine similarity on embeddings.
-    Returns list of groups, each group is a list of indices.
+    """Find duplicate pairs using cosine similarity on embeddings.
+    Returns list of {i, j, similarity} dicts — direct evidence edges only.
+    No BFS grouping, no chain-merging.
     """
     import faiss
 
@@ -231,63 +232,55 @@ def find_duplicates(embeddings, threshold=0.92):
     norms[norms == 0] = 1
     vectors = vectors / norms
 
-    # Build FAISS index
-    dim = vectors.shape[1]
-    index = faiss.IndexFlatIP(dim)  # Inner product = cosine similarity on normalized vectors
-    index.add(vectors)
+    n = len(vectors)
+    pairs = []
 
-    # Search: each vector against all others
-    k = min(len(vectors), 20)  # top-20 neighbors
-    scores, neighbors = index.search(vectors, k)
+    if n <= 500:
+        # Small set: full similarity matrix
+        sims = vectors @ vectors.T
+        max_sim = 0.0
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = float(sims[i][j])
+                if sim > max_sim:
+                    max_sim = sim
+                if sim >= threshold:
+                    pairs.append({"i": indices[i], "j": indices[j], "similarity": sim})
+        print(
+            f"FAISS-full: {n} vectors, max_similarity={max_sim:.4f}, "
+            f"threshold={threshold}, pairs={len(pairs)}",
+            file=sys.stderr
+        )
+    else:
+        # Large set: FAISS index with generous k, then threshold filter
+        dim = vectors.shape[1]
+        index = faiss.IndexFlatIP(dim)
+        index.add(vectors)
+        k = min(n, 50)
+        scores, neighbors = index.search(vectors, k)
 
-    # Debug: log max similarity for diagnostics
-    max_sim = 0.0
-    for i in range(len(vectors)):
-        for j_idx in range(k):
-            if neighbors[i][j_idx] != i:
-                max_sim = max(max_sim, float(scores[i][j_idx]))
-    print(
-        f"FAISS: {len(vectors)} vectors, dim={dim}, "
-        f"max_similarity={max_sim:.4f}, threshold={threshold}",
-        file=sys.stderr
-    )
+        seen = set()
+        max_sim = 0.0
+        for i in range(n):
+            for j_idx in range(k):
+                j = int(neighbors[i][j_idx])
+                if j == i:
+                    continue
+                sim = float(scores[i][j_idx])
+                if sim > max_sim:
+                    max_sim = sim
+                if sim >= threshold:
+                    pair_key = (min(indices[i], indices[j]), max(indices[i], indices[j]))
+                    if pair_key not in seen:
+                        seen.add(pair_key)
+                        pairs.append({"i": indices[i], "j": indices[j], "similarity": sim})
+        print(
+            f"FAISS-topk: {n} vectors, k={k}, max_similarity={max_sim:.4f}, "
+            f"threshold={threshold}, pairs={len(pairs)}",
+            file=sys.stderr
+        )
 
-    # Build adjacency from threshold
-    from collections import defaultdict
-    adj = defaultdict(set)
-    for i in range(len(vectors)):
-        for j_idx in range(k):
-            j = neighbors[i][j_idx]
-            if j == i:
-                continue
-            sim = scores[i][j_idx]
-            if sim >= threshold:
-                real_i = indices[i]
-                real_j = indices[j]
-                adj[real_i].add(real_j)
-                adj[real_j].add(real_i)
-
-    # Connected components via BFS
-    visited = set()
-    groups = []
-    for node in adj:
-        if node in visited:
-            continue
-        group = []
-        queue = [node]
-        while queue:
-            n = queue.pop(0)
-            if n in visited:
-                continue
-            visited.add(n)
-            group.append(n)
-            for neighbor in adj[n]:
-                if neighbor not in visited:
-                    queue.append(neighbor)
-        if len(group) >= 2:
-            groups.append(sorted(group))
-
-    return groups
+    return pairs
 
 
 def main():

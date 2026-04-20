@@ -132,20 +132,23 @@ export async function batchMLQuality(imagePaths: string[]): Promise<QualityResul
   return result as QualityResult[];
 }
 
+export interface DuplicatePair {
+  i: number;
+  j: number;
+  similarity: number;
+}
+
 /**
- * Find duplicate groups from embeddings using FAISS cosine similarity.
- * Uses stdin to pass embeddings (avoids E2BIG for large arrays).
- * @param embeddings Array of embedding vectors (null for failed extractions)
- * @param threshold Cosine similarity threshold (default 0.92)
- * @returns Array of groups, each group is array of original indices
+ * Find duplicate pairs from embeddings using FAISS cosine similarity.
+ * Returns direct evidence edges (i, j, similarity) — no group expansion.
  */
-export async function findDuplicateGroups(
+export async function findDuplicatePairs(
   embeddings: (number[] | null)[],
   threshold = 0.92
-): Promise<number[][]> {
+): Promise<DuplicatePair[]> {
   const stdinPayload = JSON.stringify({ embeddings, threshold });
   const result = await runPythonCommand(['find_duplicates', '--stdin'], stdinPayload);
-  return result as number[][];
+  return result as DuplicatePair[];
 }
 
 // Cache ML availability check result

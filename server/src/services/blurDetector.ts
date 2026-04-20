@@ -293,10 +293,10 @@ export async function detectBlurry(
     try {
       const localPath = await storageProvider.downloadToTemp(row.file_path);
 
-      // Use dual-condition blur detection (Laplacian + MUSIQ) when ML available
-      const dualResult = await classifyBlurDual(localPath, blurThreshold, clearThreshold);
-      sharpnessScore = dualResult.sharpnessScore;
-      blurStatus = dualResult.blurStatus;
+      // Use full-frame + center-crop Laplacian (no MUSIQ dependency for deletion)
+      const assessment = await assessBlur(localPath);
+      sharpnessScore = assessment.sharpnessScore ?? 0;
+      blurStatus = assessment.blurStatus;
 
       if (blurStatus === 'blurry') {
         // Only trash clearly blurry images

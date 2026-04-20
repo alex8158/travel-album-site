@@ -23,7 +23,7 @@ import { computePHash, computeHash, hammingDistance, DedupResult } from './dedup
 import { clipNeighborSearch, ClipCandidatePair, isPythonAvailable } from './pythonAnalyzer';
 import { computeQualityScore, computeMLEnhancedQuality } from './qualitySelector';
 import { detectConfiguredProviders, reviewPairs, PairReviewRequest } from './llmPairReviewer';
-import { extractEmbeddings, findDuplicateGroups, isMLServiceAvailable } from './mlQualityService';
+import { extractEmbeddings, findDuplicatePairs, isMLServiceAvailable } from './mlQualityService';
 import type { DedupAssessment } from './pipeline/types';
 
 // ---------------------------------------------------------------------------
@@ -365,29 +365,19 @@ async function runDINOv2Dedup(
     const embeddingResults = await extractEmbeddings(tempPaths);
     const embeddings = embeddingResults.map(r => r.embedding);
 
-    // Find duplicate groups via FAISS
+    // Find duplicate pairs via FAISS — direct evidence edges only
     console.log(`[hybridDedup] DINOv2: FAISS duplicate detection (threshold=${threshold})...`);
-    const groups = await findDuplicateGroups(embeddings, threshold);
+    const pairs = await findDuplicatePairs(embeddings, threshold);
 
-    // Only use direct evidence edges from FAISS, not full group expansion.
-    // This prevents chain-merging (A~B, B~C → A~C) which causes false positives.
     const confirmedPairs: Array<{ i: number; j: number }> = [];
-    const seen = new Set<string>();
-    for (const group of groups) {
-      // Each group member was connected to at least one other member.
-      // We only add adjacent pairs (consecutive in sorted group), not all O(n^2) pairs.
-      for (let a = 0; a < group.length - 1; a++) {
-        const gi = validIndices[group[a]];
-        const gj = validIndices[group[a + 1]];
-        const key = `${Math.min(gi, gj)}-${Math.max(gi, gj)}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          confirmedPairs.push({ i: gi, j: gj });
-        }
-      }
+    for (const pair of pairs) {
+      confirmedPairs.push({
+        i: validIndices[pair.i],
+        j: validIndices[pair.j],
+      });
     }
 
-    console.log(`[hybridDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs (direct edges only)`);
+    console.log(`[hybridDedup] DINOv2: ${confirmedPairs.length} confirmed pairs (direct edges)`);
     return confirmedPairs;
   } finally {
     if (!tempCache) {
@@ -644,7 +634,7 @@ export async function hybridDeduplicate(
     try {
       onProgress?.('layer1', 'start');
       console.log('[hybridDedup] Layer 1 (ML): DINOv2 + FAISS dedup...');
-      const dinoThreshold = parseFloat(process.env.DINOV2_DEDUP_THRESHOLD ?? '0.80');
+      const dinoThreshold = PROCESS_THRESHOLDS.dinov2DedupThreshold;
       mlDedupPairs = await runDINOv2Dedup(rows, allIndices, { tempCache, threshold: dinoThreshold });
       usedMLDedup = true;
       console.log(`[hybridDedup] Layer 1 (ML): ${mlDedupPairs.length} confirmed pairs via DINOv2`);
@@ -1152,22 +1142,16 @@ async function runDINOv2DedupTracked(
   const embeddings = embeddingResults.map(r => r.embedding);
 
   console.log(`[assessDedup] DINOv2: FAISS duplicate detection (threshold=${threshold})...`);
-  const groups = await findDuplicateGroups(embeddings, threshold);
+  const pairs = await findDuplicatePairs(embeddings, threshold);
 
   const confirmedPairs: Array<{ i: number; j: number }> = [];
-  const seen = new Set<string>();
-  for (const group of groups) {
-    for (let a = 0; a < group.length - 1; a++) {
-      const gi = validIndices[group[a]];
-      const gj = validIndices[group[a + 1]];
-      const key = `${Math.min(gi, gj)}-${Math.max(gi, gj)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        confirmedPairs.push({ i: gi, j: gj });
-      }
-    }
+  for (const pair of pairs) {
+    confirmedPairs.push({
+      i: validIndices[pair.i],
+      j: validIndices[pair.j],
+    });
   }
 
-  console.log(`[assessDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs (direct edges only)`);
+  console.log(`[assessDedup] DINOv2: ${confirmedPairs.length} confirmed pairs (direct edges)`);
   return confirmedPairs;
 }
