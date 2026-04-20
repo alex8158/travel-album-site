@@ -91,6 +91,56 @@ export async function computeSharpness(imagePath: string): Promise<number> {
 }
 
 /**
+ * Compute sharpness on the center 50% crop of the image.
+ * This catches subject-out-of-focus cases where background texture
+ * inflates the full-frame Laplacian score.
+ */
+export async function computeCenterSharpness(imagePath: string): Promise<number> {
+  const meta = await sharp(imagePath, { failOn: 'none' }).metadata();
+  const w = meta.width ?? 256;
+  const h = meta.height ?? 256;
+  const cropW = Math.round(w * 0.5);
+  const cropH = Math.round(h * 0.5);
+  const left = Math.round((w - cropW) / 2);
+  const top = Math.round((h - cropH) / 2);
+
+  let data: Buffer;
+  let info: { width: number; height: number };
+
+  try {
+    const result = await sharp(imagePath, { failOn: 'none' })
+      .extract({ left, top, width: cropW, height: cropH })
+      .grayscale()
+      .clahe({ width: 3, height: 3, maxSlope: 3 })
+      .convolve(LAPLACIAN_KERNEL)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    data = result.data;
+    info = result.info;
+  } catch {
+    const result = await sharp(imagePath, { failOn: 'none' })
+      .extract({ left, top, width: cropW, height: cropH })
+      .grayscale()
+      .convolve(LAPLACIAN_KERNEL)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    data = result.data;
+    info = result.info;
+  }
+
+  const pixelCount = info.width * info.height;
+  let sum = 0;
+  let sumSq = 0;
+  for (let i = 0; i < pixelCount; i++) {
+    const v = data[i];
+    sum += v;
+    sumSq += v * v;
+  }
+  const mean = sum / pixelCount;
+  return sumSq / pixelCount - mean * mean;
+}
+
+/**
  * Classify blur status based on sharpness variance and dual thresholds.
  * sharpnessScore < blurThreshold → blurry
  * sharpnessScore >= clearThreshold → clear
@@ -156,41 +206,30 @@ export async function classifyBlurDual(
 }
 
 /**
- * Pure assessment function for Node.js blur detection.
- * Returns a BlurAssessment without any DB writes or side effects.
+ * Pure CPU blur assessment using full-frame + center-crop Laplacian.
+ * MUSIQ is NOT used for blur deletion — only for quality scoring elsewhere.
  *
- * Uses dual-condition detection when ML service is available:
- * - MUSIQ < 15 → blurry (hard gate, regardless of Laplacian)
- * - Laplacian < blurThreshold AND MUSIQ < musiqThreshold → blurry
- * - Laplacian in suspect zone AND MUSIQ < 20 → blurry
- * - Otherwise falls back to single-condition Laplacian classification
+ * Takes min(fullFrame, centerCrop) to catch subject-out-of-focus:
+ * - final < 30 → blurry
+ * - 30 ~ 80 → suspect
+ * - >= 80 → clear
  */
 export async function assessBlur(imagePath: string): Promise<BlurAssessment> {
   try {
-    const dualResult = await classifyBlurDual(
-      imagePath,
-      PROCESS_THRESHOLDS.blurThreshold,
-      PROCESS_THRESHOLDS.clearThreshold,
-      PROCESS_THRESHOLDS.musiqBlurThreshold,
-    );
+    const fullScore = await computeSharpness(imagePath);
+    const centerScore = await computeCenterSharpness(imagePath);
+    const finalScore = Math.min(fullScore, centerScore);
 
-    let finalStatus = dualResult.blurStatus;
+    const BLUR_LIMIT = 30;
+    const CLEAR_LIMIT = 80;
 
-    if (dualResult.musiqScore != null) {
-      // Hard gate: MUSIQ < 15 = definitely blurry (motion blur, out of focus)
-      if (dualResult.musiqScore < 15) {
-        finalStatus = 'blurry';
-      }
-      // Suspect upgrade: MUSIQ < 20 and Laplacian not clear → blurry
-      else if (finalStatus === 'suspect' && dualResult.musiqScore < 20) {
-        finalStatus = 'blurry';
-      }
-    }
+    const blurStatus: BlurStatus = finalScore < BLUR_LIMIT ? 'blurry'
+      : finalScore < CLEAR_LIMIT ? 'suspect'
+      : 'clear';
 
     return {
-      sharpnessScore: dualResult.sharpnessScore,
-      blurStatus: finalStatus,
-      musiqScore: dualResult.musiqScore,
+      sharpnessScore: finalScore,
+      blurStatus,
       source: 'node',
     };
   } catch (err) {

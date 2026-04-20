@@ -369,21 +369,25 @@ async function runDINOv2Dedup(
     console.log(`[hybridDedup] DINOv2: FAISS duplicate detection (threshold=${threshold})...`);
     const groups = await findDuplicateGroups(embeddings, threshold);
 
-    // Convert groups to pairs (all pairs within each group)
+    // Only use direct evidence edges from FAISS, not full group expansion.
+    // This prevents chain-merging (A~B, B~C → A~C) which causes false positives.
     const confirmedPairs: Array<{ i: number; j: number }> = [];
+    const seen = new Set<string>();
     for (const group of groups) {
-      for (let a = 0; a < group.length; a++) {
-        for (let b = a + 1; b < group.length; b++) {
-          // Map local indices back to global indices
-          confirmedPairs.push({
-            i: validIndices[group[a]],
-            j: validIndices[group[b]],
-          });
+      // Each group member was connected to at least one other member.
+      // We only add adjacent pairs (consecutive in sorted group), not all O(n^2) pairs.
+      for (let a = 0; a < group.length - 1; a++) {
+        const gi = validIndices[group[a]];
+        const gj = validIndices[group[a + 1]];
+        const key = `${Math.min(gi, gj)}-${Math.max(gi, gj)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          confirmedPairs.push({ i: gi, j: gj });
         }
       }
     }
 
-    console.log(`[hybridDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs`);
+    console.log(`[hybridDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs (direct edges only)`);
     return confirmedPairs;
   } finally {
     if (!tempCache) {
@@ -1151,17 +1155,19 @@ async function runDINOv2DedupTracked(
   const groups = await findDuplicateGroups(embeddings, threshold);
 
   const confirmedPairs: Array<{ i: number; j: number }> = [];
+  const seen = new Set<string>();
   for (const group of groups) {
-    for (let a = 0; a < group.length; a++) {
-      for (let b = a + 1; b < group.length; b++) {
-        confirmedPairs.push({
-          i: validIndices[group[a]],
-          j: validIndices[group[b]],
-        });
+    for (let a = 0; a < group.length - 1; a++) {
+      const gi = validIndices[group[a]];
+      const gj = validIndices[group[a + 1]];
+      const key = `${Math.min(gi, gj)}-${Math.max(gi, gj)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        confirmedPairs.push({ i: gi, j: gj });
       }
     }
   }
 
-  console.log(`[assessDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs`);
+  console.log(`[assessDedup] DINOv2: ${groups.length} groups, ${confirmedPairs.length} confirmed pairs (direct edges only)`);
   return confirmedPairs;
 }

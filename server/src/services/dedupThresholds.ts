@@ -40,18 +40,18 @@ export interface ProcessThresholds {
 // ---------------------------------------------------------------------------
 
 export const PROCESS_THRESHOLDS: Readonly<ProcessThresholds> = Object.freeze({
-  blurThreshold:          env('BLUR_THRESHOLD', 15),
-  clearThreshold:         env('CLEAR_THRESHOLD', 50),
+  blurThreshold:          env('BLUR_THRESHOLD', 30),
+  clearThreshold:         env('CLEAR_THRESHOLD', 80),
   musiqBlurThreshold:     env('MUSIQ_BLUR_THRESHOLD', 30),
   hashHammingThreshold:   env('HASH_HAMMING_THRESHOLD', 4),
-  clipConfirmedThreshold: env('CLIP_CONFIRMED_THRESHOLD', 0.80),
-  clipGrayHighThreshold:  env('CLIP_GRAY_HIGH_THRESHOLD', 0.75),
-  clipGrayLowThreshold:   env('CLIP_GRAY_LOW_THRESHOLD', 0.70),
-  clipStrictThreshold:    env('CLIP_STRICT_THRESHOLD', 0.82),
-  clipTopK:               env('CLIP_TOP_K', 15),
-  grayLowSeqDistance:     env('GRAY_LOW_SEQ_DISTANCE', 12),
-  grayLowHashDistance:    env('GRAY_LOW_HASH_DISTANCE', 16),
-  dinov2DedupThreshold:   env('DINOV2_DEDUP_THRESHOLD', 0.75),
+  clipConfirmedThreshold: env('CLIP_CONFIRMED_THRESHOLD', 0.93),
+  clipGrayHighThreshold:  env('CLIP_GRAY_HIGH_THRESHOLD', 0.90),
+  clipGrayLowThreshold:   env('CLIP_GRAY_LOW_THRESHOLD', 0.86),
+  clipStrictThreshold:    env('CLIP_STRICT_THRESHOLD', 0.92),
+  clipTopK:               env('CLIP_TOP_K', 50),
+  grayLowSeqDistance:     env('GRAY_LOW_SEQ_DISTANCE', 6),
+  grayLowHashDistance:    env('GRAY_LOW_HASH_DISTANCE', 8),
+  dinov2DedupThreshold:   env('DINOV2_DEDUP_THRESHOLD', 0.90),
 });
 
 // ---------------------------------------------------------------------------
