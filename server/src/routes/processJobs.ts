@@ -107,7 +107,7 @@ export const jobScopedRouter = Router();
 // ---------------------------------------------------------------------------
 
 tripScopedRouter.post('/:id/process-jobs', authMiddleware, requireAuth, (req: Request, res: Response) => {
-  const tripId = req.params.id;
+  const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists
@@ -177,7 +177,7 @@ tripScopedRouter.post('/:id/process-jobs', authMiddleware, requireAuth, (req: Re
 // ---------------------------------------------------------------------------
 
 tripScopedRouter.get('/:id/active-job', authMiddleware, requireAuth, (req: Request, res: Response) => {
-  const tripId = req.params.id;
+  const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists
@@ -205,7 +205,7 @@ tripScopedRouter.get('/:id/active-job', authMiddleware, requireAuth, (req: Reque
 // ---------------------------------------------------------------------------
 
 jobScopedRouter.get('/:jobId', authMiddleware, requireAuth, (req: Request, res: Response) => {
-  const { jobId } = req.params;
+  const { jobId } = req.params as { jobId: string };
   const data = getTripForJob(jobId);
 
   if (!data) {
@@ -222,7 +222,7 @@ jobScopedRouter.get('/:jobId', authMiddleware, requireAuth, (req: Request, res: 
 // ---------------------------------------------------------------------------
 
 jobScopedRouter.get('/:jobId/events', authMiddleware, requireAuth, (req: Request, res: Response) => {
-  const { jobId } = req.params;
+  const { jobId } = req.params as { jobId: string };
   const data = getTripForJob(jobId);
 
   if (!data) {
@@ -250,7 +250,7 @@ jobScopedRouter.get('/:jobId/events', authMiddleware, requireAuth, (req: Request
 // ---------------------------------------------------------------------------
 
 jobScopedRouter.get('/:jobId/result', authMiddleware, requireAuth, (req: Request, res: Response) => {
-  const { jobId } = req.params;
+  const { jobId } = req.params as { jobId: string };
   const data = getTripForJob(jobId);
 
   if (!data) {
