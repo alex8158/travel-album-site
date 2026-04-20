@@ -44,14 +44,14 @@ export const PROCESS_THRESHOLDS: Readonly<ProcessThresholds> = Object.freeze({
   clearThreshold:         env('CLEAR_THRESHOLD', 50),
   musiqBlurThreshold:     env('MUSIQ_BLUR_THRESHOLD', 30),
   hashHammingThreshold:   env('HASH_HAMMING_THRESHOLD', 4),
-  clipConfirmedThreshold: env('CLIP_CONFIRMED_THRESHOLD', 0.85),
-  clipGrayHighThreshold:  env('CLIP_GRAY_HIGH_THRESHOLD', 0.80),
-  clipGrayLowThreshold:   env('CLIP_GRAY_LOW_THRESHOLD', 0.75),
-  clipStrictThreshold:    env('CLIP_STRICT_THRESHOLD', 0.88),
+  clipConfirmedThreshold: env('CLIP_CONFIRMED_THRESHOLD', 0.80),
+  clipGrayHighThreshold:  env('CLIP_GRAY_HIGH_THRESHOLD', 0.75),
+  clipGrayLowThreshold:   env('CLIP_GRAY_LOW_THRESHOLD', 0.70),
+  clipStrictThreshold:    env('CLIP_STRICT_THRESHOLD', 0.82),
   clipTopK:               env('CLIP_TOP_K', 15),
   grayLowSeqDistance:     env('GRAY_LOW_SEQ_DISTANCE', 12),
   grayLowHashDistance:    env('GRAY_LOW_HASH_DISTANCE', 16),
-  dinov2DedupThreshold:   env('DINOV2_DEDUP_THRESHOLD', 0.80),
+  dinov2DedupThreshold:   env('DINOV2_DEDUP_THRESHOLD', 0.75),
 });
 
 // ---------------------------------------------------------------------------
