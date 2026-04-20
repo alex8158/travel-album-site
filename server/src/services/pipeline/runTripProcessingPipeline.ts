@@ -220,9 +220,9 @@ async function runDedupStage(
   contexts: ImageProcessContext[],
   tempCache: TempPathCache,
 ): Promise<DedupAssessment | null> {
-  // Only accept clear + downloaded images for dedup
+  // Only exclude confirmed blurry images from dedup; suspect images should still participate
   const dedupEligibleContexts = contexts.filter(
-    ctx => ctx.downloadOk && !!ctx.localPath && ctx.blur?.blurStatus === 'clear'
+    ctx => ctx.downloadOk && !!ctx.localPath && ctx.blur?.blurStatus !== 'blurry'
   );
 
   const excluded = contexts.length - dedupEligibleContexts.length;

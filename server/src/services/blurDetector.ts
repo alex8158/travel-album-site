@@ -220,8 +220,8 @@ export async function assessBlur(imagePath: string): Promise<BlurAssessment> {
     const centerScore = await computeCenterSharpness(imagePath);
     const finalScore = Math.min(fullScore, centerScore);
 
-    const BLUR_LIMIT = 30;
-    const CLEAR_LIMIT = 80;
+    const BLUR_LIMIT = PROCESS_THRESHOLDS.blurThreshold;   // default 15
+    const CLEAR_LIMIT = PROCESS_THRESHOLDS.clearThreshold; // default 50
 
     const blurStatus: BlurStatus = finalScore < BLUR_LIMIT ? 'blurry'
       : finalScore < CLEAR_LIMIT ? 'suspect'

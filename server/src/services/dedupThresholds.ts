@@ -40,9 +40,9 @@ export interface ProcessThresholds {
 // ---------------------------------------------------------------------------
 
 export const PROCESS_THRESHOLDS: Readonly<ProcessThresholds> = Object.freeze({
-  blurThreshold:          env('BLUR_THRESHOLD', 30),
-  clearThreshold:         env('CLEAR_THRESHOLD', 80),
-  musiqBlurThreshold:     env('MUSIQ_BLUR_THRESHOLD', 30),
+  blurThreshold:          env('BLUR_THRESHOLD', 15),
+  clearThreshold:         env('CLEAR_THRESHOLD', 50),
+  musiqBlurThreshold:     env('MUSIQ_BLUR_THRESHOLD', 25),
   hashHammingThreshold:   env('HASH_HAMMING_THRESHOLD', 4),
   clipConfirmedThreshold: env('CLIP_CONFIRMED_THRESHOLD', 0.93),
   clipGrayHighThreshold:  env('CLIP_GRAY_HIGH_THRESHOLD', 0.90),
