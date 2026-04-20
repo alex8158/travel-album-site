@@ -3,20 +3,20 @@ import { render, screen } from '@testing-library/react';
 import ProgressBar, { getStepLabel } from './ProgressBar';
 
 describe('getStepLabel', () => {
-  it('maps dedup to 图片去重', () => {
-    expect(getStepLabel('dedup')).toBe('图片去重');
+  it('maps dedup to 去重', () => {
+    expect(getStepLabel('dedup')).toBe('去重');
   });
 
   it('maps blurDetect to 模糊检测', () => {
     expect(getStepLabel('blurDetect')).toBe('模糊检测');
   });
 
-  it('maps thumbnail to 缩略图生成', () => {
-    expect(getStepLabel('thumbnail')).toBe('缩略图生成');
+  it('maps thumbnail to 缩略图', () => {
+    expect(getStepLabel('thumbnail')).toBe('缩略图');
   });
 
-  it('maps cover to 封面图选择', () => {
-    expect(getStepLabel('cover')).toBe('封面图选择');
+  it('maps cover to 封面', () => {
+    expect(getStepLabel('cover')).toBe('封面');
   });
 
   it('returns unknown identifiers as-is', () => {
@@ -49,7 +49,7 @@ describe('ProgressBar', () => {
       />
     );
 
-    expect(screen.getByText('图片去重')).toBeDefined();
+    expect(screen.getByText('去重')).toBeDefined();
     expect(screen.getByText('步骤 1/4')).toBeDefined();
     expect(screen.getByText('0%')).toBeDefined();
   });
@@ -65,7 +65,7 @@ describe('ProgressBar', () => {
       />
     );
 
-    expect(screen.getByText('图片分析')).toBeDefined();
+    expect(screen.getByText('分析')).toBeDefined();
     expect(screen.getByText('步骤 2/9')).toBeDefined();
     expect(screen.getByText('50%')).toBeDefined();
   });

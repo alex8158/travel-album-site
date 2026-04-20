@@ -85,6 +85,39 @@ function initTables(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_media_tags_media_id ON media_tags(media_id);
     CREATE INDEX IF NOT EXISTS idx_media_tags_tag_name ON media_tags(tag_name);
+
+    CREATE TABLE IF NOT EXISTS processing_jobs (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      current_step TEXT,
+      percent INTEGER DEFAULT 0,
+      processed INTEGER DEFAULT 0,
+      total INTEGER DEFAULT 0,
+      error_message TEXT,
+      result_json TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      FOREIGN KEY (trip_id) REFERENCES trips(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS processing_job_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      level TEXT NOT NULL DEFAULT 'info',
+      step TEXT,
+      message TEXT NOT NULL,
+      processed INTEGER,
+      total INTEGER,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES processing_jobs(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_processing_job_events_job_seq ON processing_job_events(job_id, seq);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_jobs_active_trip ON processing_jobs(trip_id) WHERE status IN ('queued', 'running');
   `);
 
   // Migration: add visibility column to existing trips table
@@ -252,6 +285,36 @@ function initTables(db: Database.Database): void {
     ).run();
     if (cleaned.changes > 0) {
       console.log(`[database] Cleaned ${cleaned.changes} orphan duplicate_group_id references`);
+    }
+  } catch {
+    // Ignore — table might not exist yet
+  }
+
+  // Cleanup zombie processing jobs (running/queued) left from previous server instance
+  try {
+    const now = new Date().toISOString();
+    const zombieJobs = db.prepare(
+      `SELECT id FROM processing_jobs WHERE status IN ('running', 'queued')`
+    ).all() as Array<{ id: string }>;
+
+    if (zombieJobs.length > 0) {
+      const updateJob = db.prepare(
+        `UPDATE processing_jobs SET status = 'failed', error_message = '服务重启，任务中断', finished_at = ? WHERE id = ?`
+      );
+      const insertEvent = db.prepare(
+        `INSERT INTO processing_job_events (job_id, seq, level, step, message, created_at)
+         VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM processing_job_events WHERE job_id = ?), 'error', NULL, '服务重启，任务中断', ?)`
+      );
+
+      const cleanup = db.transaction(() => {
+        for (const job of zombieJobs) {
+          updateJob.run(now, job.id);
+          insertEvent.run(job.id, job.id, now);
+        }
+      });
+      cleanup();
+
+      console.log(`[database] Cleaned up ${zombieJobs.length} zombie processing job(s)`);
     }
   } catch {
     // Ignore — table might not exist yet

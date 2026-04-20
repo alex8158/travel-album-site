@@ -73,6 +73,8 @@ describe('POST /api/trips/:id/process', () => {
 
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM processing_job_events');
+    db.exec('DELETE FROM processing_jobs');
     db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
@@ -183,34 +185,27 @@ describe('POST /api/trips/:id/process', () => {
     expect(mockRunPipeline.mock.calls[0][0]).toBe(tripId);
   });
 
-  it('should return 409 when trip is already processing', async () => {
+  it('should return 409 when trip has an active job in the database', async () => {
     const trip = await request(app)
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Concurrent Trip' });
     const tripId = trip.body.id;
 
-    // Make the pipeline hang so we can test concurrent access
-    let resolveHang!: (value: PipelineResult) => void;
-    const hangPromise = new Promise<PipelineResult>(resolve => { resolveHang = resolve; });
-    mockRunPipeline.mockReturnValue(hangPromise);
+    // Insert an active processing job directly in the DB
+    const db = getDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO processing_jobs (id, trip_id, status, created_at) VALUES (?, ?, 'running', ?)`
+    ).run('existing-job-id', tripId, now);
 
-    // Fire first request without awaiting — use .then() to avoid blocking
-    const firstReqPromise = request(app).post(`/api/trips/${tripId}/process`).then(r => r);
+    mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    // Wait for the first request to enter the handler and register in processingTrips
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    // Second request should get 409
-    const secondRes = await request(app).post(`/api/trips/${tripId}/process`);
-    expect(secondRes.status).toBe(409);
-    expect(secondRes.body.error.code).toBe('ALREADY_PROCESSING');
-
-    // Resolve the first request so it completes and cleanup happens
-    resolveHang(makeEmptyResult(tripId));
-    const firstRes = await firstReqPromise;
-    expect(firstRes.status).toBe(200);
-  }, 10000);
+    // POST should detect the active job and return 409
+    const res = await request(app).post(`/api/trips/${tripId}/process`);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('ALREADY_PROCESSING');
+  });
 
   it('should pass videoResolution option to pipeline', async () => {
     const trip = await request(app)

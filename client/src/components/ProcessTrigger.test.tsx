@@ -1,61 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ProcessTrigger from './ProcessTrigger';
 import type { ProcessResult } from './ProcessTrigger';
 
-// --- EventSource mock ---
-type EventSourceListener = (event: MessageEvent) => void;
-
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-
-  url: string;
-  readyState: number;
-  onerror: ((event: Event) => void) | null = null;
-  private listeners: Record<string, EventSourceListener[]> = {};
-  close = vi.fn(() => {
-    this.readyState = 2; // CLOSED
-  });
-
-  constructor(url: string) {
-    this.url = url;
-    this.readyState = 1; // OPEN
-    MockEventSource.instances.push(this);
-  }
-
-  addEventListener(type: string, listener: EventSourceListener) {
-    if (!this.listeners[type]) {
-      this.listeners[type] = [];
-    }
-    this.listeners[type].push(listener);
-  }
-
-  removeEventListener(type: string, listener: EventSourceListener) {
-    if (this.listeners[type]) {
-      this.listeners[type] = this.listeners[type].filter((l) => l !== listener);
-    }
-  }
-
-  // Test helper: emit a named event
-  emit(type: string, data?: unknown) {
-    const event = new MessageEvent(type, {
-      data: data !== undefined ? JSON.stringify(data) : undefined,
-    });
-    (this.listeners[type] || []).forEach((fn) => fn(event));
-  }
-
-  // Test helper: trigger onerror
-  triggerError() {
-    this.readyState = 0; // CONNECTING (not CLOSED)
-    if (this.onerror) {
-      this.onerror(new Event('error'));
-    }
-  }
-}
-
-// Attach CLOSED constant
-(MockEventSource as unknown as Record<string, number>).CLOSED = 2;
+// Mock authFetch
+const mockAuthFetch = vi.fn();
+vi.mock('../contexts/AuthContext', () => ({
+  authFetch: (...args: unknown[]) => mockAuthFetch(...args),
+}));
 
 const mockResult: ProcessResult = {
   tripId: 'trip-1',
@@ -77,189 +30,351 @@ const mockResult: ProcessResult = {
   coverImageId: 'img-1',
 };
 
+function jsonResponse(data: unknown, status = 200) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(data),
+  } as Response);
+}
+
+function notFoundResponse() {
+  return Promise.resolve({
+    ok: false,
+    status: 404,
+    json: () => Promise.resolve({ error: { code: 'NOT_FOUND' } }),
+  } as Response);
+}
+
 describe('ProcessTrigger', () => {
   beforeEach(() => {
-    MockEventSource.instances = [];
-    vi.stubGlobal('EventSource', MockEventSource);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockAuthFetch.mockReset();
+    // Default: no active job on mount
+    mockAuthFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      return notFoundResponse();
+    });
   });
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  function latestES(): MockEventSource {
-    return MockEventSource.instances[MockEventSource.instances.length - 1];
-  }
-
-  it('renders the start processing button', () => {
+  it('renders the start processing button when no active job', async () => {
     render(<ProcessTrigger tripId="trip-1" />);
+    // Wait for active-job check to complete
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
     expect(screen.getByRole('button', { name: '开始处理' })).toBeDefined();
   });
 
-  it('creates EventSource to SSE endpoint on button click', async () => {
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
+  it('POSTs to create a job on button click and starts polling', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
-    expect(MockEventSource.instances).toHaveLength(1);
-    expect(latestES().url).toBe('/api/trips/trip-1/process/stream');
-  });
-
-  it('shows loading state while processing', async () => {
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
-
-    expect(screen.getByRole('button', { name: '处理中...' })).toBeDisabled();
-  });
-
-  it('updates progress on progress events', async () => {
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
-
-    await act(() => {
-      latestES().emit('progress', {
-        step: 'dedup',
-        stepIndex: 1,
-        totalSteps: 4,
-        percent: 0,
-      });
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs/job-1') && !url.includes('/result')) {
+        return jsonResponse({
+          id: 'job-1', tripId: 'trip-1', status: 'running',
+          currentStep: 'classify', percent: 10, processed: 2, total: 10,
+        });
+      }
+      return notFoundResponse();
     });
 
-    expect(screen.getByText('图片去重')).toBeDefined();
-    expect(screen.getByText('步骤 1/4')).toBeDefined();
-    expect(screen.getByText('0%')).toBeDefined();
-  });
-
-  it('displays processing summary after complete event', async () => {
-    const user = userEvent.setup();
     render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
     await user.click(screen.getByRole('button', { name: '开始处理' }));
 
-    await act(() => {
-      latestES().emit('complete', mockResult);
+    // Wait for POST + immediate poll
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    // Verify POST was called
+    expect(mockAuthFetch).toHaveBeenCalledWith(
+      '/api/trips/trip-1/process-jobs',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    // Verify poll was called
+    expect(mockAuthFetch).toHaveBeenCalledWith('/api/process-jobs/job-1');
+  });
+
+  it('handles 409 by polling the existing job', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse(
+          { error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中', existingJobId: 'existing-job' } },
+          409,
+        );
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs/existing-job') && !url.includes('/result')) {
+        return jsonResponse({
+          id: 'existing-job', tripId: 'trip-1', status: 'running',
+          currentStep: 'dedup', percent: 33, processed: 5, total: 20,
+        });
+      }
+      return notFoundResponse();
+    });
+
+    render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
+    await user.click(screen.getByRole('button', { name: '开始处理' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    // Should be polling the existing job, not showing error
+    expect(mockAuthFetch).toHaveBeenCalledWith('/api/process-jobs/existing-job');
+  });
+
+  it('stops polling and shows result on completed status', async () => {
+    const onProcessed = vi.fn();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    let pollCount = 0;
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (typeof url === 'string' && url.match(/\/process-jobs\/job-1$/) ) {
+        pollCount++;
+        if (pollCount >= 2) {
+          return jsonResponse({
+            id: 'job-1', tripId: 'trip-1', status: 'completed',
+            currentStep: 'cover', percent: 100, processed: 10, total: 10,
+          });
+        }
+        return jsonResponse({
+          id: 'job-1', tripId: 'trip-1', status: 'running',
+          currentStep: 'classify', percent: 10, processed: 2, total: 10,
+        });
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs/job-1/result')) {
+        return jsonResponse(mockResult);
+      }
+      return notFoundResponse();
+    });
+
+    render(<ProcessTrigger tripId="trip-1" onProcessed={onProcessed} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
+    await user.click(screen.getByRole('button', { name: '开始处理' }));
+
+    // Wait for POST + first poll
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    // Advance to trigger second poll (completed)
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+
+    // Should have fetched result and called onProcessed
+    await waitFor(() => {
+      expect(onProcessed).toHaveBeenCalledWith(mockResult);
     });
 
     expect(screen.getByText(/模糊删除：1 张/)).toBeDefined();
-    expect(screen.getByText(/去重删除：2 张/)).toBeDefined();
   });
 
-  it('closes EventSource on complete event', async () => {
-    const user = userEvent.setup();
+  it('stops polling and shows error on failed status', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (typeof url === 'string' && url.match(/\/process-jobs\/job-1$/)) {
+        return jsonResponse({
+          id: 'job-1', tripId: 'trip-1', status: 'failed',
+          errorMessage: '去重处理失败',
+        });
+      }
+      return notFoundResponse();
+    });
+
     render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
     await user.click(screen.getByRole('button', { name: '开始处理' }));
-
-    const es = latestES();
-    await act(() => {
-      es.emit('complete', mockResult);
-    });
-
-    expect(es.close).toHaveBeenCalled();
-  });
-
-  it('calls onProcessed callback with result on complete', async () => {
-    const onProcessed = vi.fn();
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-1" onProcessed={onProcessed} />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
-
-    await act(() => {
-      latestES().emit('complete', mockResult);
-    });
-
-    expect(onProcessed).toHaveBeenCalledWith(mockResult);
-  });
-
-  it('displays error message on server error event', async () => {
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
-
-    await act(() => {
-      latestES().emit('error', { message: '去重处理失败', step: 'dedup' });
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
 
     expect(screen.getByRole('alert')).toHaveTextContent('去重处理失败');
   });
 
-  it('closes EventSource on server error event', async () => {
-    const user = userEvent.setup();
+  it('resumes polling on mount when active job exists', async () => {
+    mockAuthFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return jsonResponse({ jobId: 'active-job-1', status: 'running' });
+      }
+      if (typeof url === 'string' && url.match(/\/process-jobs\/active-job-1$/) ) {
+        return jsonResponse({
+          id: 'active-job-1', tripId: 'trip-1', status: 'running',
+          currentStep: 'blur', percent: 20, processed: 3, total: 15,
+        });
+      }
+      return notFoundResponse();
+    });
+
     render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
 
-    const es = latestES();
-    await act(() => {
-      es.emit('error', { message: '处理失败' });
-    });
+    // Wait for active-job check + immediate poll
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
 
-    expect(es.close).toHaveBeenCalled();
+    // Should be polling the active job
+    expect(mockAuthFetch).toHaveBeenCalledWith('/api/process-jobs/active-job-1');
+    // Should not show start button (processing state)
+    expect(screen.queryByRole('button', { name: '开始处理' })).toBeNull();
   });
 
-  it('shows disconnected state on connection error', async () => {
-    const user = userEvent.setup();
+  it('shows 连接异常 warning after 3 consecutive poll failures', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    let postDone = false;
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        postDone = true;
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (postDone && typeof url === 'string' && url.match(/\/process-jobs\/job-1$/)) {
+        return Promise.reject(new Error('Network error'));
+      }
+      return notFoundResponse();
+    });
+
     render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
     await user.click(screen.getByRole('button', { name: '开始处理' }));
 
-    await act(() => {
-      latestES().triggerError();
-    });
+    // First poll fails immediately (fail count = 1), backoff 2s
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
 
-    expect(screen.getByText('连接中断，请重新处理')).toBeDefined();
+    // Second poll after 2s backoff (fail count = 2), backoff 4s
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+
+    // Third poll after 4s backoff (fail count = 3) → warning
+    await act(async () => { await vi.advanceTimersByTimeAsync(4100); });
+
+    // Should show warning, NOT '处理失败'
+    await waitFor(() => {
+      expect(screen.getByText('连接异常')).toBeDefined();
+    });
+    expect(screen.queryByText('处理失败')).toBeNull();
   });
 
-  it('re-enables button after complete', async () => {
-    const user = userEvent.setup();
+  it('never shows 处理失败 while retrying', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    let postDone = false;
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        postDone = true;
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (postDone && typeof url === 'string' && url.match(/\/process-jobs\/job-1$/)) {
+        return Promise.reject(new Error('Network error'));
+      }
+      return notFoundResponse();
+    });
+
     render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
     await user.click(screen.getByRole('button', { name: '开始处理' }));
 
-    await act(() => {
-      latestES().emit('complete', mockResult);
-    });
+    // First failure
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(screen.queryByText(/处理失败/)).toBeNull();
 
-    expect(screen.getByRole('button', { name: '开始处理' })).not.toBeDisabled();
+    // Second failure
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(screen.queryByText(/处理失败/)).toBeNull();
   });
 
-  it('shows zero counts summary when nothing deleted', async () => {
-    const cleanResult: ProcessResult = {
-      tripId: 'trip-2',
-      totalImages: 5,
-      totalVideos: 0,
-      blurryDeletedCount: 0,
-      dedupDeletedCount: 0,
-      analyzedCount: 5,
-      optimizedCount: 5,
-      classifiedCount: 5,
-      categoryStats: {
-        people: 0,
-        animal: 0,
-        landscape: 3,
-        other: 2,
-      },
-      compiledCount: 0,
-      failedCount: 0,
-    };
-    const user = userEvent.setup();
-    render(<ProcessTrigger tripId="trip-2" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
+  it('cleans up polling on unmount', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
-    await act(() => {
-      latestES().emit('complete', cleanResult);
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (typeof url === 'string' && url.match(/\/process-jobs\/job-1$/)) {
+        return jsonResponse({
+          id: 'job-1', tripId: 'trip-1', status: 'running',
+          currentStep: 'classify', percent: 10, processed: 2, total: 10,
+        });
+      }
+      return notFoundResponse();
     });
 
-    expect(screen.getByText(/模糊删除：0 张/)).toBeDefined();
-    expect(screen.getByText(/去重删除：0 张/)).toBeDefined();
-  });
-
-  it('closes EventSource on component unmount', async () => {
-    const user = userEvent.setup();
     const { unmount } = render(<ProcessTrigger tripId="trip-1" />);
-    await user.click(screen.getByRole('button', { name: '开始处理' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
 
-    const es = latestES();
+    await user.click(screen.getByRole('button', { name: '开始处理' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    const callCountBefore = mockAuthFetch.mock.calls.length;
     unmount();
 
-    expect(es.close).toHaveBeenCalled();
+    // Advance time — no more polls should happen
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(mockAuthFetch.mock.calls.length).toBe(callCountBefore);
+  });
+
+  it('shows retry button after error', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/active-job')) {
+        return notFoundResponse();
+      }
+      if (typeof url === 'string' && url.includes('/process-jobs') && opts?.method === 'POST') {
+        return jsonResponse({ jobId: 'job-1', status: 'queued' });
+      }
+      if (typeof url === 'string' && url.match(/\/process-jobs\/job-1$/)) {
+        return jsonResponse({
+          id: 'job-1', tripId: 'trip-1', status: 'failed',
+          errorMessage: '处理出错',
+        });
+      }
+      return notFoundResponse();
+    });
+
+    render(<ProcessTrigger tripId="trip-1" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+
+    await user.click(screen.getByRole('button', { name: '开始处理' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+
+    expect(screen.getByRole('button', { name: '重新处理' })).toBeDefined();
   });
 });

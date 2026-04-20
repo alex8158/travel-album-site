@@ -10,15 +10,19 @@ export interface ProgressBarProps {
 }
 
 const STEP_LABELS: Record<string, string> = {
+  collectInputs: '收集图片',
+  classify: '分类',
+  blur: '模糊检测',
   blurDetect: '模糊检测',
-  dedup: '图片去重',
-  analyze: '图片分析',
-  optimize: '自动修图',
-  classify: '自动分类',
-  thumbnail: '缩略图生成',
+  dedup: '去重',
+  reduce: '汇总',
+  write: '写入',
+  analyze: '分析',
+  optimize: '优化',
+  thumbnail: '缩略图',
   videoAnalysis: '视频分析',
   videoEdit: '视频编辑',
-  cover: '封面图选择',
+  cover: '封面',
 };
 
 export function getStepLabel(step: string): string {
