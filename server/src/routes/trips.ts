@@ -202,6 +202,13 @@ router.delete('/:id', authMiddleware, requireAuth, (req: Request, res: Response)
   }
   db.prepare('DELETE FROM media_items WHERE trip_id = ?').run(tripId);
   db.prepare('DELETE FROM duplicate_groups WHERE trip_id = ?').run(tripId);
+  // Clean up processing jobs and their events
+  const jobIds = db.prepare('SELECT id FROM processing_jobs WHERE trip_id = ?').all(tripId) as { id: string }[];
+  if (jobIds.length > 0) {
+    const ph = jobIds.map(() => '?').join(',');
+    db.prepare(`DELETE FROM processing_job_events WHERE job_id IN (${ph})`).run(...jobIds.map(j => j.id));
+  }
+  db.prepare('DELETE FROM processing_jobs WHERE trip_id = ?').run(tripId);
   db.prepare('DELETE FROM trips WHERE id = ?').run(tripId);
 
   return res.json({ message: '相册已删除' });
