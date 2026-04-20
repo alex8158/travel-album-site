@@ -33,7 +33,7 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
   const [status, setStatus] = useState<ProgressStatus>('idle');
   const [currentStep, setCurrentStep] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
-  const [totalSteps, setTotalSteps] = useState(12);
+  const [totalSteps] = useState(12);
   const [percent, setPercent] = useState(0);
   const [processed, setProcessed] = useState<number | null>(null);
   const [total, setTotal] = useState<number | null>(null);
