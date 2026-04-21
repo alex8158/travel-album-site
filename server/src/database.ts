@@ -119,6 +119,25 @@ function initTables(db: Database.Database): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_jobs_active_trip ON processing_jobs(trip_id) WHERE status IN ('queued', 'running');
 
+    CREATE TABLE IF NOT EXISTS upload_sessions (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      trip_id TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      total_parts INTEGER,
+      part_size INTEGER,
+      file_size INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id),
+      FOREIGN KEY (trip_id) REFERENCES trips(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_media ON upload_sessions(media_id);
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status);
+
     CREATE TABLE IF NOT EXISTS video_segments (
       id TEXT PRIMARY KEY,
       media_id TEXT NOT NULL,
@@ -290,6 +309,76 @@ function initTables(db: Database.Database): void {
   // Migration: add category column to media_items table (image classification)
   try {
     db.exec(`ALTER TABLE media_items ADD COLUMN category TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add upload_id column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN upload_id TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add upload_mode column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN upload_mode TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add storage_key column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN storage_key TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add video_duration column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN video_duration REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add video_width column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN video_width INTEGER`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add video_height column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN video_height INTEGER`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add video_codec column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN video_codec TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add video_bitrate column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN video_bitrate INTEGER`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add preview_proxy_path column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN preview_proxy_path TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add edit_proxy_path column to media_items table (video upload pipeline)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN edit_proxy_path TEXT`);
   } catch {
     // Column already exists — ignore for idempotency
   }

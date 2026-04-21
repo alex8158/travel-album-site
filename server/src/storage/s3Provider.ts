@@ -4,8 +4,14 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  ListPartsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'stream';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -37,24 +43,15 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async save(relativePath: string, data: Buffer | Readable): Promise<void> {
-    let body: Buffer;
-    if (Buffer.isBuffer(data)) {
-      body = data;
-    } else {
-      const chunks: Buffer[] = [];
-      for await (const chunk of data) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      body = Buffer.concat(chunks);
-    }
-
-    await this.client.send(
-      new PutObjectCommand({
+    const upload = new Upload({
+      client: this.client,
+      params: {
         Bucket: this.bucket,
         Key: relativePath,
-        Body: body,
-      })
-    );
+        Body: data,
+      },
+    });
+    await upload.done();
   }
 
   async read(relativePath: string): Promise<Buffer> {
@@ -116,5 +113,77 @@ export class S3StorageProvider implements StorageProvider {
     );
     await fs.writeFile(tempPath, data);
     return tempPath;
+  }
+
+  async initMultipartUpload(relativePath: string): Promise<string> {
+    const response = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: relativePath,
+      })
+    );
+    if (!response.UploadId) {
+      throw new Error('Failed to initiate multipart upload: no UploadId returned');
+    }
+    return response.UploadId;
+  }
+
+  async getPresignedPartUrl(relativePath: string, uploadId: string, partNumber: number): Promise<string> {
+    const command = new UploadPartCommand({
+      Bucket: this.bucket,
+      Key: relativePath,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+    });
+    return getSignedUrl(this.client, command, { expiresIn: 3600 });
+  }
+
+  async completeMultipartUpload(relativePath: string, uploadId: string, parts: Array<{partNumber: number; etag: string}>): Promise<void> {
+    await this.client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: relativePath,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: parts.map((p) => ({
+            PartNumber: p.partNumber,
+            ETag: p.etag,
+          })),
+        },
+      })
+    );
+  }
+
+  async abortMultipartUpload(relativePath: string, uploadId: string): Promise<void> {
+    await this.client.send(
+      new AbortMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: relativePath,
+        UploadId: uploadId,
+      })
+    );
+  }
+
+  async listParts(relativePath: string, uploadId: string): Promise<Array<{partNumber: number; etag: string; size: number}>> {
+    const response = await this.client.send(
+      new ListPartsCommand({
+        Bucket: this.bucket,
+        Key: relativePath,
+        UploadId: uploadId,
+      })
+    );
+    return (response.Parts || []).map((p) => ({
+      partNumber: p.PartNumber!,
+      etag: p.ETag!,
+      size: p.Size!,
+    }));
+  }
+
+  async getPresignedUploadUrl(relativePath: string): Promise<string> {
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: relativePath,
+    });
+    return getSignedUrl(this.client, command, { expiresIn: 3600 });
   }
 }

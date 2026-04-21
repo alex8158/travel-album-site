@@ -20,6 +20,8 @@ import adminRouter from './routes/admin';
 import usersRouter from './routes/users';
 import myRouter from './routes/my';
 import clipsRouter from './routes/clips';
+import uploadsRouter from './routes/uploads';
+import { cleanupExpiredUploads } from './services/uploadCleanup';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import { globalErrorHandler } from './middleware/errorHandler';
 
@@ -32,6 +34,9 @@ app.use(express.json());
 
 // Initialize database
 getDb();
+
+// Cleanup expired uploads (fire-and-forget)
+cleanupExpiredUploads().catch(console.error);
 
 // Auto-migrate storage if STORAGE_TYPE changed since last startup
 const STORAGE_TYPE_FILE = path.join(__dirname, '..', 'data', '.storage-type');
@@ -93,6 +98,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/my', myRouter);
 app.use('/api/media', clipsRouter);
+app.use('/api/uploads', uploadsRouter);
 app.use('/api/trips', processJobsTripRouter);
 app.use('/api/process-jobs', processJobsRouter);
 

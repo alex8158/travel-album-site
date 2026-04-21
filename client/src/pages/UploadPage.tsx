@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import TripCreateForm from '../components/TripCreateForm';
 import FileUploader from '../components/FileUploader';
+import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
 import type { ProcessResult } from '../components/ProcessTrigger';
@@ -54,22 +55,42 @@ export default function UploadPage() {
       {step === 'upload' && tripId && (
         <div>
           <h2>上传素材 - {tripTitle}</h2>
-          <FileUploader
-            tripId={tripId}
-            onAllUploaded={(count) => {
-              setUploadCount(count);
-              setStep('process');
-            }}
-            onVideoUploaded={(mediaId, mediaType) => {
-              console.log(`[UploadPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
-            }}
-            onUploadCancelled={(completedCount) => {
-              setUploadCount(completedCount);
-              if (completedCount > 0) {
-                setStep('cancelled');
-              }
-            }}
-          />
+
+          <div style={{ marginBottom: '16px' }}>
+            <h3 style={{ fontSize: '1em', margin: '0 0 8px 0' }}>上传图片</h3>
+            <FileUploader
+              tripId={tripId}
+              onAllUploaded={(count) => {
+                setUploadCount(count);
+                setStep('process');
+              }}
+              onVideoUploaded={(mediaId, mediaType) => {
+                console.log(`[UploadPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+              }}
+              onUploadCancelled={(completedCount) => {
+                setUploadCount(completedCount);
+                if (completedCount > 0) {
+                  setStep('cancelled');
+                }
+              }}
+            />
+          </div>
+
+          <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '16px' }}>
+            <h3 style={{ fontSize: '1em', margin: '0 0 8px 0' }}>上传视频</h3>
+            <p style={{ color: '#666', fontSize: '0.9em', margin: '0 0 8px 0' }}>
+              支持 MP4、MOV、AVI、MKV 格式，大文件自动分片上传
+            </p>
+            <VideoUploader
+              tripId={tripId}
+              onUploaded={(mediaId) => {
+                console.log(`[UploadPage] Video ${mediaId} uploaded via new pipeline`);
+              }}
+              onCancelled={() => {
+                console.log('[UploadPage] Video upload cancelled');
+              }}
+            />
+          </div>
         </div>
       )}
 

@@ -153,7 +153,7 @@ server {
     listen 80;
     server_name _;
 
-    client_max_body_size 500M;
+    client_max_body_size 2g;
 
     location /api/ {
         proxy_pass http://127.0.0.1:3001;
@@ -327,7 +327,7 @@ server {
     listen 80;
     server_name _;
 
-    client_max_body_size 500M;
+    client_max_body_size 2g;
 
     location /api/ {
         proxy_pass http://127.0.0.1:3001;

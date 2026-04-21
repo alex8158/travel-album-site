@@ -86,4 +86,28 @@ export class OSSStorageProvider implements StorageProvider {
     await fs.writeFile(tempPath, data);
     return tempPath;
   }
+
+  async initMultipartUpload(relativePath: string): Promise<string> {
+    throw new Error('initMultipartUpload not implemented for this provider');
+  }
+
+  async getPresignedPartUrl(relativePath: string, uploadId: string, partNumber: number): Promise<string> {
+    throw new Error('getPresignedPartUrl not implemented for this provider');
+  }
+
+  async completeMultipartUpload(relativePath: string, uploadId: string, parts: Array<{partNumber: number; etag: string}>): Promise<void> {
+    throw new Error('completeMultipartUpload not implemented for this provider');
+  }
+
+  async abortMultipartUpload(relativePath: string, uploadId: string): Promise<void> {
+    throw new Error('abortMultipartUpload not implemented for this provider');
+  }
+
+  async listParts(relativePath: string, uploadId: string): Promise<Array<{partNumber: number; etag: string; size: number}>> {
+    throw new Error('listParts not implemented for this provider');
+  }
+
+  async getPresignedUploadUrl(relativePath: string): Promise<string> {
+    throw new Error('getPresignedUploadUrl not implemented for this provider');
+  }
 }
