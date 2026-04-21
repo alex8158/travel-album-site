@@ -320,6 +320,9 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       clearResumeData(init.mediaId);
       setState('completed');
       onUploaded?.(init.mediaId);
+
+      // Auto-reset to idle after a short delay so user can upload another video
+      setTimeout(() => setState('idle'), 2000);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         setState('cancelled');
@@ -419,6 +422,9 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       resumePartsRef.current = [];
       setState('completed');
       onUploaded?.(rd.mediaId);
+
+      // Auto-reset to idle after a short delay so user can upload another video
+      setTimeout(() => setState('idle'), 2000);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         setState('cancelled');
