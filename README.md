@@ -12,6 +12,14 @@
   - 自动优化：亮度/对比度/锐度保守调整，保留原始分辨率
   - 异步处理：后台任务 + 前端轮询进度，不依赖 SSE 长连接
   - 缩略图生成、视频分析与剪辑、封面自动选择
+- 智能视频剪辑：
+  - 自动分段：基于 ffmpeg 场景检测在自然边界处切分
+  - 质量检测：清晰度 + 稳定性 + 曝光三维评分，剔除严重抖动/模糊/曝光异常片段
+  - 摘要生成：<1min 仅去坏段，1-10min 剪到 1 分钟，>10min 剪到 5 分钟
+  - 片段编辑器：预览、选择、排序、合并导出
+  - 过渡效果：硬切、淡入淡出、交叉淡化，音频平滑处理
+  - 二次编辑：自定义目标时长、排除指定片段后重新生成
+  - 下载：会员可下载合并后的视频
 - 用户系统：注册审批、JWT 认证、管理员/普通用户角色
 - 权限控制：资源所有权、素材公开/私有可见性
 - 存储抽象：支持本地存储、AWS S3、阿里 OSS、腾讯 COS，可在线迁移
@@ -241,6 +249,11 @@ cd travel-album-site
 - `GET /api/trips/:id/process/stream` — SSE 处理进度（兼容）
 - `POST /api/media/:id/edit` — 手动编辑图片
 - `PUT /api/media/:id/visibility` — 修改可见性
+- `GET /api/media/:id/segments` — 获取视频片段列表
+- `POST /api/media/:id/clips` — 触发智能视频剪辑
+- `POST /api/media/:id/merge` — 合并选定片段导出
+- `POST /api/media/:id/re-edit` — 二次编辑（自定义时长/排除片段）
+- `GET /api/media/:id/download-compiled` — 下载合并视频
 
 ### 管理员接口
 - `GET /api/admin/users` — 用户管理
