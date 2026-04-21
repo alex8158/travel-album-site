@@ -6,10 +6,11 @@
 
 - 相册管理：创建旅行相册，批量并发上传图片/视频
 - 智能处理流水线：
-  - 去重：DINOv2 embedding + FAISS 聚类（ML 可用时），CLIP + pHash/dHash 回退
-  - 模糊检测：Laplacian + MUSIQ 双条件判定，防止暗图/夜景误删
-  - 质量评分：MUSIQ (IQA) + LAION aesthetic + 分辨率/曝光/文件大小加权
+  - 去重：DINOv2 embedding + FAISS 直接 pair 匹配（ML 可用时），CLIP + pHash/dHash 回退
+  - 模糊检测：整图 + 中心裁剪双区域 Laplacian 方差，纯 CPU 判定
+  - 质量评分：Laplacian 清晰度（0.30）+ MUSIQ (0.25) + LAION aesthetic (0.20) + 分辨率/曝光/文件大小
   - 自动优化：亮度/对比度/锐度保守调整，保留原始分辨率
+  - 异步处理：后台任务 + 前端轮询进度，不依赖 SSE 长连接
   - 缩略图生成、视频分析与剪辑、封面自动选择
 - 用户系统：注册审批、JWT 认证、管理员/普通用户角色
 - 权限控制：资源所有权、素材公开/私有可见性
@@ -116,8 +117,8 @@ cd client && npm test    # 前端
 | 层级 | 方法 | 说明 |
 |------|------|------|
 | Layer 0 | MD5 + pHash + dHash | 精确匹配 + 低距离哈希 |
-| Layer 1 | DINOv2 + FAISS / CLIP | 语义相似度聚类（ML 优先） |
-| Layer 2 | Strict Threshold | 灰区对回退判定（similarity ≥ 0.88） |
+| Layer 1 | DINOv2 + FAISS / CLIP | 语义相似度直接 pair 匹配（ML 优先） |
+| Layer 2 | Strict Threshold | 灰区对回退判定（similarity ≥ 0.92） |
 | Layer 3 | Union-Find + 质量选择 | 分组后保留最佳，其余移入回收站 |
 
 LLM 逐对审查（Layer 2 可选）支持 OpenAI / Bedrock / DashScope，通过 `AI_REVIEW_ENABLED` 控制开关。
@@ -131,8 +132,8 @@ LLM 逐对审查（Layer 2 可选）支持 OpenAI / Bedrock / DashScope，通过
 | `PORT` | 服务端口 | `3001` |
 | `STORAGE_TYPE` | 存储类型：`local` / `s3` / `oss` / `cos` | `local` |
 | `AI_REVIEW_ENABLED` | LLM 去重审查开关 | `false` |
-| `DINOV2_DEDUP_THRESHOLD` | DINOv2 去重相似度阈值 | `0.92` |
-| `MUSIQ_BLUR_THRESHOLD` | MUSIQ 模糊判定阈值 | `30` |
+| `DINOV2_DEDUP_THRESHOLD` | DINOv2 去重相似度阈值 | `0.90` |
+| `MUSIQ_BLUR_THRESHOLD` | MUSIQ 模糊判定阈值（仅用于质量评分） | `25` |
 
 完整配置见 `server/.env.example`。
 
