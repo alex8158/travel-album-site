@@ -139,19 +139,47 @@ LLM 逐对审查（Layer 2 可选）支持 OpenAI / Bedrock / DashScope，通过
 
 ## 生产部署
 
-### 服务器配置建议
+### 方式一：Docker 部署（推荐）
 
-| 规模 | CPU | 内存 | 磁盘 | 参考实例 |
-|------|-----|------|------|----------|
-| 个人使用（~50 次旅行） | 2 核 | 2 GB | 40 GB SSD | t3.small |
-| 小团队（~200 次旅行） | 2 核 | 4 GB | 100 GB SSD | t3.medium |
-| ML 模型启用 | 2 核 | 4 GB+ | 50 GB+ SSD | t3.medium |
-
-ML 模型首次加载需要约 4-5GB 磁盘空间（模型权重缓存）。
-
-### AWS EC2 一键部署
+从 GitHub Container Registry 拉取预构建镜像：
 
 ```bash
+docker pull ghcr.io/alex8158/travel-album-site:v1.0.0
+docker run -d -p 3001:3001 -v travel-data:/app/server/uploads ghcr.io/alex8158/travel-album-site:v1.0.0
+```
+
+或者本地构建：
+
+```bash
+docker build -t travel-album .
+docker run -d -p 3001:3001 -v travel-data:/app/server/uploads travel-album
+```
+
+访问 http://localhost:3001，首次启动自动创建管理员（admin / P8ssw2rd）。
+
+注意：Docker 镜像不含 Python ML 环境，去重和模糊检测会自动回退到传统算法。
+
+### 方式二：Release 包部署
+
+从 [GitHub Releases](https://github.com/alex8158/travel-album-site/releases) 下载 `travel-album-v1.0.0.tar.gz`：
+
+```bash
+# 解压
+tar xzf travel-album-v1.0.0.tar.gz
+
+# 安装依赖并启动
+cd server
+npm install --omit=dev
+node dist/index.js
+```
+
+如需 ML 功能（DINOv2 去重、MUSIQ 质量评分），参考下方 Python ML 环境配置。
+
+### 方式三：AWS EC2 一键部署（含 ML 环境）
+
+```bash
+git clone https://github.com/alex8158/travel-album-site.git
+cd travel-album-site
 ./deploy/create-ec2.sh
 ```
 
@@ -166,13 +194,6 @@ ML 模型首次加载需要约 4-5GB 磁盘空间（模型权重缓存）。
 ```
 
 `update.sh` 自动执行：拉代码 → 编译 → 构建前端 → 创建 Python venv → 安装 ML 依赖 → 预热模型 → 重启 pm2。
-
-### Docker 部署
-
-```bash
-docker build -t travel-album .
-docker run -d -p 3001:3001 -v travel-data:/app/server/uploads travel-album
-```
 
 ## 项目结构
 
