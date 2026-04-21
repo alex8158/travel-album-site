@@ -120,14 +120,15 @@ router.get('/trips/:id/gallery', (req: Request, res: Response) => {
     });
   }
 
-  // Get all videos
+  // Get all videos (exclude incomplete uploads)
   const videoRows = db.prepare(
-    `SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND status = 'active'`
+    `SELECT * FROM media_items WHERE trip_id = ? AND media_type = ? AND status = 'active'
+     AND (processing_status IS NULL OR processing_status NOT IN ('uploading', 'cancelled'))`
   ).all(tripId, 'video') as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({
     ...rowToMediaItem(row),
-    thumbnailUrl: row.thumbnail_path ? `/api/media/${row.id}/thumbnail` : '',
+    thumbnailUrl: `/api/media/${row.id}/thumbnail`,
   }));
 
   const galleryData: GalleryData = { trip, images, videos };

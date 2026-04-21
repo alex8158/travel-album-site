@@ -348,7 +348,7 @@ router.post('/:mediaId/abort', async (req: Request, res: Response) => {
 
     const now = new Date().toISOString();
     db.prepare('UPDATE upload_sessions SET status = ?, updated_at = ? WHERE id = ?').run('aborted', now, session.id);
-    db.prepare('UPDATE media_items SET processing_status = ? WHERE id = ?').run('cancelled', mediaId);
+    db.prepare("UPDATE media_items SET processing_status = ?, status = 'trashed', trashed_reason = 'upload_cancelled' WHERE id = ?").run('cancelled', mediaId);
 
     return res.json({ mediaId, status: 'cancelled' });
   } catch (err) {

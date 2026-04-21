@@ -133,7 +133,7 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(res.body.videos).toHaveLength(2);
     for (const vid of res.body.videos) {
       expect(vid.mediaType).toBe('video');
-      expect(vid.thumbnailUrl).toBe('');
+      expect(vid.thumbnailUrl).toMatch(/^\/api\/media\/.+\/thumbnail$/);
     }
 
     const imageIds = res.body.images.map((i: any) => i.item.id);
@@ -203,14 +203,14 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
   });
 
-  it('should return empty thumbnailUrl for videos without thumbnail_path', async () => {
+  it('should return thumbnailUrl for videos even without thumbnail_path', async () => {
     const tripId = createTrip(owner.userId);
-    createMediaItem(tripId, 'video');
+    const vidId = createMediaItem(tripId, 'video');
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
-    expect(res.body.videos[0].thumbnailUrl).toBe('');
+    expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
   });
 
   describe('visibility filtering', () => {

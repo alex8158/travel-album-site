@@ -117,12 +117,14 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
   if (category) videoParams.push(category);
 
   const videoRows = db.prepare(
-    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active' ${visibilityClause} ${tagClause} ${categoryClause}`
+    `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active'
+     AND (m.processing_status IS NULL OR m.processing_status NOT IN ('uploading', 'cancelled'))
+     ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...videoParams) as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({
     ...rowToMediaItem(row),
-    thumbnailUrl: row.thumbnail_path ? `/api/media/${row.id}/thumbnail` : '',
+    thumbnailUrl: `/api/media/${row.id}/thumbnail`,
   }));
 
   const galleryData: GalleryData = { trip, images, videos };
