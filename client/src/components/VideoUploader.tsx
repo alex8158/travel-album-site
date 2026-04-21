@@ -41,6 +41,17 @@ export interface UploadResumeData {
   createdAt: number;
 }
 
+type FileUploadStatus = 'queued' | 'uploading' | 'completed' | 'failed';
+
+interface QueuedFile {
+  file: File;
+  status: FileUploadStatus;
+  error?: string;
+  completedParts: number;
+  totalParts: number;
+  mediaId?: string;
+}
+
 type UploadState = 'idle' | 'uploading' | 'completed' | 'failed' | 'cancelled';
 
 const VIDEO_ACCEPT = '.mp4,.mov,.avi,.mkv';
@@ -128,11 +139,11 @@ async function uploadPartWithRetry(
 export default function VideoUploader({ tripId, onUploaded, onCancelled }: VideoUploaderProps) {
   const [state, setState] = useState<UploadState>('idle');
   const [error, setError] = useState<string>('');
-  const [filename, setFilename] = useState('');
-  const [completedParts, setCompletedParts] = useState(0);
-  const [totalParts, setTotalParts] = useState(0);
   const [sizeWarning, setSizeWarning] = useState('');
   const [resumePrompt, setResumePrompt] = useState<UploadResumeData | null>(null);
+
+  // Multi-file queue
+  const [fileQueue, setFileQueue] = useState<QueuedFile[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -190,14 +201,13 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     init: InitResponse,
     controller: AbortController,
     skipParts: CompletedPart[] = [],
+    onPartComplete?: () => void,
   ) => {
     const partSize = init.partSize!;
     const total = init.totalParts!;
-    setTotalParts(total);
 
     const alreadyDone = new Set(skipParts.map(p => p.partNumber));
     const allCompleted: CompletedPart[] = [...skipParts];
-    setCompletedParts(alreadyDone.size);
 
     // Save initial resume data
     const resumeData: UploadResumeData = {
@@ -251,7 +261,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
           const etag = await uploadPartWithRetry(part.url, blob, controller.signal);
           const completed: CompletedPart = { partNumber: part.partNumber, etag };
           allCompleted.push(completed);
-          setCompletedParts(prev => prev + 1);
+          onPartComplete?.();
 
           // Update resume data
           resumeData.completedParts = [...allCompleted];
@@ -275,24 +285,20 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     });
   }, [tripId]);
 
-  const startUpload = useCallback(async (file: File) => {
-    setError('');
-    setState('uploading');
-    setFilename(file.name);
-    setCompletedParts(0);
-    setTotalParts(0);
+  // Fire-and-forget process call after each upload
+  const triggerProcess = useCallback((mediaId: string) => {
+    authFetch(`/api/media/${mediaId}/process`, { method: 'POST' }).catch(() => {
+      // fire-and-forget: processing errors are non-blocking
+    });
+  }, []);
 
-    // Size warnings
-    if (file.size > TWENTY_GB) {
-      setSizeWarning('建议在桌面端上传');
-    } else if (file.size > TEN_GB) {
-      setSizeWarning('建议使用稳定网络');
-    } else {
-      setSizeWarning('');
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
+  const uploadSingleFile = useCallback(async (
+    file: File,
+    queueIndex: number,
+    controller: AbortController,
+  ): Promise<string | null> => {
+    // Update queue status to uploading
+    setFileQueue(prev => prev.map((q, i) => i === queueIndex ? { ...q, status: 'uploading' as const } : q));
 
     try {
       // Init upload
@@ -309,20 +315,74 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       mediaIdRef.current = init.mediaId;
       uploadIdRef.current = init.uploadId;
 
+      setFileQueue(prev => prev.map((q, i) =>
+        i === queueIndex ? { ...q, mediaId: init.mediaId, totalParts: init.mode === 'simple' ? 1 : (init.totalParts || 0) } : q
+      ));
+
       if (init.mode === 'simple') {
-        setTotalParts(1);
         await uploadSimple(file, init, controller);
-        setCompletedParts(1);
+        setFileQueue(prev => prev.map((q, i) => i === queueIndex ? { ...q, completedParts: 1 } : q));
       } else {
-        await uploadMultipart(file, init, controller);
+        await uploadMultipart(file, init, controller, [], () => {
+          setFileQueue(prev => prev.map((q, i) => i === queueIndex ? { ...q, completedParts: q.completedParts + 1 } : q));
+        });
       }
 
       clearResumeData(init.mediaId);
-      setState('completed');
+      setFileQueue(prev => prev.map((q, i) => i === queueIndex ? { ...q, status: 'completed' as const } : q));
       onUploaded?.(init.mediaId);
 
-      // Auto-reset to idle after a short delay so user can upload another video
-      setTimeout(() => setState('idle'), 2000);
+      return init.mediaId;
+    } catch (err: any) {
+      if (err.name === 'AbortError') throw err;
+      setFileQueue(prev => prev.map((q, i) =>
+        i === queueIndex ? { ...q, status: 'failed' as const, error: err.message || '上传失败' } : q
+      ));
+      return null;
+    }
+  }, [tripId, uploadSimple, uploadMultipart, onUploaded]);
+
+  const startQueueUpload = useCallback(async (files: File[]) => {
+    setError('');
+    setState('uploading');
+
+    const queue: QueuedFile[] = files.map(f => ({
+      file: f,
+      status: 'queued' as const,
+      completedParts: 0,
+      totalParts: 0,
+    }));
+    setFileQueue(queue);
+
+    // Size warnings
+    const maxSize = Math.max(...files.map(f => f.size));
+    if (maxSize > TWENTY_GB) {
+      setSizeWarning('建议在桌面端上传');
+    } else if (maxSize > TEN_GB) {
+      setSizeWarning('建议使用稳定网络');
+    } else {
+      setSizeWarning('');
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        const mediaId = await uploadSingleFile(files[i], i, controller);
+        // Fire-and-forget process call after each successful upload
+        if (mediaId) {
+          triggerProcess(mediaId);
+        }
+      }
+
+      setState('completed');
+      // Auto-reset to idle after a short delay
+      setTimeout(() => {
+        setState('idle');
+        setFileQueue([]);
+      }, 2000);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         setState('cancelled');
@@ -331,12 +391,11 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
         setState('failed');
       }
     }
-  }, [tripId, uploadSimple, uploadMultipart, onUploaded]);
+  }, [uploadSingleFile, triggerProcess]);
 
   const handleResume = useCallback(async (resumeData: UploadResumeData) => {
     setResumePrompt(null);
     setState('uploading');
-    setFilename(resumeData.filename);
     setError('');
     setSizeWarning('');
 
@@ -391,8 +450,16 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
   ) => {
     setError('');
     setState('uploading');
-    setFilename(file.name);
     setSizeWarning('');
+
+    const queue: QueuedFile[] = [{
+      file,
+      status: 'uploading',
+      completedParts: skipParts.length,
+      totalParts: rd.totalParts,
+      mediaId: rd.mediaId,
+    }];
+    setFileQueue(queue);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -410,21 +477,27 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       };
 
       if (init.mode === 'multipart') {
-        await uploadMultipart(file, init, controller, skipParts);
+        await uploadMultipart(file, init, controller, skipParts, () => {
+          setFileQueue(prev => prev.map((q, i) => i === 0 ? { ...q, completedParts: q.completedParts + 1 } : q));
+        });
       } else {
-        setTotalParts(1);
         await uploadSimple(file, init, controller);
-        setCompletedParts(1);
+        setFileQueue(prev => prev.map((q, i) => i === 0 ? { ...q, completedParts: 1 } : q));
       }
 
       clearResumeData(rd.mediaId);
       resumeDataRef.current = null;
       resumePartsRef.current = [];
+      setFileQueue(prev => prev.map((q, i) => i === 0 ? { ...q, status: 'completed' as const } : q));
       setState('completed');
       onUploaded?.(rd.mediaId);
+      triggerProcess(rd.mediaId);
 
-      // Auto-reset to idle after a short delay so user can upload another video
-      setTimeout(() => setState('idle'), 2000);
+      // Auto-reset to idle after a short delay
+      setTimeout(() => {
+        setState('idle');
+        setFileQueue([]);
+      }, 2000);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         setState('cancelled');
@@ -433,26 +506,25 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
         setState('failed');
       }
     }
-  }, [uploadSimple, uploadMultipart, onUploaded]);
+  }, [uploadSimple, uploadMultipart, onUploaded, triggerProcess]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     if (inputRef.current) inputRef.current.value = '';
 
-    // Check if this is a resume scenario
+    const fileArray = Array.from(files);
+
+    // Check if this is a resume scenario (single file matching resume data)
     const rd = resumeDataRef.current;
-    if (rd && file.name === rd.filename && file.size === rd.fileSize) {
-      // Resume: reuse existing mediaId/uploadId and skip completed parts
-      resumeUploadWithFile(file, rd, resumePartsRef.current);
+    if (rd && fileArray.length === 1 && fileArray[0].name === rd.filename && fileArray[0].size === rd.fileSize) {
+      resumeUploadWithFile(fileArray[0], rd, resumePartsRef.current);
     } else {
       resumeDataRef.current = null;
       resumePartsRef.current = [];
-      startUpload(file);
+      startQueueUpload(fileArray);
     }
-  }, [startUpload, resumeUploadWithFile]);
-
-  const progressPercent = totalParts > 0 ? Math.round((completedParts / totalParts) * 100) : 0;
+  }, [startQueueUpload, resumeUploadWithFile]);
 
   return (
     <div style={{ marginTop: '12px' }}>
@@ -483,6 +555,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
             ref={inputRef}
             type="file"
             accept={VIDEO_ACCEPT}
+            multiple
             onChange={handleFileSelect}
             data-testid="video-file-input"
           />
@@ -494,41 +567,56 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
         <p style={{ color: '#e65100', marginTop: '8px' }}>{sizeWarning}</p>
       )}
 
-      {/* Progress */}
-      {state === 'uploading' && (
+      {/* File queue list */}
+      {fileQueue.length > 0 && state === 'uploading' && (
         <div style={{ marginTop: '12px' }}>
-          <p style={{ margin: '0 0 8px 0' }}>正在上传: {filename}</p>
-          <div style={{
-            width: '100%',
-            backgroundColor: '#e0e0e0',
-            borderRadius: 4,
-            overflow: 'hidden',
-          }}>
-            <div style={{
-              width: `${progressPercent}%`,
-              height: 20,
-              backgroundColor: '#4caf50',
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-            <span>{completedParts}/{totalParts} 分片</span>
-            <span>{progressPercent}%</span>
-          </div>
+          {fileQueue.map((qf, idx) => {
+            const percent = qf.totalParts > 0 ? Math.round((qf.completedParts / qf.totalParts) * 100) : 0;
+            return (
+              <div key={idx} style={{ marginBottom: '10px', padding: '8px', border: '1px solid #eee', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '0.9rem', fontWeight: qf.status === 'uploading' ? 'bold' : 'normal' }}>
+                    {qf.file.name}
+                  </span>
+                  <span style={{
+                    fontSize: '0.75rem',
+                    color: qf.status === 'completed' ? '#2e7d32' : qf.status === 'failed' ? 'red' : qf.status === 'uploading' ? '#1565c0' : '#999',
+                  }}>
+                    {qf.status === 'queued' && '排队中'}
+                    {qf.status === 'uploading' && `上传中 ${percent}%`}
+                    {qf.status === 'completed' && '✓ 完成'}
+                    {qf.status === 'failed' && `✗ 失败: ${qf.error}`}
+                  </span>
+                </div>
+                {qf.status === 'uploading' && qf.totalParts > 0 && (
+                  <div style={{ width: '100%', backgroundColor: '#e0e0e0', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${percent}%`,
+                      height: 12,
+                      backgroundColor: '#4caf50',
+                      transition: 'width 0.3s ease',
+                    }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
           <button onClick={doAbort} style={{ marginTop: '8px' }}>取消上传</button>
         </div>
       )}
 
       {/* Completed */}
       {state === 'completed' && (
-        <p style={{ color: '#2e7d32', marginTop: '8px' }}>✓ {filename} 上传完成</p>
+        <p style={{ color: '#2e7d32', marginTop: '8px' }}>
+          ✓ {fileQueue.length > 1 ? `${fileQueue.length} 个视频` : fileQueue[0]?.file.name} 上传完成，已自动触发处理
+        </p>
       )}
 
       {/* Failed */}
       {state === 'failed' && (
         <div style={{ marginTop: '8px' }}>
           <p style={{ color: 'red' }}>上传失败: {error}</p>
-          <button onClick={() => setState('idle')}>重新选择</button>
+          <button onClick={() => { setState('idle'); setFileQueue([]); }}>重新选择</button>
         </div>
       )}
 
@@ -536,7 +624,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       {state === 'cancelled' && (
         <div style={{ marginTop: '8px' }}>
           <p style={{ color: '#e65100' }}>上传已取消</p>
-          <button onClick={() => setState('idle')}>重新选择</button>
+          <button onClick={() => { setState('idle'); setFileQueue([]); }}>重新选择</button>
         </div>
       )}
 

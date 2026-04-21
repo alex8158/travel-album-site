@@ -318,6 +318,41 @@ export default function GalleryPage() {
                 >
                   ▶
                 </div>
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const res = await fetch(`/api/media/${video.id}/raw`);
+                      if (!res.ok) throw new Error('下载失败');
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = video.originalFilename || `video-${video.id}.mp4`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    } catch {
+                      alert('下载失败，请重试');
+                    }
+                  }}
+                  data-testid={`download-btn-${video.id}`}
+                  aria-label={`下载 ${video.originalFilename}`}
+                  style={{
+                    position: 'absolute',
+                    bottom: '4px',
+                    right: '4px',
+                    background: 'rgba(255,255,255,0.9)',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    padding: '2px 8px',
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ⬇️ 下载
+                </button>
               </div>
             ))}
           </div>

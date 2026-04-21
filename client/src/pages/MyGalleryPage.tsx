@@ -926,24 +926,55 @@ export default function MyGalleryPage() {
                   ▶
                 </div>
                 {!multiSelectMode && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setClipEditorVideoId(video.id); }}
-                    data-testid={`clip-edit-btn-${video.id}`}
-                    aria-label={`智能剪辑 ${video.originalFilename}`}
-                    style={{
-                      position: 'absolute',
-                      bottom: '4px',
-                      right: '4px',
-                      background: 'rgba(255,255,255,0.9)',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      padding: '2px 8px',
-                      fontSize: '0.75rem',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    ✂️ 智能剪辑
-                  </button>
+                  <div style={{ position: 'absolute', bottom: '4px', right: '4px', display: 'flex', gap: '4px' }}>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          const res = await authFetch(`/api/media/${video.id}/raw`);
+                          if (!res.ok) throw new Error('下载失败');
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = video.originalFilename || `video-${video.id}.mp4`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        } catch {
+                          alert('下载失败，请重试');
+                        }
+                      }}
+                      data-testid={`download-btn-${video.id}`}
+                      aria-label={`下载 ${video.originalFilename}`}
+                      style={{
+                        background: 'rgba(255,255,255,0.9)',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        padding: '2px 8px',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ⬇️ 下载
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setClipEditorVideoId(video.id); }}
+                      data-testid={`clip-edit-btn-${video.id}`}
+                      aria-label={`智能剪辑 ${video.originalFilename}`}
+                      style={{
+                        background: 'rgba(255,255,255,0.9)',
+                        border: '1px solid #ccc',
+                        borderRadius: '4px',
+                        padding: '2px 8px',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ✂️ 智能剪辑
+                    </button>
+                  </div>
                 )}
                 {multiSelectMode && (
                   <div

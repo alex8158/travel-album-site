@@ -483,9 +483,24 @@ export default function ClipEditor({ mediaId, tripId: _tripId, onClose }: ClipEd
           }}
         >
           <p style={{ margin: '0 0 8px 0', color: '#155724', fontWeight: 'bold' }}>合并完成！</p>
-          <a
-            href={`/api/media/${mediaId}/download-compiled`}
-            download
+          <button
+            onClick={async () => {
+              try {
+                const res = await authFetch(`/api/media/${mediaId}/download-compiled`);
+                if (!res.ok) throw new Error('下载失败');
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `compiled-${mediaId}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              } catch {
+                alert('下载失败，请重试');
+              }
+            }}
             data-testid="merge-download"
             style={{
               display: 'inline-block',
@@ -493,12 +508,13 @@ export default function ClipEditor({ mediaId, tripId: _tripId, onClose }: ClipEd
               background: '#28a745',
               color: '#fff',
               borderRadius: '4px',
-              textDecoration: 'none',
+              border: 'none',
               fontSize: '0.9rem',
+              cursor: 'pointer',
             }}
           >
             下载合并视频
-          </a>
+          </button>
         </div>
       )}
 
