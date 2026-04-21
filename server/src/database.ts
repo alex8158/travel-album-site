@@ -118,6 +118,26 @@ function initTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_processing_job_events_job_seq ON processing_job_events(job_id, seq);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_jobs_active_trip ON processing_jobs(trip_id) WHERE status IN ('queued', 'running');
+
+    CREATE TABLE IF NOT EXISTS video_segments (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      segment_index INTEGER NOT NULL,
+      start_time REAL NOT NULL,
+      end_time REAL NOT NULL,
+      duration REAL NOT NULL,
+      sharpness_score REAL,
+      stability_score REAL,
+      exposure_score REAL,
+      overall_score REAL,
+      label TEXT NOT NULL,
+      selected INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_video_segments_media_index ON video_segments(media_id, segment_index);
+    CREATE INDEX IF NOT EXISTS idx_video_segments_media ON video_segments(media_id);
   `);
 
   // Migration: add visibility column to existing trips table

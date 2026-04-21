@@ -19,6 +19,7 @@ import trashRouter from './routes/trash';
 import adminRouter from './routes/admin';
 import usersRouter from './routes/users';
 import myRouter from './routes/my';
+import clipsRouter from './routes/clips';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import { globalErrorHandler } from './middleware/errorHandler';
 
@@ -91,6 +92,7 @@ app.use('/api', trashRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/my', myRouter);
+app.use('/api/media', clipsRouter);
 app.use('/api/trips', processJobsTripRouter);
 app.use('/api/process-jobs', processJobsRouter);
 

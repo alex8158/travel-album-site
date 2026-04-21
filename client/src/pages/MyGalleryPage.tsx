@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
+import ClipEditor from '../components/ClipEditor';
 import FileUploader from '../components/FileUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import type { ProcessResult } from '../components/ProcessTrigger';
@@ -49,6 +50,7 @@ export default function MyGalleryPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
+  const [clipEditorVideoId, setClipEditorVideoId] = useState<string | null>(null);
 
   // Append media state
   const [appendMode, setAppendMode] = useState<AppendMode>('idle');
@@ -911,6 +913,26 @@ export default function MyGalleryPage() {
                 >
                   ▶
                 </div>
+                {!multiSelectMode && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setClipEditorVideoId(video.id); }}
+                    data-testid={`clip-edit-btn-${video.id}`}
+                    aria-label={`智能剪辑 ${video.originalFilename}`}
+                    style={{
+                      position: 'absolute',
+                      bottom: '4px',
+                      right: '4px',
+                      background: 'rgba(255,255,255,0.9)',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '2px 8px',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✂️ 智能剪辑
+                  </button>
+                )}
                 {multiSelectMode && (
                   <div
                     data-testid={`select-checkbox-${video.id}`}
@@ -1034,6 +1056,30 @@ export default function MyGalleryPage() {
               videoUrl={`/api/media/${selectedVideoId}/original`}
               mimeType={videos.find(v => v.id === selectedVideoId)?.mimeType || 'video/mp4'}
               onClose={() => setSelectedVideoId(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ClipEditor Modal */}
+      {clipEditorVideoId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="智能剪辑"
+          data-testid="clip-editor-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) setClipEditorVideoId(null); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            padding: '24px',
+          }}
+        >
+          <div style={{ width: '90%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <ClipEditor
+              mediaId={clipEditorVideoId}
+              tripId={id!}
+              onClose={() => setClipEditorVideoId(null)}
             />
           </div>
         </div>
