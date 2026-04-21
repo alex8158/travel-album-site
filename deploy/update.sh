@@ -147,8 +147,14 @@ print('All ML models ready.', file=sys.stderr)
 
   # 更新 Nginx 配置（SSE 长连接需要更长超时）
   log "更新 Nginx 配置..."
+  NGINX_CONF=""
   if [ -f /etc/nginx/sites-available/default ]; then
-    sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINX'
+    NGINX_CONF="/etc/nginx/sites-available/default"
+  elif [ -d /etc/nginx/conf.d ]; then
+    NGINX_CONF="/etc/nginx/conf.d/travel-album.conf"
+  fi
+  if [ -n "$NGINX_CONF" ]; then
+    sudo tee "$NGINX_CONF" > /dev/null << 'NGINX'
 server {
     listen 80;
     server_name _;
@@ -321,8 +327,14 @@ else
 fi
 
 echo ">> 更新 Nginx 配置..."
+NGINX_CONF=""
 if [ -f /etc/nginx/sites-available/default ]; then
-  sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINX'
+  NGINX_CONF="/etc/nginx/sites-available/default"
+elif [ -d /etc/nginx/conf.d ]; then
+  NGINX_CONF="/etc/nginx/conf.d/travel-album.conf"
+fi
+if [ -n "$NGINX_CONF" ]; then
+  sudo tee "$NGINX_CONF" > /dev/null << 'NGINX'
 server {
     listen 80;
     server_name _;
