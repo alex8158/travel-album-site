@@ -467,10 +467,11 @@ export async function computeMLEnhancedQuality(
         // Aesthetic score: typically 1-10, normalize to 0-1
         const aestheticNorm = ml.aesthetic_score != null ? Math.min(ml.aesthetic_score / 10, 1.0) : null;
 
-        // Get resolution and file size from traditional analysis
+        // Get resolution, file size, and sharpness from traditional analysis
         let resolutionNorm = 0;
         let exposureNorm = 0.5;
         let fileSizeNorm = 0;
+        let sharpnessNorm = 0.5;
         try {
           const meta = await sharp(imagePaths[i]).metadata();
           resolutionNorm = normalizeResolution((meta.width ?? 0) * (meta.height ?? 0));
@@ -479,17 +480,21 @@ export async function computeMLEnhancedQuality(
           exposureNorm = normalizeExposure(avgMean);
           const fileStat = await fs.promises.stat(imagePaths[i]);
           fileSizeNorm = normalizeFileSize(fileStat.size);
+          // Compute Laplacian sharpness for quality ranking
+          const sharpnessScore = await computeSharpness(imagePaths[i]);
+          sharpnessNorm = normalizeSharpness(sharpnessScore);
         } catch { /* use defaults */ }
 
-        // Weighted combination
+        // Weighted combination — sharpness is a primary signal for "keep best"
         let weightedSum = 0;
         let totalWeight = 0;
 
-        if (musiqNorm != null) { weightedSum += 0.40 * musiqNorm; totalWeight += 0.40; }
-        if (aestheticNorm != null) { weightedSum += 0.25 * aestheticNorm; totalWeight += 0.25; }
-        weightedSum += 0.15 * resolutionNorm; totalWeight += 0.15;
+        weightedSum += 0.30 * sharpnessNorm; totalWeight += 0.30;
+        if (musiqNorm != null) { weightedSum += 0.25 * musiqNorm; totalWeight += 0.25; }
+        if (aestheticNorm != null) { weightedSum += 0.20 * aestheticNorm; totalWeight += 0.20; }
+        weightedSum += 0.10 * resolutionNorm; totalWeight += 0.10;
         weightedSum += 0.10 * exposureNorm; totalWeight += 0.10;
-        weightedSum += 0.10 * fileSizeNorm; totalWeight += 0.10;
+        weightedSum += 0.05 * fileSizeNorm; totalWeight += 0.05;
 
         finalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
 
