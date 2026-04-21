@@ -5,6 +5,7 @@ import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 import ClipEditor from '../components/ClipEditor';
 import FileUploader from '../components/FileUploader';
+import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import type { ProcessResult } from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
@@ -583,14 +584,25 @@ export default function MyGalleryPage() {
         <div data-testid="append-area" style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '16px', marginBottom: '16px', background: '#fafafa' }}>
           {appendMode === 'uploading' && (
             <>
-              <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} onVideoUploaded={(mediaId, mediaType) => {
-                console.log(`[MyGalleryPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
-              }} onUploadCancelled={(completedCount) => {
-                setAppendUploadCount(completedCount);
-                if (completedCount > 0) {
-                  setAppendMode('cancelled');
-                }
-              }} />
+              <div style={{ marginBottom: '16px' }}>
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95em' }}>上传图片</h4>
+                <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} onVideoUploaded={(mediaId, mediaType) => {
+                  console.log(`[MyGalleryPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+                }} onUploadCancelled={(completedCount) => {
+                  setAppendUploadCount(completedCount);
+                  if (completedCount > 0) {
+                    setAppendMode('cancelled');
+                  }
+                }} />
+              </div>
+              <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95em' }}>上传视频</h4>
+                <p style={{ color: '#666', fontSize: '0.85em', margin: '0 0 8px 0' }}>支持 MP4、MOV、AVI、MKV，大文件自动分片上传</p>
+                <VideoUploader
+                  tripId={id!}
+                  onUploaded={(mediaId) => console.log(`[MyGalleryPage] Video ${mediaId} uploaded via new pipeline`)}
+                />
+              </div>
               <button
                 onClick={handleAppendCancel}
                 data-testid="append-cancel-btn"
