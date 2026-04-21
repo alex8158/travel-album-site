@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Build client
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      - name: Build server
+        run: |
+          cd server
+          npm ci
+          npx tsc
+          rm -rf public
+          cp -r ../client/dist public
+
+      - name: Package release archive
+        run: |
+          tar czf travel-album-${{ github.ref_name }}.tar.gz \
+            server/dist \
+            server/public \
+            server/package.json \
+            server/package-lock.json \
+            server/python \
+            server/.env.example \
+            deploy/ \
+            Dockerfile \
+            README.md \
+            CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: travel-album-${{ github.ref_name }}.tar.gz
+          generate_release_notes: true
+          body: |
+            ## 安装方式
+
+            ### 方式一：Docker（推荐）
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker run -d -p 3001:3001 -v travel-data:/app/server/uploads ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            ### 方式二：源码部署
+            ```bash
+            # 下载并解压
+            tar xzf travel-album-${{ github.ref_name }}.tar.gz
+
+            # 安装依赖并启动
+            cd server
+            npm install --omit=dev
+            node dist/index.js
+            ```
+
+            ### 方式三：EC2 一键部署
+            ```bash
+            git clone https://github.com/${{ github.repository }}.git
+            cd travel-album-site
+            git checkout ${{ github.ref_name }}
+            ./deploy/create-ec2.sh
+            ```
+
+            详见 README.md。
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
