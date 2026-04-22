@@ -20,6 +20,7 @@ export interface MediaItemRow {
   processing_error: string | null;
   optimized_path: string | null;
   compiled_path: string | null;
+  preview_proxy_path: string | null;
   user_id: string | null;
   visibility: string;
   blur_status: string | null;

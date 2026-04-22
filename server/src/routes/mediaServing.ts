@@ -19,6 +19,7 @@ interface MediaItemRow {
   processing_error: string | null;
   optimized_path: string | null;
   compiled_path: string | null;
+  preview_proxy_path: string | null;
 }
 
 // GET /api/media/:id/thumbnail — Serve thumbnail, generate on-the-fly if missing
@@ -80,8 +81,8 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
 router.get('/:id/original', async (req: Request, res: Response) => {
   const db = getDb();
   const row = db.prepare(
-    'SELECT id, file_path, media_type, optimized_path, compiled_path FROM media_items WHERE id = ?'
-  ).get(req.params.id) as Pick<MediaItemRow, 'id' | 'file_path' | 'media_type' | 'optimized_path' | 'compiled_path'> | undefined;
+    'SELECT id, file_path, media_type, optimized_path, compiled_path, preview_proxy_path FROM media_items WHERE id = ?'
+  ).get(req.params.id) as Pick<MediaItemRow, 'id' | 'file_path' | 'media_type' | 'optimized_path' | 'compiled_path' | 'preview_proxy_path'> | undefined;
 
   if (!row) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
@@ -97,6 +98,9 @@ router.get('/:id/original', async (req: Request, res: Response) => {
     const wantOriginal = req.query.original === 'true';
     if (!wantOriginal && row.compiled_path) {
       servePath = row.compiled_path;
+    } else if (!wantOriginal && row.preview_proxy_path) {
+      // Fallback to preview proxy (much smaller than original)
+      servePath = row.preview_proxy_path;
     }
   }
 
