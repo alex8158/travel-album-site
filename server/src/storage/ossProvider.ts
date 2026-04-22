@@ -77,13 +77,16 @@ export class OSSStorageProvider implements StorageProvider {
   }
 
   async downloadToTemp(relativePath: string): Promise<string> {
-    const data = await this.read(relativePath);
     const ext = path.extname(relativePath);
     const tempPath = path.join(
       os.tmpdir(),
       `oss-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
     );
-    await fs.writeFile(tempPath, data);
+    // Stream download to avoid loading entire file into memory
+    const result = await this.client.getStream(relativePath);
+    const { createWriteStream } = await import('fs');
+    const { pipeline } = await import('stream/promises');
+    await pipeline(result.stream, createWriteStream(tempPath));
     return tempPath;
   }
 

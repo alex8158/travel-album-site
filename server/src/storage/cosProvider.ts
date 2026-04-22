@@ -99,13 +99,18 @@ export class COSStorageProvider implements StorageProvider {
   }
 
   async downloadToTemp(relativePath: string): Promise<string> {
-    const data = await this.read(relativePath);
     const ext = path.extname(relativePath);
     const tempPath = path.join(
       os.tmpdir(),
       `cos-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
     );
-    await fs.writeFile(tempPath, data);
+    // Stream download to avoid loading entire file into memory
+    const result = await this.client.getObject({
+      Bucket: this.bucket,
+      Region: this.region,
+      Key: relativePath,
+      Output: require('fs').createWriteStream(tempPath),
+    });
     return tempPath;
   }
 
