@@ -199,12 +199,15 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     if (token && url.startsWith('/api/')) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    await fetch(url, {
+    const putRes = await fetch(url, {
       method: 'PUT',
       body: file,
       signal: controller.signal,
       headers,
     });
+    if (!putRes.ok) {
+      throw new Error(`Simple upload failed: ${putRes.status}`);
+    }
     // Finalize
     const finalizeRes = await authFetch(`/api/uploads/${init.mediaId}/finalize`, {
       method: 'POST',

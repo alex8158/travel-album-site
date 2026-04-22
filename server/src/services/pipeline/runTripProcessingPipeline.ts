@@ -478,7 +478,7 @@ export async function runTripProcessingPipeline(
     ).all(tripId) as MediaItemRow[];
     const totalVideos = videoRows.length;
 
-    const unprocessedVideos = videoRows.filter(v => !v.compiled_path && !v.thumbnail_path);
+    const unprocessedVideos = videoRows.filter(v => !v.compiled_path);
     const alreadyProcessedCount = totalVideos - unprocessedVideos.length;
     let compiledCount = alreadyProcessedCount;
 
