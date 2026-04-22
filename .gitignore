@@ -10,3 +10,5 @@ uploads/
 server/python/models/
 __pycache__/
 *.pyc
+server/.tmp/
+server/data/

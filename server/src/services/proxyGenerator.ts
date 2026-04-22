@@ -51,7 +51,9 @@ export async function generateProxies(mediaId: string, tripId: string, storageKe
 
   try {
     // 1. Download original to local temp
+    console.log(`[proxyGenerator] Starting for ${mediaId}, storageKey=${storageKey}`);
     localPath = await storage.downloadToTemp(storageKey);
+    console.log(`[proxyGenerator] Downloaded to ${localPath}`);
 
     // 2. Extract metadata via ffprobe
     let meta: VideoMetadata;

@@ -56,7 +56,7 @@ export const VIDEO_THRESHOLDS: Readonly<VideoThresholds> = Object.freeze({
   severeBlurThreshold:       env('VIDEO_SEVERE_BLUR', 20),
   severeShakeThreshold:      env('VIDEO_SEVERE_SHAKE', 15),
   severeExposureLow:         env('VIDEO_SEVERE_EXPOSURE_LOW', 10),
-  severeExposureHigh:        env('VIDEO_SEVERE_EXPOSURE_HIGH', 90),
+  severeExposureHigh:        env('VIDEO_SEVERE_EXPOSURE_HIGH', 100),
   minSegmentDuration:        env('VIDEO_MIN_SEGMENT_DURATION', 2),
   shortVideoCutoff:          env('VIDEO_SHORT_CUTOFF', 60),
   mediumVideoCutoff:         env('VIDEO_MEDIUM_CUTOFF', 600),

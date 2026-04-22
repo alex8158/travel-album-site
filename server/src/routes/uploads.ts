@@ -74,7 +74,15 @@ router.post('/init', async (req: Request, res: Response) => {
     } else {
       // Simple mode
       const uploadId = uuidv4();
-      const presignedUrl = await storageProvider.getPresignedUploadUrl(storageKey);
+      // For local storage, presignedUrl points to server relay using mediaId
+      // For S3/OSS/COS, it's a real presigned URL from the provider
+      let presignedUrl: string;
+      const storageType = process.env.STORAGE_TYPE || 'local';
+      if (storageType === 'local') {
+        presignedUrl = `/api/uploads/${mediaId}/simple`;
+      } else {
+        presignedUrl = await storageProvider.getPresignedUploadUrl(storageKey);
+      }
 
       db.prepare(
         `INSERT INTO upload_sessions (id, media_id, trip_id, storage_key, mode, status, file_size, created_at, updated_at)
@@ -110,11 +118,14 @@ router.post('/:mediaId/parts/presign', async (req: Request, res: Response) => {
   }
 
   const storageProvider = getStorageProvider();
+  const storageType = process.env.STORAGE_TYPE || 'local';
   try {
     const parts = await Promise.all(
       (partNumbers as number[]).map(async (partNumber: number) => ({
         partNumber,
-        url: await storageProvider.getPresignedPartUrl(session.storage_key, uploadId, partNumber),
+        url: storageType === 'local'
+          ? `/api/uploads/${mediaId}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`
+          : await storageProvider.getPresignedPartUrl(session.storage_key, uploadId, partNumber),
       }))
     );
     return res.json({ parts });

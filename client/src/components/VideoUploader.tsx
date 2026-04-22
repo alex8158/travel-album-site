@@ -333,6 +333,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     setFileQueue(prev => prev.map((q, i) => i === queueIndex ? { ...q, status: 'uploading' as const } : q));
 
     try {
+      console.log(`[VideoUploader] Starting upload for ${file.name} (${file.size} bytes) to trip ${tripId}`);
       // Init upload
       const initRes = await authFetch('/api/uploads/init', {
         method: 'POST',
