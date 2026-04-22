@@ -4,6 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
+import { analyzeVideo } from './videoAnalyzer';
+import { editVideo } from './videoEditor';
+import { generateVideoThumbnail } from './thumbnailGenerator';
+import { saveSegments } from '../helpers/videoSegmentStore';
 
 interface VideoMetadata {
   duration: number;
@@ -102,6 +106,11 @@ export async function generateProxies(mediaId: string, tripId: string, storageKe
        video_duration = COALESCE(video_duration, ?), video_width = COALESCE(video_width, ?), video_height = COALESCE(video_height, ?),
        video_codec = COALESCE(video_codec, ?), video_bitrate = COALESCE(video_bitrate, ?) WHERE id = ?`
     ).run(thumbnailKey, previewKey, editKey, meta.duration, meta.width, meta.height, meta.codec, meta.bitrate, mediaId);
+
+    // 7. Auto-trigger video analysis + editing (fire-and-forget, non-blocking)
+    processVideoAfterProxy(localPath, mediaId, tripId).catch(err => {
+      console.error(`[proxyGenerator] Auto video processing failed for ${mediaId}:`, err);
+    });
   } catch (err: any) {
     // 7. On failure: mark proxy_failed
     console.error(`[proxyGenerator] Failed for ${mediaId}:`, err);
@@ -113,5 +122,52 @@ export async function generateProxies(mediaId: string, tripId: string, storageKe
     for (const f of tmpFiles) {
       try { fs.unlinkSync(f); } catch { /* ignore */ }
     }
+  }
+}
+
+/**
+ * After proxy generation succeeds, automatically run video analysis + editing.
+ * This produces segments (for ClipEditor) and a compiled video (smart edit).
+ * Runs in the background — failures are logged but don't affect proxy status.
+ */
+async function processVideoAfterProxy(videoPath: string, mediaId: string, tripId: string): Promise<void> {
+  const db = getDb();
+
+  try {
+    console.log(`[proxyGenerator] Starting auto video processing for ${mediaId}`);
+
+    // Analyze video (scene detection, quality scoring, segment creation)
+    const analysis = await analyzeVideo(videoPath, mediaId);
+
+    // Persist segments to DB for ClipEditor
+    saveSegments(mediaId, analysis.segments);
+
+    // Edit video (smart selection, compilation)
+    const editResult = await editVideo(videoPath, analysis, tripId, mediaId);
+
+    if (editResult.compiledPath) {
+      db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?').run(editResult.compiledPath, mediaId);
+      console.log(`[proxyGenerator] Auto video processing completed for ${mediaId}: compiled=${editResult.compiledPath}`);
+    } else if (editResult.error) {
+      console.warn(`[proxyGenerator] Auto video editing returned error for ${mediaId}: ${editResult.error}`);
+      db.prepare(
+        `UPDATE media_items SET processing_error = CASE
+           WHEN processing_error IS NULL THEN ?
+           ELSE processing_error || char(10) || ?
+         END WHERE id = ?`
+      ).run(`[autoEdit] ${editResult.error}`, `[autoEdit] ${editResult.error}`, mediaId);
+    } else {
+      console.log(`[proxyGenerator] Auto video processing for ${mediaId}: no compilation needed (short video, all segments good)`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[proxyGenerator] Auto video processing error for ${mediaId}: ${msg}`);
+    // Non-fatal: proxy generation already succeeded, just log the error
+    db.prepare(
+      `UPDATE media_items SET processing_error = CASE
+         WHEN processing_error IS NULL THEN ?
+         ELSE processing_error || char(10) || ?
+       END WHERE id = ?`
+    ).run(`[autoProcess] ${msg}`, `[autoProcess] ${msg}`, mediaId);
   }
 }
