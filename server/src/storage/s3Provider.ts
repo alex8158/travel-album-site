@@ -105,13 +105,25 @@ export class S3StorageProvider implements StorageProvider {
   }
 
   async downloadToTemp(relativePath: string): Promise<string> {
-    const data = await this.read(relativePath);
     const ext = path.extname(relativePath);
     const tempPath = path.join(
       getTempDir(),
       `s3-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`
     );
-    await fs.writeFile(tempPath, data);
+
+    // Stream download to avoid loading entire file into memory (large videos can exceed Buffer limits)
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: relativePath,
+      })
+    );
+
+    const stream = response.Body as Readable;
+    const { createWriteStream } = await import('fs');
+    const { pipeline } = await import('stream/promises');
+    await pipeline(stream, createWriteStream(tempPath));
+
     return tempPath;
   }
 
