@@ -221,18 +221,12 @@ router.post('/:mediaId/complete', async (req: Request, res: Response) => {
     // Update upload session status
     db.prepare('UPDATE upload_sessions SET status = ?, updated_at = ? WHERE id = ?').run('completed', now, uploadId);
 
-    // Create processing_jobs record
-    const jobId = uuidv4();
-    db.prepare(
-      `INSERT INTO processing_jobs (id, trip_id, status, created_at) VALUES (?, ?, 'queued', ?)`
-    ).run(jobId, session.trip_id, now);
-
     // Fire-and-forget proxy generation
     generateProxies(mediaId, session.trip_id, session.storage_key).catch(err =>
       console.error(`[uploads/complete] proxy generation failed for ${mediaId}:`, err)
     );
 
-    return res.json({ mediaId, status: 'uploaded', processingJobId: jobId });
+    return res.json({ mediaId, status: 'uploaded' });
   } catch (err) {
     console.error('[uploads/complete] Error:', err);
     return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '完成上传失败' } });
@@ -273,17 +267,12 @@ router.post('/:mediaId/finalize', async (req: Request, res: Response) => {
     db.prepare('UPDATE media_items SET processing_status = ? WHERE id = ?').run('uploaded', mediaId);
     db.prepare('UPDATE upload_sessions SET status = ?, updated_at = ? WHERE id = ?').run('completed', now, session.id);
 
-    const jobId = uuidv4();
-    db.prepare(
-      `INSERT INTO processing_jobs (id, trip_id, status, created_at) VALUES (?, ?, 'queued', ?)`
-    ).run(jobId, session.trip_id, now);
-
     // Fire-and-forget proxy generation
     generateProxies(mediaId, session.trip_id, session.storage_key).catch(err =>
       console.error(`[uploads/finalize] proxy generation failed for ${mediaId}:`, err)
     );
 
-    return res.json({ mediaId, status: 'uploaded', processingJobId: jobId });
+    return res.json({ mediaId, status: 'uploaded' });
   } catch (err) {
     console.error('[uploads/finalize] Error:', err);
     return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '完成上传失败' } });

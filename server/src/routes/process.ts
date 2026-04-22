@@ -18,6 +18,13 @@ router.post('/:id/process', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
+  // Clean up stale queued jobs (older than 1 hour, never started)
+  db.prepare(
+    `UPDATE processing_jobs SET status = 'failed', error_message = '任务超时未执行'
+     WHERE trip_id = ? AND status = 'queued'
+     AND created_at < datetime('now', '-1 hour')`
+  ).run(tripId);
+
   // Check for active job in DB (replaces in-memory Set)
   const activeJob = db.prepare(
     `SELECT id FROM processing_jobs WHERE trip_id = ? AND status IN ('queued', 'running')`
@@ -90,6 +97,13 @@ router.get('/:id/process/stream', async (req: Request, res: Response) => {
   // Create a processing_job record (atomic check + insert, same as POST /process-jobs)
   const jobId = uuidv4();
   const now = new Date().toISOString();
+
+  // Clean up stale queued jobs (older than 1 hour, never started)
+  db.prepare(
+    `UPDATE processing_jobs SET status = 'failed', error_message = '任务超时未执行'
+     WHERE trip_id = ? AND status = 'queued'
+     AND created_at < datetime('now', '-1 hour')`
+  ).run(tripId);
 
   const createJob = db.transaction(() => {
     const existing = db.prepare(

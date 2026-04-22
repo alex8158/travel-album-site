@@ -206,11 +206,15 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       headers,
     });
     // Finalize
-    await authFetch(`/api/uploads/${init.mediaId}/finalize`, {
+    const finalizeRes = await authFetch(`/api/uploads/${init.mediaId}/finalize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uploadId: init.uploadId }),
     });
+    if (!finalizeRes.ok) {
+      const body = await finalizeRes.json().catch(() => ({}));
+      throw new Error(body.error?.message || `Finalize failed: ${finalizeRes.status}`);
+    }
   }, []);
 
   const uploadMultipart = useCallback(async (
@@ -292,7 +296,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     }
 
     // Complete
-    await authFetch(`/api/uploads/${init.mediaId}/complete`, {
+    const completeRes = await authFetch(`/api/uploads/${init.mediaId}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -300,13 +304,21 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
         parts: allCompleted.sort((a, b) => a.partNumber - b.partNumber),
       }),
     });
+    if (!completeRes.ok) {
+      const body = await completeRes.json().catch(() => ({}));
+      throw new Error(body.error?.message || `Complete failed: ${completeRes.status}`);
+    }
   }, [tripId]);
 
   // Fire-and-forget process call after each upload
   const triggerProcess = useCallback((mediaId: string) => {
-    authFetch(`/api/media/${mediaId}/process`, { method: 'POST' }).catch(() => {
-      // fire-and-forget: processing errors are non-blocking
-    });
+    authFetch(`/api/media/${mediaId}/process`, { method: 'POST' })
+      .then(res => {
+        if (!res.ok) console.error(`[VideoUploader] process trigger failed for ${mediaId}: ${res.status}`);
+      })
+      .catch(err => {
+        console.error(`[VideoUploader] process trigger error for ${mediaId}:`, err);
+      });
   }, []);
 
   const uploadSingleFile = useCallback(async (
