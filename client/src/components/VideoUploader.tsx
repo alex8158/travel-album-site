@@ -108,9 +108,13 @@ async function uploadPartWithRetry(
 ): Promise<string> {
   // Get auth token for local storage relay endpoints
   const token = localStorage.getItem('auth_token');
-  const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  const headers: Record<string, string> = {};
+  // Only set Content-Type for local storage relay (server endpoints), not for S3 presigned URLs
+  if (url.startsWith('/api/')) {
+    headers['Content-Type'] = 'application/octet-stream';
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
   }
 
   let lastError: Error | null = null;
