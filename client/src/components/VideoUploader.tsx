@@ -106,6 +106,13 @@ async function uploadPartWithRetry(
   blob: Blob,
   abortSignal: AbortSignal,
 ): Promise<string> {
+  // Get auth token for local storage relay endpoints
+  const token = localStorage.getItem('auth_token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (abortSignal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -114,7 +121,7 @@ async function uploadPartWithRetry(
         method: 'PUT',
         body: blob,
         signal: abortSignal,
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers,
       });
       if (!res.ok) throw new Error(`Part upload failed: ${res.status}`);
       const etag = res.headers.get('etag') || res.headers.get('ETag');
@@ -182,11 +189,17 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     file: File, init: InitResponse, controller: AbortController
   ) => {
     const url = init.presignedUrl!;
+    // For local storage relay, need auth token
+    const token = localStorage.getItem('auth_token');
+    const headers: Record<string, string> = { 'Content-Type': file.type || 'application/octet-stream' };
+    if (token && url.startsWith('/api/')) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     await fetch(url, {
       method: 'PUT',
       body: file,
       signal: controller.signal,
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers,
     });
     // Finalize
     await authFetch(`/api/uploads/${init.mediaId}/finalize`, {
