@@ -99,14 +99,16 @@ export function selectSegments(
     if (cumulative >= targetDuration) break;
     if (usedIndices.has(seg.index)) continue;
 
+    // Don't add if it would exceed target (allow only the first segment to exceed)
+    if (selected.length > 0 && cumulative + seg.duration > targetDuration * 1.1) break;
+
     selected.push(seg);
     usedIndices.add(seg.index);
     cumulative += seg.duration;
 
-    // After selecting a segment, look for adjacent candidates with similar scores
     if (cumulative >= targetDuration) break;
 
-    // Find adjacent segments that are close in score and time
+    // Find adjacent segments that are close in score and time, but respect target
     for (const adj of sorted) {
       if (cumulative >= targetDuration) break;
       if (usedIndices.has(adj.index)) continue;
@@ -122,6 +124,9 @@ export function selectSegments(
       const maxScore = Math.max(seg.overallScore, adj.overallScore);
       const scoreDiff = Math.abs(seg.overallScore - adj.overallScore);
       if (maxScore > 0 && scoreDiff / maxScore > scoreProximityRatio) continue;
+
+      // Don't exceed target by more than 10%
+      if (cumulative + adj.duration > targetDuration * 1.1) continue;
 
       selected.push(adj);
       usedIndices.add(adj.index);
