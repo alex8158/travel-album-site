@@ -74,6 +74,8 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
 
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM video_segments');
+    db.exec('DELETE FROM upload_sessions');
     db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
@@ -98,7 +100,9 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
         async ({ ungroupedImageCount, duplicateGroups, videoCount }) => {
           // Clean slate for each run
           const db = getDb();
-          db.exec('DELETE FROM media_tags');
+          db.exec('DELETE FROM video_segments');
+    db.exec('DELETE FROM upload_sessions');
+    db.exec('DELETE FROM media_tags');
           db.exec('DELETE FROM media_items');
           db.exec('DELETE FROM duplicate_groups');
           db.exec('DELETE FROM trips');

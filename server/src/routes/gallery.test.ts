@@ -83,6 +83,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
   beforeEach(() => {
     const db = getDb();
+    db.exec('DELETE FROM video_segments');
+    db.exec('DELETE FROM upload_sessions');
     db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');

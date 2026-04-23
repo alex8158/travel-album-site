@@ -228,4 +228,92 @@ describe('FileUploader', () => {
       expect(onAllUploaded).toHaveBeenCalledWith(1);
     });
   });
+
+  it('shows processing status for video uploads - success', async () => {
+    let resolveProcess: (value: unknown) => void;
+    const processPromise = new Promise(resolve => { resolveProcess = resolve; });
+
+    mockApiPost
+      .mockImplementationOnce(() => Promise.resolve({ data: { id: 'vid-1', mediaType: 'video' } }))
+      .mockImplementationOnce(() => processPromise);
+
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('clip.mp4', 'video/mp4')] },
+    });
+
+    // Should show "处理中…" while processing
+    await waitFor(() => {
+      expect(screen.getByText('处理中…')).toBeDefined();
+    });
+
+    // Resolve the process call
+    resolveProcess!({ data: { success: true } });
+
+    // Should show "处理完成" after success
+    await waitFor(() => {
+      expect(screen.getByText('处理完成')).toBeDefined();
+    });
+  });
+
+  it('shows processing failed status for video uploads', async () => {
+    mockApiPost
+      .mockImplementationOnce(() => Promise.resolve({ data: { id: 'vid-2', mediaType: 'video' } }))
+      .mockImplementationOnce(() => Promise.reject(new Error('Processing error')));
+
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('clip.mp4', 'video/mp4')] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('处理失败')).toBeDefined();
+    });
+  });
+
+  it('does not show processing status for image uploads', async () => {
+    mockApiPost.mockResolvedValue({ data: { id: 'img-1', mediaType: 'image' } });
+
+    render(<FileUploader tripId="trip-1" />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('photo.jpg', 'image/jpeg')] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-count')).toHaveTextContent('1/1');
+    });
+
+    expect(screen.queryByText('处理中…')).toBeNull();
+    expect(screen.queryByText('处理完成')).toBeNull();
+    expect(screen.queryByText('处理失败')).toBeNull();
+  });
+
+  it('calls onVideoUploaded for video files and tracks processing', async () => {
+    const onVideoUploaded = vi.fn();
+    mockApiPost
+      .mockImplementationOnce(() => Promise.resolve({ data: { id: 'vid-3', mediaType: 'video' } }))
+      .mockImplementationOnce(() => Promise.resolve({ data: { success: true } }));
+
+    render(<FileUploader tripId="trip-1" onVideoUploaded={onVideoUploaded} />);
+    const input = screen.getByTestId('file-input');
+
+    fireEvent.change(input, {
+      target: { files: [createFile('clip.mp4', 'video/mp4')] },
+    });
+
+    await waitFor(() => {
+      expect(onVideoUploaded).toHaveBeenCalledWith('vid-3', 'video');
+    });
+
+    // Processing should complete
+    await waitFor(() => {
+      expect(screen.getByText('处理完成')).toBeDefined();
+    });
+  });
 });

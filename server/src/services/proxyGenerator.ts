@@ -144,10 +144,8 @@ async function processVideoAfterProxy(videoPath: string, mediaId: string, tripId
     // Persist segments to DB for ClipEditor
     saveSegments(mediaId, analysis.segments);
 
-    // Edit video (smart selection, compilation with fade transitions)
-    const editResult = await editVideo(videoPath, analysis, tripId, mediaId, {
-      transitionType: 'fade',
-    });
+    // Edit video (smart selection, compilation with audio-only smoothing)
+    const editResult = await editVideo(videoPath, analysis, tripId, mediaId);
 
     if (editResult.compiledPath) {
       db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?').run(editResult.compiledPath, mediaId);

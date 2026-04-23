@@ -194,24 +194,33 @@ router.delete('/:id', authMiddleware, requireAuth, (req: Request, res: Response)
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
-  // Cascade delete: media_tags → media_items → duplicate_groups → trip
-  const mediaIds = db.prepare('SELECT id FROM media_items WHERE trip_id = ?').all(tripId) as { id: string }[];
-  if (mediaIds.length > 0) {
-    const placeholders = mediaIds.map(() => '?').join(',');
-    db.prepare(`DELETE FROM media_tags WHERE media_id IN (${placeholders})`).run(...mediaIds.map(m => m.id));
-  }
-  db.prepare('DELETE FROM media_items WHERE trip_id = ?').run(tripId);
-  db.prepare('DELETE FROM duplicate_groups WHERE trip_id = ?').run(tripId);
-  // Clean up processing jobs and their events
-  const jobIds = db.prepare('SELECT id FROM processing_jobs WHERE trip_id = ?').all(tripId) as { id: string }[];
-  if (jobIds.length > 0) {
-    const ph = jobIds.map(() => '?').join(',');
-    db.prepare(`DELETE FROM processing_job_events WHERE job_id IN (${ph})`).run(...jobIds.map(j => j.id));
-  }
-  db.prepare('DELETE FROM processing_jobs WHERE trip_id = ?').run(tripId);
-  db.prepare('DELETE FROM trips WHERE id = ?').run(tripId);
+  try {
+    // Cascade delete: video_segments → media_tags → upload_sessions → media_items → duplicate_groups → trip
+    const mediaIds = db.prepare('SELECT id FROM media_items WHERE trip_id = ?').all(tripId) as { id: string }[];
+    if (mediaIds.length > 0) {
+      const placeholders = mediaIds.map(() => '?').join(',');
+      const ids = mediaIds.map(m => m.id);
+      db.prepare(`DELETE FROM video_segments WHERE media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM media_tags WHERE media_id IN (${placeholders})`).run(...ids);
+    }
+    // Delete upload_sessions by trip_id (covers orphan sessions where media_id may not exist)
+    db.prepare('DELETE FROM upload_sessions WHERE trip_id = ?').run(tripId);
+    db.prepare('DELETE FROM media_items WHERE trip_id = ?').run(tripId);
+    db.prepare('DELETE FROM duplicate_groups WHERE trip_id = ?').run(tripId);
+    // Clean up processing jobs and their events
+    const jobIds = db.prepare('SELECT id FROM processing_jobs WHERE trip_id = ?').all(tripId) as { id: string }[];
+    if (jobIds.length > 0) {
+      const ph = jobIds.map(() => '?').join(',');
+      db.prepare(`DELETE FROM processing_job_events WHERE job_id IN (${ph})`).run(...jobIds.map(j => j.id));
+    }
+    db.prepare('DELETE FROM processing_jobs WHERE trip_id = ?').run(tripId);
+    db.prepare('DELETE FROM trips WHERE id = ?').run(tripId);
 
-  return res.json({ message: '相册已删除' });
+    return res.json({ message: '相册已删除' });
+  } catch (err) {
+    console.error('[trips] Delete trip failed:', err);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '删除相册失败' } });
+  }
 });
 
 export default router;

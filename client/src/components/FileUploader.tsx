@@ -15,6 +15,7 @@ export interface UploadFileEntry {
   status: UploadStatus;
   progress: number;
   error?: string;
+  processingStatus?: 'processing' | 'processed' | 'process_failed';
 }
 
 const SUPPORTED_MIME_TYPES = new Set([
@@ -106,11 +107,17 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
 
       const responseData = response.data;
       if (responseData.mediaType === 'video') {
-        // Fire-and-forget: trigger immediate video processing
-        apiPost(`/api/media/${responseData.id}/process`, null, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }).catch(err => console.error('Video processing failed:', err));
+        updateEntry(index, { processingStatus: 'processing' });
         onVideoUploaded?.(responseData.id, responseData.mediaType);
+        try {
+          await apiPost(`/api/media/${responseData.id}/process`, null, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          updateEntry(index, { processingStatus: 'processed' });
+        } catch (err) {
+          console.error('Video processing failed:', err);
+          updateEntry(index, { processingStatus: 'process_failed' });
+        }
       }
     } catch (err: unknown) {
       if (controller.signal.aborted) {
@@ -269,6 +276,9 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
   const failedEntries = entries
     .map((e, i) => ({ entry: e, index: i }))
     .filter(({ entry }) => entry.status === 'failed');
+  const processingEntries = entries
+    .map((e, i) => ({ entry: e, index: i }))
+    .filter(({ entry }) => entry.status === 'completed' && entry.processingStatus != null);
   const progressPercent = totalCount > 0 ? Math.round(completedCount / totalCount * 100) : 0;
 
   return (
@@ -346,6 +356,25 @@ export default function FileUploader({ tripId, onAllUploaded, onVideoUploaded, o
               <button onClick={() => handleRetry(index)} disabled={uploading}>
                 重试
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {processingEntries.length > 0 && (
+        <div aria-label="视频处理状态" style={{ marginTop: '8px' }}>
+          {processingEntries.map(({ entry, index }) => (
+            <div key={index} data-testid={`processing-entry-${index}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span>{entry.file.name}</span>
+              {entry.processingStatus === 'processing' && (
+                <span data-testid={`processing-status-${index}`} style={{ color: '#1976d2', fontSize: '0.9em' }}>处理中…</span>
+              )}
+              {entry.processingStatus === 'processed' && (
+                <span data-testid={`processing-status-${index}`} style={{ color: 'green', fontSize: '0.9em' }}>处理完成</span>
+              )}
+              {entry.processingStatus === 'process_failed' && (
+                <span data-testid={`processing-status-${index}`} style={{ color: 'red', fontSize: '0.9em' }}>处理失败</span>
+              )}
             </div>
           ))}
         </div>

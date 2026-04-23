@@ -100,7 +100,7 @@ export function selectSegments(
     if (usedIndices.has(seg.index)) continue;
 
     // Don't add if it would exceed target (allow only the first segment to exceed)
-    if (selected.length > 0 && cumulative + seg.duration > targetDuration * 1.1) break;
+    if (selected.length > 0 && cumulative + seg.duration > targetDuration * 1.1) continue;
 
     selected.push(seg);
     usedIndices.add(seg.index);
@@ -307,11 +307,13 @@ export function buildTransitionFilters(
 ): TransitionFilter {
   if (segments.length <= 1 || transitionType === 'none') {
     // For 'none' or single segment: apply short audio fades at splice points
+    // Use a very short afade (~100ms) to eliminate pops/clicks without being noticeable
     if (withAudio && segments.length > 1) {
+      const NONE_AFADE_DURATION = 0.1; // 100ms — imperceptible but eliminates audio pops
       const audioFilters: string[] = [];
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        const fadeDur = Math.min(transitionDuration, seg.duration / 2);
+        const fadeDur = Math.min(NONE_AFADE_DURATION, seg.duration / 2);
         // Fade in at start, fade out at end of each segment
         audioFilters.push(`[${i}:a]afade=t=in:d=${fadeDur},afade=t=out:st=${seg.duration - fadeDur}:d=${fadeDur}[a${i}]`);
       }
@@ -529,8 +531,19 @@ export async function editVideo(
         withAudio,
         options,
       );
+    } else if (transitionType === 'none' && withAudio && segmentPaths.length > 1) {
+      // 'none' mode with audio: video hardcut + audio afade via filter graph
+      const filters = buildTransitionFilters(selected, 'none', transitionDuration, true);
+
+      await concatenateWithTransitions(
+        segmentPaths,
+        compiledTempPath,
+        filters,
+        withAudio,
+        options,
+      );
     } else {
-      // Simple concatenation (no transitions)
+      // Simple concatenation (single segment or no audio)
       await concatenateSegments(segmentPaths, compiledTempPath, tempDir, options);
     }
 
@@ -603,7 +616,7 @@ function concatenateWithTransitions(
 
     // Resolution: don't upscale, compress to max 1080p if needed
     const maxRes = options?.videoResolution ?? 1080;
-    const scaleFilter = `scale='min(${maxRes},iw)':min'(${maxRes},ih)':force_original_aspect_ratio=decrease`;
+    const scaleFilter = `scale='min(${maxRes},iw)':'min(${maxRes},ih)':force_original_aspect_ratio=decrease`;
 
     if (filterParts.length > 0) {
       // Append scale to the video output of the filter graph
