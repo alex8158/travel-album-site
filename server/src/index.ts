@@ -21,6 +21,10 @@ import usersRouter from './routes/users';
 import myRouter from './routes/my';
 import clipsRouter from './routes/clips';
 import uploadsRouter from './routes/uploads';
+import mediaVersionsRouter from './routes/mediaVersions';
+import mediaAnalysisRouter from './routes/mediaAnalysis';
+import duplicateGroupItemsRouter from './routes/duplicateGroupItems';
+import aiInvocationsRouter from './routes/aiInvocations';
 import { cleanupExpiredUploads } from './services/uploadCleanup';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import { globalErrorHandler } from './middleware/errorHandler';
@@ -101,6 +105,10 @@ app.use('/api/media', clipsRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/trips', processJobsTripRouter);
 app.use('/api/process-jobs', processJobsRouter);
+app.use('/api/media/:mediaId/versions', mediaVersionsRouter);
+app.use('/api/media/:mediaId/analysis', mediaAnalysisRouter);
+app.use('/api/duplicate-groups/:groupId/items', duplicateGroupItemsRouter);
+app.use('/api/ai-invocations', aiInvocationsRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

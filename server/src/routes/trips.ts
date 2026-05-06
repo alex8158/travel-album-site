@@ -202,6 +202,10 @@ router.delete('/:id', authMiddleware, requireAuth, (req: Request, res: Response)
       const ids = mediaIds.map(m => m.id);
       db.prepare(`DELETE FROM video_segments WHERE media_id IN (${placeholders})`).run(...ids);
       db.prepare(`DELETE FROM media_tags WHERE media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM media_versions WHERE media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM media_analysis WHERE media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM duplicate_group_items WHERE media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`DELETE FROM ai_invocations WHERE media_id IN (${placeholders})`).run(...ids);
     }
     // Delete upload_sessions by trip_id (covers orphan sessions where media_id may not exist)
     db.prepare('DELETE FROM upload_sessions WHERE trip_id = ?').run(tripId);
