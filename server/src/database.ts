@@ -157,6 +157,83 @@ function initTables(db: Database.Database): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_video_segments_media_index ON video_segments(media_id, segment_index);
     CREATE INDEX IF NOT EXISTS idx_video_segments_media ON video_segments(media_id);
+
+    CREATE TABLE IF NOT EXISTS media_versions (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      version_type TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_size INTEGER,
+      width INTEGER,
+      height INTEGER,
+      duration REAL,
+      model_name TEXT,
+      processor_name TEXT,
+      params TEXT,
+      status TEXT DEFAULT 'ready',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_versions_media_id ON media_versions(media_id);
+
+    CREATE TABLE IF NOT EXISTS media_analysis (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      blur_score REAL,
+      sharpness_score REAL,
+      exposure_score REAL,
+      color_score REAL,
+      noise_score REAL,
+      aesthetic_score REAL,
+      quality_score REAL,
+      is_blurry INTEGER DEFAULT 0,
+      is_overexposed INTEGER DEFAULT 0,
+      is_underexposed INTEGER DEFAULT 0,
+      is_duplicate INTEGER DEFAULT 0,
+      is_recommended INTEGER DEFAULT 0,
+      recommendation TEXT,
+      reason TEXT,
+      analysis_version TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_analysis_media_id ON media_analysis(media_id);
+
+    CREATE TABLE IF NOT EXISTS duplicate_group_items (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      media_id TEXT NOT NULL,
+      similarity_score REAL,
+      quality_score REAL,
+      recommendation TEXT,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES duplicate_groups(id),
+      FOREIGN KEY (media_id) REFERENCES media_items(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_duplicate_group_items_group_id ON duplicate_group_items(group_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_duplicate_group_items_group_media ON duplicate_group_items(group_id, media_id);
+
+    CREATE TABLE IF NOT EXISTS ai_invocations (
+      id TEXT PRIMARY KEY,
+      media_id TEXT,
+      segment_id TEXT,
+      provider TEXT,
+      model_name TEXT,
+      task_type TEXT,
+      request_payload TEXT,
+      response_payload TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      estimated_cost REAL,
+      status TEXT,
+      error_message TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_invocations_media_id ON ai_invocations(media_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_invocations_task_type ON ai_invocations(task_type);
   `);
 
   // Migration: add visibility column to existing trips table
