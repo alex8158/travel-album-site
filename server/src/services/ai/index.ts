@@ -3,6 +3,12 @@ export * from './types';
 export { AIProviderRegistry, type InvocationContext } from './registry';
 export { BedrockProvider } from './bedrockProvider';
 export { OpenAIProvider } from './openaiProvider';
+export { ContentAnalyzer } from './contentAnalyzer';
+export { EditPlanner } from './editPlanner';
+export { TextGenerator } from './textGenerator';
+export { CostTracker } from './costTracker';
+export { BudgetController } from './budgetController';
+export { resizeForProvider, getImageDimensions } from './imageUtils';
 
 import { AIProviderRegistry } from './registry';
 import { BedrockProvider } from './bedrockProvider';

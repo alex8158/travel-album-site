@@ -234,6 +234,92 @@ function initTables(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ai_invocations_media_id ON ai_invocations(media_id);
     CREATE INDEX IF NOT EXISTS idx_ai_invocations_task_type ON ai_invocations(task_type);
+
+    CREATE TABLE IF NOT EXISTS segment_ai_analysis (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      segment_index INTEGER NOT NULL,
+      scene_description TEXT,
+      emotion_tags TEXT,
+      narrative_score INTEGER,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      analyzed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_segment_ai_media_index
+      ON segment_ai_analysis(media_id, segment_index);
+    CREATE INDEX IF NOT EXISTS idx_segment_ai_media
+      ON segment_ai_analysis(media_id);
+
+    CREATE TABLE IF NOT EXISTS ai_edit_plans (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      plan_json TEXT NOT NULL,
+      pace TEXT,
+      total_duration REAL,
+      segment_count INTEGER,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      fallback_used INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_edit_plans_media
+      ON ai_edit_plans(media_id);
+
+    CREATE TABLE IF NOT EXISTS ai_generated_texts (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      text_type TEXT NOT NULL,
+      style TEXT,
+      content_json TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_generated_texts_media
+      ON ai_generated_texts(media_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_generated_texts_type
+      ON ai_generated_texts(media_id, text_type);
+
+    CREATE TABLE IF NOT EXISTS ai_usage_records (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      trip_id TEXT NOT NULL,
+      media_id TEXT,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      call_type TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      estimated_cost REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (trip_id) REFERENCES trips(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_user ON ai_usage_records(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_trip ON ai_usage_records(trip_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_records(created_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_type ON ai_usage_records(call_type);
+
+    CREATE TABLE IF NOT EXISTS ai_budget_configs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      monthly_limit REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_budget_user
+      ON ai_budget_configs(user_id);
   `);
 
   // Migration: add visibility column to existing trips table
