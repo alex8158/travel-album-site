@@ -624,6 +624,53 @@ export async function runTripProcessingPipeline(
     console.log(`[pipeline] videoEnhance: ${versionsGenerated} versions generated, ${Date.now() - t0}ms`);
     onProgress('videoEnhance', 'complete', `${versionsGenerated} versions generated`);
 
+    // ---- Stage: aiAnalysis (optional) ----
+    // Only runs if AI_AUTO_ANALYZE=true and AI provider is configured
+    const aiAutoAnalyze = process.env.AI_AUTO_ANALYZE === 'true';
+    if (aiAutoAnalyze && videoRows.length > 0) {
+      onProgress('aiAnalysis', 'start');
+      t0 = Date.now();
+      let aiAnalyzedCount = 0;
+      try {
+        const { getAIProviderRegistry } = await import('../ai');
+        const { ContentAnalyzer } = await import('../ai/contentAnalyzer');
+        const { CostTracker } = await import('../ai/costTracker');
+        const { BudgetController } = await import('../ai/budgetController');
+
+        const registry = getAIProviderRegistry();
+        if (registry.listProviders().length > 0) {
+          const provider = registry.getDefault();
+          const costTracker = new CostTracker();
+          const budgetController = new BudgetController(costTracker);
+
+          // Get trip owner for budget check
+          const tripRow = db.prepare('SELECT user_id FROM trips WHERE id = ?').get(tripId) as { user_id: string } | undefined;
+          const userId = tripRow?.user_id ?? 'system';
+
+          // Check budget before proceeding
+          const budgetCheck = budgetController.checkBudget(userId);
+          if (budgetCheck.allowed) {
+            const analyzer = new ContentAnalyzer(provider, costTracker, budgetController);
+            for (const videoRow of videoRows) {
+              try {
+                await analyzer.analyzeContent(videoRow.id, userId, tripId);
+                aiAnalyzedCount++;
+              } catch (err) {
+                // AI analysis failure doesn't stop the pipeline
+                console.warn(`[pipeline] aiAnalysis failed for ${videoRow.id}: ${err}`);
+              }
+            }
+          } else {
+            console.log(`[pipeline] aiAnalysis skipped: budget exceeded for user ${userId}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[pipeline] aiAnalysis stage failed: ${err}`);
+      }
+      console.log(`[pipeline] aiAnalysis: ${aiAnalyzedCount} videos analyzed, ${Date.now() - t0}ms`);
+      onProgress('aiAnalysis', 'complete', `${aiAnalyzedCount} AI-analyzed`);
+    }
+
     // cover
     onProgress('cover', 'start');
     t0 = Date.now();
