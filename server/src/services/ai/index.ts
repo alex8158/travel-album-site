@@ -28,7 +28,8 @@ export function getAIProviderRegistry(): AIProviderRegistry {
     registryInstance.register('bedrock', new BedrockProvider());
 
     if (process.env.OPENAI_API_KEY) {
-      registryInstance.register('openai', new OpenAIProvider());
+      const provider = new OpenAIProvider();
+      registryInstance.register(provider.metadata.name, provider);
     }
   }
   return registryInstance;

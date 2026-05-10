@@ -12,6 +12,13 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * OpenAIProvider wraps the OpenAI SDK to implement the unified AIProvider interface.
+ *
+ * Supports any OpenAI-compatible API by setting OPENAI_BASE_URL:
+ * - OpenAI: (default) https://api.openai.com/v1
+ * - 千问 (Qwen-VL): https://dashscope.aliyuncs.com/compatible-mode/v1
+ * - DeepSeek: https://api.deepseek.com/v1
+ * - 月之暗面 (Moonshot): https://api.moonshot.cn/v1
+ * - 智谱 (GLM-4V): https://open.bigmodel.cn/api/paas/v4
  */
 export class OpenAIProvider implements AIProvider {
   readonly metadata: AIProviderMetadata;
@@ -22,17 +29,30 @@ export class OpenAIProvider implements AIProvider {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is required');
 
-    this.openai = new OpenAI({ apiKey });
+    const baseURL = process.env.OPENAI_BASE_URL || undefined;
+    this.openai = new OpenAI({ apiKey, baseURL });
     this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+    // Determine provider name from baseURL for cost tracking
+    const providerName = this.detectProviderName(baseURL);
+
     this.metadata = {
-      name: 'openai',
+      name: providerName,
       model: this.model,
       capabilities: ['text-generation', 'image-analysis'],
-      // GPT-4o-mini pricing (approximate per-token costs in USD)
+      // Default pricing (GPT-4o-mini); actual cost depends on provider
       costPerInputToken: 0.00000015,   // $0.15 per 1M input tokens
       costPerOutputToken: 0.0000006,   // $0.60 per 1M output tokens
     };
+  }
+
+  private detectProviderName(baseURL?: string): string {
+    if (!baseURL) return 'openai';
+    if (baseURL.includes('dashscope')) return 'qwen';
+    if (baseURL.includes('deepseek')) return 'deepseek';
+    if (baseURL.includes('moonshot')) return 'moonshot';
+    if (baseURL.includes('bigmodel')) return 'zhipu';
+    return 'openai-compatible';
   }
 
   async generateText(
