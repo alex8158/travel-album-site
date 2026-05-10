@@ -27,6 +27,8 @@ import duplicateGroupItemsRouter from './routes/duplicateGroupItems';
 import aiInvocationsRouter from './routes/aiInvocations';
 import { cleanupExpiredUploads } from './services/uploadCleanup';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
+import enhanceRouter, { tripEnhanceRouter } from './routes/enhance';
+import videoEnhanceRouter, { tripVideoEnhanceRouter } from './routes/videoEnhance';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -109,6 +111,10 @@ app.use('/api/media/:mediaId/versions', mediaVersionsRouter);
 app.use('/api/media/:mediaId/analysis', mediaAnalysisRouter);
 app.use('/api/duplicate-groups/:groupId/items', duplicateGroupItemsRouter);
 app.use('/api/ai-invocations', aiInvocationsRouter);
+app.use('/api/media', enhanceRouter);
+app.use('/api/trips', tripEnhanceRouter);
+app.use('/api/media', videoEnhanceRouter);
+app.use('/api/trips', tripVideoEnhanceRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

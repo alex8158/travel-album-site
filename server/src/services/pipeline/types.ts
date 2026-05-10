@@ -89,6 +89,10 @@ export type PipelineStage =
   | 'thumbnail'
   | 'videoAnalysis'
   | 'videoEdit'
+  | 'videoEnhance'
+  | 'blackFrameDetect'
+  | 'junkDetect'
+  | 'versionGenerate'
   | 'cover';
 
 export interface PipelineProgressCallback {

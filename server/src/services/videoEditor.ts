@@ -5,6 +5,9 @@ import { getTempDir } from '../helpers/tempDir';
 import { VideoAnalysisResult, VideoSegment } from './videoAnalyzer';
 import { getStorageProvider } from '../storage/factory';
 import { VIDEO_THRESHOLDS } from './videoThresholds';
+import { BlackFrameResult } from './blackFrameDetector';
+import { JunkClipResult } from './junkClipDetector';
+import { normalizeSegments } from './audioNormalizer';
 
 export interface EditOptions {
   videoResolution?: number;
@@ -26,7 +29,13 @@ export interface EditResult {
   compiledPath: string | null;
   selectedSegments: number[];
   segmentDetails: SegmentDetail[];
+  normalizedSegments?: number[];
   error?: string;
+}
+
+export interface SegmentFilterOptions {
+  blackFrameResults?: Map<number, BlackFrameResult>;
+  junkResults?: Map<number, JunkClipResult>;
 }
 
 /**
@@ -56,7 +65,8 @@ export function calculateTargetDuration(originalDuration: number): number | null
  */
 export function selectSegments(
   segments: VideoSegment[],
-  targetDuration: number | null
+  targetDuration: number | null,
+  filterOptions?: SegmentFilterOptions
 ): VideoSegment[] {
   const {
     minSegmentDuration,
@@ -64,10 +74,23 @@ export function selectSegments(
     adjacencyGapThreshold,
   } = VIDEO_THRESHOLDS;
 
+  // Pre-filter: exclude black frame and junk segments before quality-based filtering
+  const preFiltered = segments.filter((_, index) => {
+    if (filterOptions?.blackFrameResults) {
+      const bfResult = filterOptions.blackFrameResults.get(index);
+      if (bfResult && bfResult.isBlackFrameSegment) return false;
+    }
+    if (filterOptions?.junkResults) {
+      const junkResult = filterOptions.junkResults.get(index);
+      if (junkResult && junkResult.isJunk) return false;
+    }
+    return true;
+  });
+
   const severeLabels = new Set(['severely_blurry', 'severely_shaky', 'severely_exposed']);
 
   // Filter out severe labels, blurry, shaky, and segments below min duration
-  const candidates = segments.filter(
+  const candidates = preFiltered.filter(
     (s) =>
       !severeLabels.has(s.label) &&
       s.label !== 'blurry' &&
@@ -78,7 +101,7 @@ export function selectSegments(
   if (candidates.length === 0) return [];
 
   // When targetDuration is null and all segments pass filtering, return all unchanged
-  if (targetDuration === null && candidates.length === segments.length) {
+  if (targetDuration === null && candidates.length === preFiltered.length) {
     return [...candidates].sort((a, b) => a.startTime - b.startTime);
   }
 
@@ -513,6 +536,19 @@ export async function editVideo(
       }
     }
 
+    // Normalize audio levels across extracted segments
+    const normalizedDir = path.join(tempDir, 'normalized');
+    const normResults = await normalizeSegments(segmentPaths, normalizedDir);
+
+    // Replace segment paths with normalized versions where available
+    const normalizedSegmentIndices: number[] = [];
+    for (let i = 0; i < normResults.length; i++) {
+      if (!normResults[i].skipped && normResults[i].normalizedPath) {
+        segmentPaths[i] = normResults[i].normalizedPath!;
+        normalizedSegmentIndices.push(selected[i].index);
+      }
+    }
+
     const compiledRelativePath = `${tripId}/compiled/${mediaId}_compiled.mp4`;
     const compiledTempPath = path.join(tempDir, `${mediaId}_compiled.mp4`);
 
@@ -557,6 +593,7 @@ export async function editVideo(
       compiledPath: compiledRelativePath,
       selectedSegments: selectedIndices,
       segmentDetails,
+      normalizedSegments: normalizedSegmentIndices,
     };
   } catch (err) {
     return {

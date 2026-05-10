@@ -476,6 +476,27 @@ function initTables(db: Database.Database): void {
     // Ignore — table might not exist yet
   }
 
+  // Migration: add black_frame_score column to video_segments table (v2-video-processing)
+  try {
+    db.exec(`ALTER TABLE video_segments ADD COLUMN black_frame_score REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add is_junk column to video_segments table (v2-video-processing)
+  try {
+    db.exec(`ALTER TABLE video_segments ADD COLUMN is_junk INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add junk_reason column to video_segments table (v2-video-processing)
+  try {
+    db.exec(`ALTER TABLE video_segments ADD COLUMN junk_reason TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();

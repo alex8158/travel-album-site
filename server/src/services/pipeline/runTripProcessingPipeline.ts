@@ -15,8 +15,11 @@ import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
 import { generateThumbnailsForTrip } from '../thumbnailGenerator';
 import { selectCoverImage } from '../coverSelector';
-import { analyzeVideo } from '../videoAnalyzer';
+import { analyzeVideo, VideoSegment } from '../videoAnalyzer';
 import { editVideo } from '../videoEditor';
+import { detectBlackFrames, BlackFrameResult } from '../blackFrameDetector';
+import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
+import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import type {
@@ -534,6 +537,92 @@ export async function runTripProcessingPipeline(
       }
     }
     onProgress('videoEdit', 'complete', `${compiledCount} compiled`);
+
+    // ---- Stage: videoEnhance ----
+    // Run black frame detection, junk detection, and multi-version generation for each video
+    onProgress('videoEnhance', 'start');
+    t0 = Date.now();
+    let versionsGenerated = 0;
+    for (const videoRow of videoRows) {
+      try {
+        const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
+        const mediaId = videoRow.id;
+
+        // Get segments from the database
+        const segmentRows = db.prepare(
+          'SELECT * FROM video_segments WHERE media_id = ? ORDER BY start_time'
+        ).all(mediaId) as any[];
+
+        if (segmentRows.length === 0) continue;
+
+        const segments: VideoSegment[] = segmentRows.map((s: any, idx: number) => ({
+          index: idx,
+          startTime: s.start_time,
+          endTime: s.end_time,
+          duration: s.end_time - s.start_time,
+          overallScore: s.overall_score || 50,
+          sharpnessScore: s.sharpness_score || 50,
+          stabilityScore: s.stability_score || 50,
+          exposureScore: s.exposure_score || 50,
+          label: s.label || 'good',
+        }));
+
+        // Run black frame detection on each segment
+        onProgress('blackFrameDetect', 'start');
+        const blackFrameResults = new Map<number, BlackFrameResult>();
+        for (const segment of segments) {
+          try {
+            const result = await detectBlackFrames(videoPath, segment.startTime, segment.endTime);
+            blackFrameResults.set(segment.index, result);
+          } catch {
+            // Skip failed detection, continue with remaining segments
+          }
+        }
+        onProgress('blackFrameDetect', 'complete', `${blackFrameResults.size}/${segments.length} segments checked`);
+
+        // Run junk clip detection on each segment
+        onProgress('junkDetect', 'start');
+        const junkResults = new Map<number, JunkClipResult>();
+        for (const segment of segments) {
+          try {
+            const result = await detectJunkClip(videoPath, segment.startTime, segment.endTime);
+            junkResults.set(segment.index, result);
+          } catch {
+            // Skip failed detection, continue with remaining segments
+          }
+        }
+        onProgress('junkDetect', 'complete', `${junkResults.size}/${segments.length} segments checked`);
+
+        // Generate multiple versions with detection results
+        onProgress('versionGenerate', 'start');
+        const profiles = Object.values(DEFAULT_PROFILES);
+        const versionResult = await generateVersions(
+          videoPath,
+          mediaId,
+          tripId,
+          segments,
+          profiles,
+          { blackFrameResults, junkResults, videoResolution: options?.videoResolution },
+        );
+        onProgress('versionGenerate', 'complete', `${versionResult.versions.length} versions created`);
+
+        versionsGenerated += versionResult.versions.length;
+
+        if (versionResult.errors.length > 0) {
+          for (const err of versionResult.errors) {
+            console.warn(`[pipeline] videoEnhance version error for ${mediaId}: ${err.profile}: ${err.error}`);
+          }
+        }
+      } catch (err) {
+        // Handle individual video failures without stopping the batch
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[pipeline] videoEnhance failed for ${videoRow.id}: ${errorMsg}`);
+        const errorText = `[videoEnhance] ${errorMsg}`;
+        updateErrorStmt.run(errorText, errorText, videoRow.id);
+      }
+    }
+    console.log(`[pipeline] videoEnhance: ${versionsGenerated} versions generated, ${Date.now() - t0}ms`);
+    onProgress('videoEnhance', 'complete', `${versionsGenerated} versions generated`);
 
     // cover
     onProgress('cover', 'start');
