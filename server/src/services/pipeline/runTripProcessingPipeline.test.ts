@@ -71,7 +71,7 @@ vi.mock('../multiVersionGenerator', () => ({
   DEFAULT_PROFILES: {
     highlight: { name: 'highlight', targetDuration: 30, selectionStrategy: 'quality_first' },
     summary: { name: 'summary', targetDuration: 60, selectionStrategy: 'balanced' },
-    full_edit: { name: 'full_edit', targetDuration: 300, selectionStrategy: 'comprehensive' },
+    extended: { name: 'extended', targetDuration: 300, selectionStrategy: 'comprehensive' },
   },
 }));
 

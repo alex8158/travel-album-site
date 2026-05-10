@@ -5,9 +5,10 @@
  * - Too short duration (< 1s)
  * - Extreme motion blur (high motion vector magnitude)
  * - Ground shots (camera pointing down)
+ * - Lens occlusion (finger/object blocking lens)
  * - Accidental touch (sudden motion followed by stillness)
  *
- * Priority order: too_short > extreme_blur > ground_shot > accidental_touch
+ * Priority order: too_short > extreme_blur > ground_shot > lens_occlusion > accidental_touch
  */
 
 import ffmpeg from 'fluent-ffmpeg';
@@ -17,7 +18,7 @@ import fs from 'fs';
 import { upsertAnalysisResult } from '../helpers/analysisStore';
 import { getTempDir } from '../helpers/tempDir';
 
-export type JunkReason = 'too_short' | 'extreme_blur' | 'ground_shot' | 'accidental_touch';
+export type JunkReason = 'too_short' | 'extreme_blur' | 'ground_shot' | 'lens_occlusion' | 'accidental_touch';
 
 export interface JunkClipResult {
   isJunk: boolean;
@@ -28,6 +29,7 @@ export interface JunkClipResult {
     motionMagnitude: number | null;
     pitchAngle: number | null;
     hasAccidentalPattern: boolean;
+    occlusionRatio?: number | null;
   };
 }
 
@@ -36,6 +38,35 @@ export interface JunkDetectionOptions {
   extremeMotionThreshold?: number; // default 80
   groundShotAngle?: number;       // default 60 degrees
   groundShotRatio?: number;       // default 0.7
+  occlusionVarianceThreshold?: number;  // default 300
+  occlusionEdgeThreshold?: number;      // default 0.05
+  occlusionFrameRatio?: number;         // default 0.7
+}
+
+/**
+ * Parse occlusion-related environment variables with validation and defaults.
+ */
+export function parseOcclusionEnvVars(): { varianceThreshold: number; edgeThreshold: number } {
+  let varianceThreshold = 300;
+  let edgeThreshold = 0.05;
+
+  const varianceEnv = process.env.VIDEO_OCCLUSION_VARIANCE_THRESHOLD;
+  if (varianceEnv !== undefined) {
+    const parsed = parseFloat(varianceEnv);
+    if (!isNaN(parsed) && parsed > 0) {
+      varianceThreshold = parsed;
+    }
+  }
+
+  const edgeEnv = process.env.VIDEO_OCCLUSION_EDGE_THRESHOLD;
+  if (edgeEnv !== undefined) {
+    const parsed = parseFloat(edgeEnv);
+    if (!isNaN(parsed) && parsed >= 0.0 && parsed <= 1.0) {
+      edgeThreshold = parsed;
+    }
+  }
+
+  return { varianceThreshold, edgeThreshold };
 }
 
 /**
@@ -46,13 +77,15 @@ export interface JunkDetectionOptions {
  * 1. too_short — duration < minDuration
  * 2. extreme_blur — motionMagnitude > extremeMotionThreshold
  * 3. ground_shot — pitchAngle > groundShotAngle (with ratio check)
- * 4. accidental_touch — hasAccidentalPattern is true
+ * 4. lens_occlusion — occlusionRatio > occlusionFrameRatio
+ * 5. accidental_touch — hasAccidentalPattern is true
  *
  * @param duration - Segment duration in seconds
  * @param motionMagnitude - Average motion vector magnitude (null if unavailable)
  * @param pitchAngle - Dominant pitch angle in degrees from horizontal (null if unavailable)
  * @param hasAccidentalPattern - Whether accidental touch pattern was detected
  * @param options - Detection thresholds
+ * @param occlusionRatio - Ratio of occluded frames (null if not analyzed)
  * @returns JunkClipResult with classification
  */
 export function classifyJunkClip(
@@ -60,17 +93,20 @@ export function classifyJunkClip(
   motionMagnitude: number | null,
   pitchAngle: number | null,
   hasAccidentalPattern: boolean,
-  options?: JunkDetectionOptions
+  options?: JunkDetectionOptions,
+  occlusionRatio?: number | null
 ): JunkClipResult {
   const minDuration = options?.minDuration ?? 1.0;
   const extremeMotionThreshold = options?.extremeMotionThreshold ?? 80;
   const groundShotAngle = options?.groundShotAngle ?? 60;
+  const occlusionFrameRatio = options?.occlusionFrameRatio ?? 0.7;
 
   const details = {
     duration,
     motionMagnitude,
     pitchAngle,
     hasAccidentalPattern,
+    occlusionRatio: occlusionRatio ?? null,
   };
 
   // Priority 1: too_short
@@ -90,7 +126,13 @@ export function classifyJunkClip(
     return { isJunk: true, reason: 'ground_shot', confidence, details };
   }
 
-  // Priority 4: accidental_touch
+  // Priority 4: lens_occlusion
+  if (occlusionRatio !== null && occlusionRatio !== undefined && occlusionRatio > occlusionFrameRatio) {
+    const confidence = Math.min(1.0, occlusionRatio);
+    return { isJunk: true, reason: 'lens_occlusion', confidence, details };
+  }
+
+  // Priority 5: accidental_touch
   if (hasAccidentalPattern) {
     return { isJunk: true, reason: 'accidental_touch', confidence: 0.8, details };
   }
@@ -101,7 +143,8 @@ export function classifyJunkClip(
 
 /**
  * Detect junk clip characteristics for a video segment.
- * Orchestrates motion estimation, pitch angle analysis, and accidental touch detection.
+ * Orchestrates motion estimation, pitch angle analysis, accidental touch detection,
+ * and lens occlusion detection.
  * Handles individual analysis failures gracefully (null values for failed analyses).
  *
  * @param videoPath - Path to the video file
@@ -118,15 +161,21 @@ export async function detectJunkClip(
 ): Promise<JunkClipResult> {
   const duration = endTime - startTime;
 
-  // Run all three analysis methods in parallel, catching errors individually
-  const [motionMagnitude, pitchAngle, hasAccidentalPattern] = await Promise.all([
+  // Run all analysis methods in parallel, catching errors individually
+  const [motionMagnitude, pitchAngle, hasAccidentalPattern, occlusionResult] = await Promise.all([
     estimateMotionMagnitude(videoPath, startTime, endTime).catch(() => null),
     estimatePitchAngle(videoPath, startTime, endTime).catch(() => null),
     detectAccidentalTouch(videoPath, startTime, endTime).catch(() => false),
+    detectLensOcclusion(videoPath, startTime, endTime, {
+      varianceThreshold: options?.occlusionVarianceThreshold,
+      edgeThreshold: options?.occlusionEdgeThreshold,
+    }).catch(() => ({ isOccluded: false, occlusionRatio: 0 })),
   ]);
 
+  const occlusionRatio = occlusionResult.occlusionRatio;
+
   // Classify using the pure function with collected features
-  return classifyJunkClip(duration, motionMagnitude, pitchAngle, hasAccidentalPattern, options);
+  return classifyJunkClip(duration, motionMagnitude, pitchAngle, hasAccidentalPattern, options, occlusionRatio);
 }
 
 /**
@@ -164,6 +213,177 @@ export async function persistJunkClipResult(
 }
 
 // --- Internal helper functions ---
+
+/**
+ * Detect lens occlusion in a video segment.
+ * Analyzes sampled frames for low color variance and low edge density,
+ * which indicate the lens is blocked by a finger or object.
+ *
+ * Algorithm:
+ * 1. Uniformly sample 5 frames across the segment
+ * 2. Resize each frame to 64x64 grayscale
+ * 3. Compute pixel variance (color variance)
+ * 4. Compute edge density using Sobel-like gradient detection
+ * 5. If variance < threshold AND edge density < threshold → occluded frame
+ * 6. If occluded frames > 70% of successfully sampled frames → lens_occlusion
+ *
+ * Fault tolerance: frames that fail to extract are skipped; analysis continues
+ * with remaining successfully extracted frames.
+ *
+ * @param videoPath - Path to the video file
+ * @param startTime - Segment start time in seconds
+ * @param endTime - Segment end time in seconds
+ * @param options - Variance and edge thresholds
+ * @returns Object with isOccluded flag and occlusionRatio
+ */
+export async function detectLensOcclusion(
+  videoPath: string,
+  startTime: number,
+  endTime: number,
+  options?: { varianceThreshold?: number; edgeThreshold?: number }
+): Promise<{ isOccluded: boolean; occlusionRatio: number }> {
+  const duration = endTime - startTime;
+  if (duration <= 0) return { isOccluded: false, occlusionRatio: 0 };
+
+  const envVars = parseOcclusionEnvVars();
+  const varianceThreshold = options?.varianceThreshold ?? envVars.varianceThreshold;
+  const edgeThreshold = options?.edgeThreshold ?? envVars.edgeThreshold;
+
+  const frameCount = 5;
+  const frameSize = 64;
+  const tempBase = getTempDir();
+  const tempDir = fs.mkdtempSync(path.join(tempBase, 'occlusion-'));
+
+  try {
+    // Compute evenly-spaced time points
+    const timePoints: number[] = [];
+    for (let i = 0; i < frameCount; i++) {
+      const t = startTime + (i / (frameCount - 1)) * duration;
+      timePoints.push(t);
+    }
+
+    let occludedCount = 0;
+    let successCount = 0;
+
+    for (let i = 0; i < timePoints.length; i++) {
+      const framePath = path.join(tempDir, `occlusion_frame_${i}.png`);
+      try {
+        await extractFrameAt(videoPath, timePoints[i], framePath);
+        const grayBuffer = await sharp(framePath)
+          .resize(frameSize, frameSize)
+          .grayscale()
+          .raw()
+          .toBuffer();
+
+        successCount++;
+
+        // Compute pixel variance
+        const variance = computePixelVariance(grayBuffer);
+
+        // Compute edge density using Sobel-like gradient
+        const edgeDensity = computeEdgeDensity(grayBuffer, frameSize, frameSize);
+
+        // Frame is occluded if both variance is low AND edge density is low
+        if (variance < varianceThreshold && edgeDensity < edgeThreshold) {
+          occludedCount++;
+        }
+      } catch {
+        // Skip frames that fail to extract (fault tolerance per Requirement 7.7)
+        continue;
+      }
+    }
+
+    // Need at least 1 successful frame to make a determination
+    if (successCount === 0) return { isOccluded: false, occlusionRatio: 0 };
+
+    const occlusionRatio = occludedCount / successCount;
+    const isOccluded = occlusionRatio > 0.7;
+
+    return { isOccluded, occlusionRatio };
+  } catch {
+    return { isOccluded: false, occlusionRatio: 0 };
+  } finally {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+/**
+ * Compute the variance of pixel values in a grayscale buffer.
+ * Variance = E[(x - mean)^2] = E[x^2] - (E[x])^2
+ *
+ * @param buffer - Raw grayscale pixel buffer
+ * @returns Pixel variance
+ */
+export function computePixelVariance(buffer: Buffer): number {
+  if (buffer.length === 0) return 0;
+
+  let sum = 0;
+  let sumSq = 0;
+
+  for (let i = 0; i < buffer.length; i++) {
+    const val = buffer[i];
+    sum += val;
+    sumSq += val * val;
+  }
+
+  const mean = sum / buffer.length;
+  const variance = sumSq / buffer.length - mean * mean;
+  return Math.max(0, variance); // Guard against floating point errors
+}
+
+/**
+ * Compute edge density using a Sobel-like gradient operator.
+ * For each pixel (not on the border), compute horizontal and vertical gradients.
+ * A pixel is considered an "edge pixel" if its gradient magnitude exceeds a threshold.
+ * Edge density = count of edge pixels / total interior pixels.
+ *
+ * Simplified Sobel: Gx = right - left, Gy = bottom - top
+ * Gradient magnitude = |Gx| + |Gy| (L1 norm for speed)
+ *
+ * @param buffer - Raw grayscale pixel buffer (row-major)
+ * @param width - Image width
+ * @param height - Image height
+ * @param gradientThreshold - Minimum gradient to count as edge (default 30)
+ * @returns Edge density in [0.0, 1.0]
+ */
+export function computeEdgeDensity(
+  buffer: Buffer,
+  width: number,
+  height: number,
+  gradientThreshold: number = 30
+): number {
+  if (width < 3 || height < 3) return 0;
+
+  let edgeCount = 0;
+  let totalPixels = 0;
+
+  // Iterate over interior pixels (skip border)
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+
+      // Horizontal gradient: right - left
+      const gx = buffer[idx + 1] - buffer[idx - 1];
+      // Vertical gradient: bottom - top
+      const gy = buffer[(y + 1) * width + x] - buffer[(y - 1) * width + x];
+
+      // L1 gradient magnitude
+      const magnitude = Math.abs(gx) + Math.abs(gy);
+
+      totalPixels++;
+      if (magnitude > gradientThreshold) {
+        edgeCount++;
+      }
+    }
+  }
+
+  if (totalPixels === 0) return 0;
+  return edgeCount / totalPixels;
+}
 
 /**
  * Extract a single frame from a video at a specific time.

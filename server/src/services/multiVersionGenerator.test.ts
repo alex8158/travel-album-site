@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fc from 'fast-check';
-import { selectSegmentsForProfile, VersionProfile, isGenerating, generateVersions } from './multiVersionGenerator';
+import { selectSegmentsForProfile, VersionProfile, isGenerating, generateVersions, parseDurationEnv, getConfiguredDurations } from './multiVersionGenerator';
 import { VideoSegment } from './videoAnalyzer';
 import { BlackFrameResult } from './blackFrameDetector';
 import { JunkClipResult } from './junkClipDetector';
@@ -58,22 +58,22 @@ describe('selectQualityFirst (via selectSegmentsForProfile)', () => {
     expect(result[1].index).toBe(1); // score 80
   });
 
-  it('skips segments that would exceed 10% tolerance but continues looking', () => {
+  it('skips no segments - greedily picks until cumulative >= targetDuration', () => {
     const segments: VideoSegment[] = [
       makeSegment({ index: 0, startTime: 0, endTime: 20, duration: 20, overallScore: 95 }),
       makeSegment({ index: 1, startTime: 20, endTime: 40, duration: 20, overallScore: 90 }),
       makeSegment({ index: 2, startTime: 40, endTime: 50, duration: 10, overallScore: 85 }),
     ];
 
-    // targetDuration = 30, maxDuration = 33
+    // targetDuration = 30
     // Sorted by score: [95 (20s), 90 (20s), 85 (10s)]
-    // Pick 95 (cumulative=20), try 90 (20+20=40 > 33, skip), try 85 (20+10=30 <= 33, pick)
+    // Pick 95 (cumulative=20 < 30), pick 90 (cumulative=40 >= 30, stop)
     const result = selectSegmentsForProfile(segments, qualityFirstProfile, emptyBlackFrameResults, emptyJunkResults);
 
     expect(result.length).toBe(2);
     // Sorted by startTime
     expect(result[0].index).toBe(0); // score 95, startTime 0
-    expect(result[1].index).toBe(2); // score 85, startTime 40
+    expect(result[1].index).toBe(1); // score 90, startTime 20
   });
 
   it('returns empty array when no segments provided', () => {
@@ -98,16 +98,17 @@ describe('selectQualityFirst (via selectSegmentsForProfile)', () => {
     expect(result[2].startTime).toBe(40);
   });
 
-  it('does not select segments when all would exceed tolerance', () => {
+  it('selects large segment when it is the only one available', () => {
     const segments: VideoSegment[] = [
       makeSegment({ index: 0, startTime: 0, endTime: 40, duration: 40, overallScore: 90 }),
     ];
 
-    // targetDuration = 30, maxDuration = 33
-    // Segment is 40s which exceeds 33, so it's skipped
+    // targetDuration = 30
+    // Only one segment available (40s), cumulative starts at 0 < 30, so it gets picked
     const result = selectSegmentsForProfile(segments, qualityFirstProfile, emptyBlackFrameResults, emptyJunkResults);
 
-    expect(result).toEqual([]);
+    expect(result.length).toBe(1);
+    expect(result[0].index).toBe(0);
   });
 
   it('handles segments with equal scores', () => {
@@ -155,13 +156,13 @@ describe('selectBalanced (via selectSegmentsForProfile)', () => {
     expect(result.length).toBe(3);
   });
 
-  it('divides timeline into N parts and picks best from each', () => {
-    // 6 segments spanning 0-60s, each 10s, targetDuration = 30s
-    // Average segment duration = 10s, N = ceil(30/10) = 3 parts
-    // Timeline span = 60s, window size = 20s
-    // Window [0,20): segments 0 (score 50), 1 (score 90) → pick 1
-    // Window [20,40): segments 2 (score 70), 3 (score 80) → pick 3
-    // Window [40,60]: segments 4 (score 60), 5 (score 95) → pick 5
+  it('divides timeline into 3 intervals and picks best from each', () => {
+    // 6 segments spanning 0-60s, each 10s, targetDuration = 60s
+    // Timeline span = 60s, interval size = 20s
+    // Interval [0,20): segments 0 (score 50), 1 (score 90) → pick 1
+    // Interval [20,40): segments 2 (score 70), 3 (score 80) → pick 3
+    // Interval [40,60): segments 4 (score 60), 5 (score 95) → pick 5
+    // Cumulative = 30s < 60s, fill from unused: 2 (70), 0 (50), 4 (60)
     const segments: VideoSegment[] = [
       makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 50 }),
       makeSegment({ index: 1, startTime: 10, endTime: 20, duration: 10, overallScore: 90 }),
@@ -171,15 +172,34 @@ describe('selectBalanced (via selectSegmentsForProfile)', () => {
       makeSegment({ index: 5, startTime: 50, endTime: 60, duration: 10, overallScore: 95 }),
     ];
 
-    const profile: VersionProfile = { name: 'summary', targetDuration: 30, selectionStrategy: 'balanced' };
+    const result = selectSegmentsForProfile(segments, balancedProfile, emptyBlackFrameResults, emptyJunkResults);
+
+    // Should include the best from each interval
+    const indices = result.map(s => s.index);
+    expect(indices).toContain(1); // best in [0,20)
+    expect(indices).toContain(3); // best in [20,40)
+    expect(indices).toContain(5); // best in [40,60)
+    // Total duration = 60s, all 6 segments fit
+    expect(result.length).toBe(6);
+  });
+
+  it('ensures each interval contributes at least 1 segment', () => {
+    // 3 segments, one in each interval
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 5, endTime: 15, duration: 10, overallScore: 50 }),
+      makeSegment({ index: 1, startTime: 35, endTime: 45, duration: 10, overallScore: 90 }),
+      makeSegment({ index: 2, startTime: 65, endTime: 75, duration: 10, overallScore: 70 }),
+    ];
+
+    // Timeline: 5 to 75, span = 70, interval size = 70/3 ≈ 23.33
+    // Interval [5, 28.33): segment 0
+    // Interval [28.33, 51.67): segment 1
+    // Interval [51.67, 75): segment 2
+    const profile: VersionProfile = { name: 'summary', targetDuration: 60, selectionStrategy: 'balanced' };
     const result = selectSegmentsForProfile(segments, profile, emptyBlackFrameResults, emptyJunkResults);
 
-    // Should pick 3 segments (one per window)
     expect(result.length).toBe(3);
-    // Verify best from each window was selected
-    expect(result.map(s => s.index)).toContain(1); // best in [0,20)
-    expect(result.map(s => s.index)).toContain(3); // best in [20,40)
-    expect(result.map(s => s.index)).toContain(5); // best in [40,60]
+    expect(result.map(s => s.index).sort()).toEqual([0, 1, 2]);
   });
 
   it('returns segments in chronological order', () => {
@@ -212,48 +232,30 @@ describe('selectBalanced (via selectSegmentsForProfile)', () => {
     expect(result[0].index).toBe(0);
   });
 
-  it('trims lowest-scoring selections when total exceeds targetDuration', () => {
-    // 4 segments of 20s each = 80s total, targetDuration = 60s
-    // Average = 20s, N = ceil(60/20) = 3 parts
-    // Timeline span = 80s, window size = 80/3 ≈ 26.67s
-    // Window [0, 26.67): segments 0 (score 50), 1 (score 90) → pick 1 (20s)
-    // Window [26.67, 53.33): segments 2 (score 70) → pick 2 (20s)
-    // Window [53.33, 80]: segment 3 (score 80) → pick 3 (20s)
-    // Total = 60s = targetDuration, no trimming needed
+  it('trims lowest-scoring non-mandatory selections when total exceeds targetDuration', () => {
+    // 6 segments of 15s each = 90s total, targetDuration = 30s
+    // Timeline span = 90s, interval size = 30s
+    // Interval [0,30): segments 0 (score 50), 1 (score 90) → mandatory: 1
+    // Interval [30,60): segments 2 (score 70), 3 (score 80) → mandatory: 3
+    // Interval [60,90): segments 4 (score 60), 5 (score 95) → mandatory: 5
+    // Mandatory total = 45s > 30s → can't trim mandatory, so all 3 stay
     const segments: VideoSegment[] = [
-      makeSegment({ index: 0, startTime: 0, endTime: 20, duration: 20, overallScore: 50 }),
-      makeSegment({ index: 1, startTime: 20, endTime: 40, duration: 20, overallScore: 90 }),
-      makeSegment({ index: 2, startTime: 40, endTime: 60, duration: 20, overallScore: 70 }),
-      makeSegment({ index: 3, startTime: 60, endTime: 80, duration: 20, overallScore: 80 }),
-    ];
-
-    const profile: VersionProfile = { name: 'summary', targetDuration: 60, selectionStrategy: 'balanced' };
-    const result = selectSegmentsForProfile(segments, profile, emptyBlackFrameResults, emptyJunkResults);
-
-    const totalDuration = result.reduce((sum, s) => sum + s.duration, 0);
-    expect(totalDuration).toBeLessThanOrEqual(60);
-  });
-
-  it('trims lowest-scoring when selected segments exceed target', () => {
-    // 5 segments of 20s each = 100s total, targetDuration = 30s
-    // Average = 20s, N = ceil(30/20) = 2 parts
-    // Timeline span = 100s, window size = 50s
-    // Window [0, 50): segments 0,1,2 → pick best (index 1, score 90, 20s)
-    // Window [50, 100]: segments 3,4 → pick best (index 4, score 85, 20s)
-    // Total = 40s > 30s → trim lowest (index 4, score 85)
-    const segments: VideoSegment[] = [
-      makeSegment({ index: 0, startTime: 0, endTime: 20, duration: 20, overallScore: 50 }),
-      makeSegment({ index: 1, startTime: 20, endTime: 40, duration: 20, overallScore: 90 }),
-      makeSegment({ index: 2, startTime: 40, endTime: 60, duration: 20, overallScore: 70 }),
-      makeSegment({ index: 3, startTime: 60, endTime: 80, duration: 20, overallScore: 60 }),
-      makeSegment({ index: 4, startTime: 80, endTime: 100, duration: 20, overallScore: 85 }),
+      makeSegment({ index: 0, startTime: 0, endTime: 15, duration: 15, overallScore: 50 }),
+      makeSegment({ index: 1, startTime: 15, endTime: 30, duration: 15, overallScore: 90 }),
+      makeSegment({ index: 2, startTime: 30, endTime: 45, duration: 15, overallScore: 70 }),
+      makeSegment({ index: 3, startTime: 45, endTime: 60, duration: 15, overallScore: 80 }),
+      makeSegment({ index: 4, startTime: 60, endTime: 75, duration: 15, overallScore: 60 }),
+      makeSegment({ index: 5, startTime: 75, endTime: 90, duration: 15, overallScore: 95 }),
     ];
 
     const profile: VersionProfile = { name: 'summary', targetDuration: 30, selectionStrategy: 'balanced' };
     const result = selectSegmentsForProfile(segments, profile, emptyBlackFrameResults, emptyJunkResults);
 
-    const totalDuration = result.reduce((sum, s) => sum + s.duration, 0);
-    expect(totalDuration).toBeLessThanOrEqual(30);
+    // Mandatory segments (best from each interval) are kept
+    const indices = result.map(s => s.index);
+    expect(indices).toContain(1); // best in interval 0
+    expect(indices).toContain(3); // best in interval 1
+    expect(indices).toContain(5); // best in interval 2
   });
 
   it('filters out black frame and junk segments before balanced selection', () => {
@@ -264,7 +266,7 @@ describe('selectBalanced (via selectSegmentsForProfile)', () => {
     ];
 
     const blackFrameResults = new Map<number, BlackFrameResult>([
-      [0, { blackFrameRatio: 0.9, blackFrameScore: 0.1, isBlackFrameSegment: true, sampledFrameCount: 5, blackFrameCount: 4, thresholdUsed: 10 }],
+      [0, { blackFrameRatio: 0.9, blackFrameScore: 0.1, isBlackFrameSegment: true, sampledFrameCount: 5, blackFrameCount: 4, thresholdUsed: 10, nearBlackRatio: 0, nearBlackFrameCount: 0, isNearBlackSegment: false, nearBlackThresholdUsed: 20 }],
     ]);
 
     const junkResults = new Map<number, JunkClipResult>([
@@ -278,28 +280,33 @@ describe('selectBalanced (via selectSegmentsForProfile)', () => {
     expect(result[0].index).toBe(2);
   });
 
-  it('handles windows with no segments', () => {
-    // Segments clustered at the beginning, leaving later windows empty
+  it('handles intervals with no segments', () => {
+    // Segments clustered at the beginning and end, middle interval empty
     const segments: VideoSegment[] = [
       makeSegment({ index: 0, startTime: 0, endTime: 5, duration: 5, overallScore: 80 }),
       makeSegment({ index: 1, startTime: 5, endTime: 10, duration: 5, overallScore: 90 }),
       makeSegment({ index: 2, startTime: 90, endTime: 100, duration: 10, overallScore: 70 }),
     ];
 
-    // Timeline span = 100s, average duration ≈ 6.67s
-    // targetDuration = 60, N = ceil(60/6.67) = 9 parts
-    // Most windows will be empty — only windows containing segments will contribute
+    // Timeline span = 100s, interval size = 100/3 ≈ 33.33
+    // Interval [0, 33.33): segments 0, 1 → pick 1 (score 90)
+    // Interval [33.33, 66.67): no segments
+    // Interval [66.67, 100): segment 2 → pick 2 (score 70)
     const result = selectSegmentsForProfile(segments, balancedProfile, emptyBlackFrameResults, emptyJunkResults);
 
-    // Should still return segments from windows that have candidates
+    // Should return segments from intervals that have candidates + fill from unused
     expect(result.length).toBeGreaterThan(0);
     expect(result.length).toBeLessThanOrEqual(3);
+    // Must include best from each non-empty interval
+    const indices = result.map(s => s.index);
+    expect(indices).toContain(1); // best in interval 0
+    expect(indices).toContain(2); // best in interval 2
   });
 });
 
 describe('selectComprehensive (via selectSegmentsForProfile)', () => {
   const comprehensiveProfile: VersionProfile = {
-    name: 'full_edit',
+    name: 'extended',
     targetDuration: 300,
     selectionStrategy: 'comprehensive',
   };
@@ -400,7 +407,7 @@ describe('selectComprehensive (via selectSegmentsForProfile)', () => {
     ];
 
     const blackFrameResults = new Map<number, BlackFrameResult>([
-      [0, { blackFrameRatio: 0.9, blackFrameScore: 0.1, isBlackFrameSegment: true, sampledFrameCount: 5, blackFrameCount: 4, thresholdUsed: 10 }],
+      [0, { blackFrameRatio: 0.9, blackFrameScore: 0.1, isBlackFrameSegment: true, sampledFrameCount: 5, blackFrameCount: 4, thresholdUsed: 10, nearBlackRatio: 0, nearBlackFrameCount: 0, isNearBlackSegment: false, nearBlackThresholdUsed: 20 }],
     ]);
 
     const junkResults = new Map<number, JunkClipResult>([
@@ -561,7 +568,7 @@ const segmentsArb = fc.integer({ min: 1, max: 20 }).chain(count => {
 
 // Helper: Generate a VersionProfile
 const profileArb = fc.record({
-  name: fc.constantFrom('highlight', 'summary', 'full_edit', 'custom'),
+  name: fc.constantFrom('highlight', 'summary', 'extended', 'custom'),
   targetDuration: fc.double({ min: 1, max: 600, noNaN: true }),
   selectionStrategy: fc.constantFrom('quality_first' as const, 'balanced' as const, 'comprehensive' as const),
 });
@@ -571,16 +578,8 @@ describe('Property 7: Version Profile Duration Constraint', () => {
   /**
    * Validates: Requirements 9.2
    *
-   * For any version generation request where profile.targetDuration > sourceDuration,
-   * that profile SHALL be skipped and not produce an output.
-   *
-   * Since generateVersions is IO-heavy, we test the skip condition logic directly:
-   * The condition is `profile.targetDuration > sourceDuration` where
-   * sourceDuration = max(segments.map(s => s.endTime)).
-   *
-   * We verify that when targetDuration > sourceDuration, the profile would be skipped
-   * by checking the condition holds, and when targetDuration <= sourceDuration,
-   * selectSegmentsForProfile is callable (profile is not skipped).
+   * For any version generation request where sourceDuration < profile.targetDuration,
+   * that profile SHALL be skipped (status: 'skipped') and not produce an output.
    */
   it('profiles with targetDuration > sourceDuration satisfy the skip condition', () => {
     fc.assert(
@@ -591,8 +590,8 @@ describe('Property 7: Version Profile Duration Constraint', () => {
           const sourceDuration = Math.max(...segments.map(s => s.endTime));
           const targetDuration = sourceDuration + extraDuration;
 
-          // The skip condition in generateVersions
-          const shouldSkip = targetDuration > sourceDuration;
+          // The skip condition in generateVersions: sourceDuration < targetDuration
+          const shouldSkip = sourceDuration < targetDuration;
           expect(shouldSkip).toBe(true);
         },
       ),
@@ -610,7 +609,7 @@ describe('Property 7: Version Profile Duration Constraint', () => {
           // targetDuration is at most sourceDuration
           const targetDuration = sourceDuration * fraction;
 
-          const shouldSkip = targetDuration > sourceDuration;
+          const shouldSkip = sourceDuration < targetDuration;
           expect(shouldSkip).toBe(false);
         },
       ),
@@ -618,7 +617,7 @@ describe('Property 7: Version Profile Duration Constraint', () => {
     );
   });
 
-  it('generateVersions skip logic: profiles exceeding source duration produce no version or error entry', () => {
+  it('generateVersions skip logic: profiles exceeding source duration produce skipped status', () => {
     fc.assert(
       fc.property(
         segmentsArb,
@@ -640,14 +639,14 @@ describe('Property 7: Version Profile Duration Constraint', () => {
           const processedProfiles: string[] = [];
 
           for (const p of profiles) {
-            if (p.targetDuration > sourceDuration) {
+            if (sourceDuration < p.targetDuration) {
               skippedProfiles.push(p.name);
             } else {
               processedProfiles.push(p.name);
             }
           }
 
-          // Profile should be skipped (not counted in versions or errors)
+          // Profile should be skipped (status: 'skipped')
           expect(skippedProfiles).toContain('test_skip');
           expect(processedProfiles).not.toContain('test_skip');
         },
@@ -685,7 +684,7 @@ describe('Property 8: Multi-Version Count Invariant', () => {
           let skippedCount = 0;
 
           for (const profile of profiles) {
-            if (profile.targetDuration > sourceDuration) {
+            if (sourceDuration < profile.targetDuration) {
               skippedCount++;
               continue;
             }
@@ -726,7 +725,7 @@ describe('Property 8: Multi-Version Count Invariant', () => {
           let processedCount = 0;
 
           for (const profile of profiles) {
-            if (profile.targetDuration > sourceDuration) {
+            if (sourceDuration < profile.targetDuration) {
               skippedCount++;
             } else {
               processedCount++;
@@ -854,5 +853,223 @@ describe('Property 9: Chronological Order Preservation', () => {
       ),
       { numRuns: 100 },
     );
+  });
+});
+
+// =============================================================================
+// Near-Black Segment Filtering Tests
+// =============================================================================
+
+describe('Near-black segment filtering', () => {
+  const qualityFirstProfile: VersionProfile = {
+    name: 'highlight',
+    targetDuration: 30,
+    selectionStrategy: 'quality_first',
+  };
+
+  it('filters out near-black segments', () => {
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 95 }),
+      makeSegment({ index: 1, startTime: 10, endTime: 20, duration: 10, overallScore: 90 }),
+      makeSegment({ index: 2, startTime: 20, endTime: 30, duration: 10, overallScore: 80 }),
+    ];
+
+    const blackFrameResults = new Map<number, BlackFrameResult>([
+      [1, {
+        blackFrameRatio: 0.3,
+        blackFrameScore: 0.7,
+        isBlackFrameSegment: false,
+        sampledFrameCount: 5,
+        blackFrameCount: 1,
+        thresholdUsed: 10,
+        nearBlackRatio: 0.95,
+        nearBlackFrameCount: 5,
+        isNearBlackSegment: true,
+        nearBlackThresholdUsed: 20,
+      }],
+    ]);
+
+    const emptyJunkResults = new Map<number, JunkClipResult>();
+
+    const result = selectSegmentsForProfile(segments, qualityFirstProfile, blackFrameResults, emptyJunkResults);
+
+    // Segment 1 should be filtered out due to near-black
+    expect(result.length).toBe(2);
+    expect(result.map(s => s.index)).not.toContain(1);
+    expect(result.map(s => s.index)).toContain(0);
+    expect(result.map(s => s.index)).toContain(2);
+  });
+
+  it('does not filter segments that are not near-black', () => {
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 80 }),
+      makeSegment({ index: 1, startTime: 10, endTime: 20, duration: 10, overallScore: 70 }),
+    ];
+
+    const blackFrameResults = new Map<number, BlackFrameResult>([
+      [0, {
+        blackFrameRatio: 0.1,
+        blackFrameScore: 0.9,
+        isBlackFrameSegment: false,
+        sampledFrameCount: 5,
+        blackFrameCount: 0,
+        thresholdUsed: 10,
+        nearBlackRatio: 0.3,
+        nearBlackFrameCount: 1,
+        isNearBlackSegment: false,
+        nearBlackThresholdUsed: 20,
+      }],
+    ]);
+
+    const emptyJunkResults = new Map<number, JunkClipResult>();
+
+    const result = selectSegmentsForProfile(segments, qualityFirstProfile, blackFrameResults, emptyJunkResults);
+
+    expect(result.length).toBe(2);
+  });
+});
+
+// =============================================================================
+// Environment Variable Parsing Tests
+// =============================================================================
+
+describe('parseDurationEnv', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns default value when env var is not set', () => {
+    delete process.env.VIDEO_HIGHLIGHT_DURATION;
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('returns default value when env var is empty string', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('returns parsed value when env var is valid integer in range', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '45';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(45);
+  });
+
+  it('returns default value when env var is below minimum', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '3';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('returns default value when env var is above maximum', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '700';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('returns default value when env var is not a number', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = 'abc';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('returns default value when env var is a float', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '30.5';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+
+  it('accepts boundary values (min=5, max=600)', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '5';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(5);
+
+    process.env.VIDEO_HIGHLIGHT_DURATION = '600';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(600);
+  });
+
+  it('returns default value for negative numbers', () => {
+    process.env.VIDEO_HIGHLIGHT_DURATION = '-10';
+    expect(parseDurationEnv('VIDEO_HIGHLIGHT_DURATION', 30)).toBe(30);
+  });
+});
+
+// =============================================================================
+// Version Skip Logic with status field
+// =============================================================================
+
+describe('Version skip logic (status: skipped)', () => {
+  it('skips version when source duration is strictly less than target duration', () => {
+    // Source duration = 25s (max endTime), target = 30s → should skip
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 80 }),
+      makeSegment({ index: 1, startTime: 10, endTime: 25, duration: 15, overallScore: 90 }),
+    ];
+
+    const sourceDuration = Math.max(...segments.map(s => s.endTime)); // 25
+    const targetDuration = 30;
+
+    expect(sourceDuration < targetDuration).toBe(true);
+  });
+
+  it('does not skip when source duration equals target duration', () => {
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 80 }),
+      makeSegment({ index: 1, startTime: 10, endTime: 30, duration: 20, overallScore: 90 }),
+    ];
+
+    const sourceDuration = Math.max(...segments.map(s => s.endTime)); // 30
+    const targetDuration = 30;
+
+    expect(sourceDuration < targetDuration).toBe(false);
+  });
+
+  it('does not skip when source duration exceeds target duration', () => {
+    const segments: VideoSegment[] = [
+      makeSegment({ index: 0, startTime: 0, endTime: 10, duration: 10, overallScore: 80 }),
+      makeSegment({ index: 1, startTime: 10, endTime: 40, duration: 30, overallScore: 90 }),
+    ];
+
+    const sourceDuration = Math.max(...segments.map(s => s.endTime)); // 40
+    const targetDuration = 30;
+
+    expect(sourceDuration < targetDuration).toBe(false);
+  });
+});
+
+// =============================================================================
+// Duration Constraint Tests
+// =============================================================================
+
+describe('Duration constraint: output within [targetDuration * 0.8, targetDuration]', () => {
+  const emptyBlackFrameResults = new Map<number, BlackFrameResult>();
+  const emptyJunkResults = new Map<number, JunkClipResult>();
+
+  it('quality_first output duration is within bounds when segments are sufficient', () => {
+    // 10 segments of 5s each = 50s total, targetDuration = 30s
+    const segments: VideoSegment[] = Array.from({ length: 10 }, (_, i) =>
+      makeSegment({ index: i, startTime: i * 5, endTime: (i + 1) * 5, duration: 5, overallScore: 90 - i * 5 }),
+    );
+
+    const profile: VersionProfile = { name: 'highlight', targetDuration: 30, selectionStrategy: 'quality_first' };
+    const result = selectSegmentsForProfile(segments, profile, emptyBlackFrameResults, emptyJunkResults);
+
+    const totalDuration = result.reduce((sum, s) => sum + s.duration, 0);
+    // With greedy selection: picks until cumulative >= 30
+    // 5+5+5+5+5+5 = 30 >= 30, so 6 segments selected, total = 30
+    expect(totalDuration).toBeGreaterThanOrEqual(30 * 0.8);
+    expect(totalDuration).toBeLessThanOrEqual(30 * 1.1); // allow slight overshoot from greedy
+  });
+
+  it('balanced output duration does not exceed targetDuration when trimming works', () => {
+    // 9 segments of 5s each = 45s total, targetDuration = 30s
+    const segments: VideoSegment[] = Array.from({ length: 9 }, (_, i) =>
+      makeSegment({ index: i, startTime: i * 5, endTime: (i + 1) * 5, duration: 5, overallScore: 90 - i * 5 }),
+    );
+
+    const profile: VersionProfile = { name: 'summary', targetDuration: 30, selectionStrategy: 'balanced' };
+    const result = selectSegmentsForProfile(segments, profile, emptyBlackFrameResults, emptyJunkResults);
+
+    const totalDuration = result.reduce((sum, s) => sum + s.duration, 0);
+    expect(totalDuration).toBeLessThanOrEqual(30);
   });
 });

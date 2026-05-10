@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fc from 'fast-check';
-import { normalizeSegment, normalizeSegments, detectAudioCodec, getTargetLufs, analyzeLoudness, parseLoudnormOutput, LoudnessAnalysis, NormalizationOptions } from './audioNormalizer';
+import { normalizeSegment, normalizeSegments, detectAudioCodec, getTargetLufs, analyzeLoudness, parseLoudnormOutput, LoudnessAnalysis, NormalizationOptions, startRssMonitoring, getChildProcessRssMB, FfmpegProcessMonitor } from './audioNormalizer';
 import * as child_process from 'child_process';
 import * as fs from 'fs';
 import { EventEmitter } from 'events';
@@ -8,21 +8,31 @@ import { EventEmitter } from 'events';
 // Mock child_process.spawn
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
+  execSync: vi.fn(() => ''),
 }));
 
 // Mock fs
 vi.mock('fs', () => ({
   default: {
     mkdirSync: vi.fn(),
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => ''),
   },
   mkdirSync: vi.fn(),
+  existsSync: vi.fn(() => false),
+  readFileSync: vi.fn(() => ''),
 }));
 
 function createMockProcess(exitCode: number, stdout = '', delay = 0) {
   const proc = new EventEmitter() as any;
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
-  proc.stdin = new EventEmitter();
+  proc.stdout = new EventEmitter() as any;
+  proc.stderr = new EventEmitter() as any;
+  proc.stdin = new EventEmitter() as any;
+  proc.pid = 12345;
+
+  // Add destroy methods to satisfy FD cleanup calls
+  proc.stdout.destroy = vi.fn();
+  proc.stderr.destroy = vi.fn();
 
   setTimeout(() => {
     if (stdout) {
@@ -223,7 +233,7 @@ describe('analyzeLoudness', () => {
       '-af', 'loudnorm=print_format=json',
       '-f', 'null',
       '-',
-    ]);
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
   });
 });
 
@@ -818,5 +828,428 @@ describe('Property 6: Audio Normalization Skip Condition', () => {
       ),
       { numRuns: 100 }
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// V3 Enhancement Tests: Serial Execution, RSS Monitoring, FD Release
+// ---------------------------------------------------------------------------
+
+describe('V3: Serial Execution Guarantee', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should process segments one at a time (no concurrent ffmpeg processes)', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    // Track concurrent process count
+    let concurrentProcesses = 0;
+    let maxConcurrentProcesses = 0;
+
+    const createTrackedProcess = (exitCode: number, stderr = '') => {
+      concurrentProcesses++;
+      maxConcurrentProcesses = Math.max(maxConcurrentProcesses, concurrentProcesses);
+
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter() as any;
+      proc.stderr = new EventEmitter() as any;
+      proc.stdin = new EventEmitter() as any;
+      proc.pid = undefined; // No pid to avoid RSS monitoring intervals
+
+      // Schedule close event
+      const closeTimer = setTimeout(() => {
+        if (stderr) {
+          proc.stderr.emit('data', Buffer.from(stderr));
+        }
+        concurrentProcesses--;
+        proc.emit('close', exitCode);
+      }, 10);
+
+      return proc;
+    };
+
+    // 3 segments, each will need: analyzeLoudness (1 spawn) → no audio detected
+    const noAudioStderr = 'does not contain any stream';
+
+    mockSpawn
+      .mockImplementationOnce(() => createTrackedProcess(1, noAudioStderr) as any)
+      .mockImplementationOnce(() => createTrackedProcess(1, noAudioStderr) as any)
+      .mockImplementationOnce(() => createTrackedProcess(1, noAudioStderr) as any);
+
+    const segmentPaths = ['/seg1.mp4', '/seg2.mp4', '/seg3.mp4'];
+    const promise = normalizeSegments(segmentPaths, '/output');
+
+    // Advance timers to let all processes complete
+    await vi.advanceTimersByTimeAsync(100);
+
+    const results = await promise;
+
+    expect(results).toHaveLength(3);
+    // At most 1 ffmpeg process should have been running at any time
+    expect(maxConcurrentProcesses).toBe(1);
+  });
+
+  it('should not start next segment until current segment completes', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const executionOrder: string[] = [];
+
+    // Segment 1: analyzeLoudness → no audio (quick)
+    const proc1 = new EventEmitter() as any;
+    proc1.stdout = new EventEmitter() as any;
+    proc1.stderr = new EventEmitter() as any;
+    proc1.pid = undefined;
+
+    // Segment 2: analyzeLoudness → no audio (quick)
+    const proc2 = new EventEmitter() as any;
+    proc2.stdout = new EventEmitter() as any;
+    proc2.stderr = new EventEmitter() as any;
+    proc2.pid = undefined;
+
+    mockSpawn
+      .mockImplementationOnce(() => {
+        executionOrder.push('spawn_seg1');
+        setTimeout(() => {
+          proc1.stderr.emit('data', Buffer.from('does not contain any stream'));
+          proc1.emit('close', 1);
+          executionOrder.push('close_seg1');
+        }, 50);
+        return proc1 as any;
+      })
+      .mockImplementationOnce(() => {
+        executionOrder.push('spawn_seg2');
+        setTimeout(() => {
+          proc2.stderr.emit('data', Buffer.from('does not contain any stream'));
+          proc2.emit('close', 1);
+          executionOrder.push('close_seg2');
+        }, 50);
+        return proc2 as any;
+      });
+
+    const promise = normalizeSegments(['/seg1.mp4', '/seg2.mp4'], '/output');
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    await promise;
+
+    // Verify strict ordering: seg1 must complete before seg2 starts
+    expect(executionOrder).toEqual([
+      'spawn_seg1',
+      'close_seg1',
+      'spawn_seg2',
+      'close_seg2',
+    ]);
+  });
+});
+
+describe('V3: RSS Monitoring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should poll child process RSS every 5 seconds', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    // Return 100MB in KB
+    mockExecSync.mockReturnValue('102400\n');
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 9999;
+
+    const { stop, getMonitor } = startRssMonitoring(proc);
+
+    // Advance 5 seconds - first poll
+    vi.advanceTimersByTime(5000);
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+
+    // Advance another 5 seconds - second poll
+    vi.advanceTimersByTime(5000);
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+
+    const monitor = getMonitor();
+    expect(monitor).not.toBeNull();
+    expect(monitor!.pid).toBe(9999);
+    expect(monitor!.rssMB).toBe(100); // 102400 KB / 1024
+
+    stop();
+  });
+
+  it('should log warning when RSS exceeds 512MB', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Return 600MB in KB
+    mockExecSync.mockReturnValue(`${600 * 1024}\n`);
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 1234;
+
+    const { stop } = startRssMonitoring(proc);
+
+    // Advance 5 seconds to trigger first poll
+    vi.advanceTimersByTime(5000);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PID=1234')
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('exceeds 512MB')
+    );
+
+    stop();
+    warnSpy.mockRestore();
+  });
+
+  it('should not log warning when RSS is below 512MB', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Return 200MB in KB
+    mockExecSync.mockReturnValue(`${200 * 1024}\n`);
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 5678;
+
+    const { stop } = startRssMonitoring(proc);
+
+    vi.advanceTimersByTime(5000);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    stop();
+    warnSpy.mockRestore();
+  });
+
+  it('should stop monitoring when process exits', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    mockExecSync.mockReturnValue('102400\n');
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 4321;
+
+    startRssMonitoring(proc);
+
+    // Simulate process exit
+    proc.emit('exit', 0);
+
+    // Advance time - should not poll anymore
+    mockExecSync.mockClear();
+    vi.advanceTimersByTime(10000);
+
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('should stop monitoring when process errors', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    mockExecSync.mockReturnValue('102400\n');
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 4322;
+
+    startRssMonitoring(proc);
+
+    // Simulate process error
+    proc.emit('error', new Error('spawn failed'));
+
+    // Advance time - should not poll anymore
+    mockExecSync.mockClear();
+    vi.advanceTimersByTime(10000);
+
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('should return no-op when process has no pid', () => {
+    const proc = new EventEmitter() as any;
+    proc.pid = undefined;
+
+    const { stop, getMonitor } = startRssMonitoring(proc);
+
+    expect(getMonitor()).toBeNull();
+    // Should not throw
+    stop();
+  });
+
+  it('should stop monitoring when getChildProcessRssMB returns null (process gone)', () => {
+    const mockExecSync = vi.mocked(child_process.execSync);
+    // First call succeeds, second call throws (process gone)
+    mockExecSync
+      .mockReturnValueOnce('102400\n')
+      .mockImplementationOnce(() => { throw new Error('No such process'); });
+
+    const proc = new EventEmitter() as any;
+    proc.pid = 7777;
+
+    startRssMonitoring(proc);
+
+    // First poll - succeeds
+    vi.advanceTimersByTime(5000);
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+
+    // Second poll - process gone, returns null, stops monitoring
+    vi.advanceTimersByTime(5000);
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+
+    // Third poll - should not happen (monitoring stopped)
+    mockExecSync.mockClear();
+    vi.advanceTimersByTime(5000);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('V3: File Descriptor Release', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should call destroy on stdout and stderr after analyzeLoudness completes', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+    proc.stdout.destroy = vi.fn();
+    proc.stderr.destroy = vi.fn();
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = analyzeLoudness('/test.mp4');
+
+    proc.stderr.emit('data', Buffer.from('does not contain any stream'));
+    proc.emit('close', 1);
+
+    await promise;
+
+    expect(proc.stdout.destroy).toHaveBeenCalled();
+    expect(proc.stderr.destroy).toHaveBeenCalled();
+  });
+
+  it('should call destroy on stdout and stderr after analyzeLoudness error', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+    proc.stdout.destroy = vi.fn();
+    proc.stderr.destroy = vi.fn();
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = analyzeLoudness('/test.mp4');
+
+    proc.emit('error', new Error('spawn ENOENT'));
+
+    await promise;
+
+    expect(proc.stdout.destroy).toHaveBeenCalled();
+    expect(proc.stderr.destroy).toHaveBeenCalled();
+  });
+
+  it('should call destroy on stdout and stderr after detectAudioCodec completes', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+    proc.stdout.destroy = vi.fn();
+    proc.stderr.destroy = vi.fn();
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = detectAudioCodec('/test.mp4');
+
+    proc.stdout.emit('data', Buffer.from('aac\n'));
+    proc.emit('close', 0);
+
+    await promise;
+
+    expect(proc.stdout.destroy).toHaveBeenCalled();
+    expect(proc.stderr.destroy).toHaveBeenCalled();
+  });
+
+  it('should not throw when destroy is not available on streams', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    // Create proc without destroy methods (simulating edge case)
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+    // Intentionally NOT adding destroy methods
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = analyzeLoudness('/test.mp4');
+
+    proc.stderr.emit('data', Buffer.from('does not contain any stream'));
+    proc.emit('close', 1);
+
+    // Should not throw even without destroy methods
+    const result = await promise;
+    expect(result.hasAudio).toBe(false);
+  });
+
+  it('should use file path arguments and not read file content into Buffer', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = analyzeLoudness('/path/to/large-video.mp4');
+
+    proc.stderr.emit('data', Buffer.from('does not contain any stream'));
+    proc.emit('close', 1);
+
+    await promise;
+
+    // Verify spawn was called with -i filepath (not piping content)
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'ffmpeg',
+      expect.arrayContaining(['-i', '/path/to/large-video.mp4']),
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] })
+    );
+
+    // stdin is 'ignore' - no data is written to the process
+    // This confirms audio file content is NOT read into Node.js Buffer
+  });
+
+  it('should use stdio ignore for stdin to prevent Buffer loading', async () => {
+    const mockSpawn = vi.mocked(child_process.spawn);
+
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter() as any;
+    proc.stderr = new EventEmitter() as any;
+    proc.pid = undefined;
+
+    mockSpawn.mockReturnValueOnce(proc as any);
+
+    const promise = analyzeLoudness('/test.mp4');
+
+    proc.stderr.emit('data', Buffer.from('garbage'));
+    proc.emit('close', 0);
+
+    await promise;
+
+    // Verify stdin is set to 'ignore' (no data piped in)
+    const spawnCall = mockSpawn.mock.calls[0];
+    const options = spawnCall[2] as any;
+    expect(options.stdio[0]).toBe('ignore');
   });
 });

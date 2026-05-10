@@ -1,6 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import fc from 'fast-check';
-import { computeFrameBrightness, classifyBlackFrames, detectBlackFrames } from './blackFrameDetector';
+import {
+  computeFrameBrightness,
+  classifyBlackFrames,
+  detectBlackFrames,
+  parseNearBlackThreshold,
+  parseNearBlackRatioThreshold,
+} from './blackFrameDetector';
 
 // --- Mocks for detectBlackFrames tests ---
 
@@ -112,6 +118,11 @@ describe('classifyBlackFrames', () => {
     expect(result.sampledFrameCount).toBe(0);
     expect(result.blackFrameCount).toBe(0);
     expect(result.thresholdUsed).toBe(10);
+    // Near-black defaults
+    expect(result.nearBlackRatio).toBe(0);
+    expect(result.nearBlackFrameCount).toBe(0);
+    expect(result.isNearBlackSegment).toBe(false);
+    expect(result.nearBlackThresholdUsed).toBe(20);
   });
 
   it('classifies all-black frames correctly', () => {
@@ -255,6 +266,205 @@ describe('classifyBlackFrames - Property-Based Tests', () => {
   });
 });
 
+describe('classifyBlackFrames - Near-Black Frame Detection', () => {
+  it('detects near-black frames with default thresholds', () => {
+    // Frames with brightness 15: above pure-black threshold (10) but below near-black threshold (20)
+    const brightnesses = [15, 15, 15, 15, 15, 15, 15, 15, 15, 15];
+    const result = classifyBlackFrames(brightnesses, {
+      brightnessThreshold: 10,
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.blackFrameCount).toBe(0); // 15 >= 10
+    expect(result.nearBlackFrameCount).toBe(10); // 15 < 20
+    expect(result.nearBlackRatio).toBe(1.0);
+    expect(result.isNearBlackSegment).toBe(true);
+    expect(result.isBlackFrameSegment).toBe(false);
+    expect(result.nearBlackThresholdUsed).toBe(20);
+  });
+
+  it('does not mark as near-black when ratio is below threshold', () => {
+    // 8 out of 10 frames are near-black (ratio = 0.8 < 0.9)
+    const brightnesses = [15, 15, 15, 15, 15, 15, 15, 15, 100, 100];
+    const result = classifyBlackFrames(brightnesses, {
+      brightnessThreshold: 10,
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.nearBlackFrameCount).toBe(8);
+    expect(result.nearBlackRatio).toBe(0.8);
+    expect(result.isNearBlackSegment).toBe(false);
+  });
+
+  it('pure black takes priority over near-black', () => {
+    // All frames are pure black (brightness < 10), which also means < 20
+    // Both conditions met: blackFrameRatio = 1.0 > 0.8 AND nearBlackRatio = 1.0 > 0.9
+    // Priority: isBlackFrameSegment = true, isNearBlackSegment = false
+    const brightnesses = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const result = classifyBlackFrames(brightnesses, {
+      brightnessThreshold: 10,
+      ratioThreshold: 0.8,
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.blackFrameRatio).toBe(1.0);
+    expect(result.isBlackFrameSegment).toBe(true);
+    expect(result.nearBlackRatio).toBe(1.0);
+    expect(result.isNearBlackSegment).toBe(false); // Priority: pure black wins
+  });
+
+  it('near-black ratio counts frames below nearBlackThreshold independently', () => {
+    // Mix: some pure black, some near-black, some bright
+    // Pure black (< 10): 5, 8 → 2 frames
+    // Near-black (< 20): 5, 8, 12, 15, 18 → 5 frames
+    const brightnesses = [5, 8, 12, 15, 18, 50, 100, 150, 200, 250];
+    const result = classifyBlackFrames(brightnesses, {
+      brightnessThreshold: 10,
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.blackFrameCount).toBe(2);
+    expect(result.blackFrameRatio).toBe(0.2);
+    expect(result.nearBlackFrameCount).toBe(5);
+    expect(result.nearBlackRatio).toBe(0.5);
+    expect(result.isBlackFrameSegment).toBe(false);
+    expect(result.isNearBlackSegment).toBe(false);
+  });
+
+  it('respects custom nearBlackThreshold', () => {
+    const brightnesses = [25, 30, 35, 40, 45];
+    const result = classifyBlackFrames(brightnesses, {
+      nearBlackThreshold: 50,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.nearBlackFrameCount).toBe(5); // all < 50
+    expect(result.nearBlackRatio).toBe(1.0);
+    expect(result.isNearBlackSegment).toBe(true);
+    expect(result.nearBlackThresholdUsed).toBe(50);
+  });
+
+  it('respects custom nearBlackRatioThreshold', () => {
+    // 7 out of 10 are near-black (ratio = 0.7)
+    const brightnesses = [15, 15, 15, 15, 15, 15, 15, 100, 100, 100];
+    const result = classifyBlackFrames(brightnesses, {
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.6, // lower threshold
+    });
+
+    expect(result.nearBlackRatio).toBe(0.7);
+    expect(result.isNearBlackSegment).toBe(true); // 0.7 > 0.6
+  });
+});
+
+describe('parseNearBlackThreshold', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.VIDEO_NEAR_BLACK_THRESHOLD;
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns default 20 when env is not set', () => {
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+
+  it('returns parsed value when valid', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = '30';
+    expect(parseNearBlackThreshold()).toBe(30);
+  });
+
+  it('returns default for value below range', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = '0';
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+
+  it('returns default for value above range', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = '256';
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+
+  it('returns default for non-numeric value', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = 'abc';
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+
+  it('returns default for empty string', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = '';
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+
+  it('rounds float values to integer', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = '25.7';
+    expect(parseNearBlackThreshold()).toBe(26);
+  });
+
+  it('returns default for Infinity', () => {
+    process.env.VIDEO_NEAR_BLACK_THRESHOLD = 'Infinity';
+    expect(parseNearBlackThreshold()).toBe(20);
+  });
+});
+
+describe('parseNearBlackRatioThreshold', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.VIDEO_NEAR_BLACK_RATIO;
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('returns default 0.9 when env is not set', () => {
+    expect(parseNearBlackRatioThreshold()).toBe(0.9);
+  });
+
+  it('returns parsed value when valid', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = '0.8';
+    expect(parseNearBlackRatioThreshold()).toBe(0.8);
+  });
+
+  it('accepts 0.0 as valid', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = '0.0';
+    expect(parseNearBlackRatioThreshold()).toBe(0.0);
+  });
+
+  it('accepts 1.0 as valid', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = '1.0';
+    expect(parseNearBlackRatioThreshold()).toBe(1.0);
+  });
+
+  it('returns default for value below range', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = '-0.1';
+    expect(parseNearBlackRatioThreshold()).toBe(0.9);
+  });
+
+  it('returns default for value above range', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = '1.1';
+    expect(parseNearBlackRatioThreshold()).toBe(0.9);
+  });
+
+  it('returns default for non-numeric value', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = 'xyz';
+    expect(parseNearBlackRatioThreshold()).toBe(0.9);
+  });
+
+  it('returns default for NaN', () => {
+    process.env.VIDEO_NEAR_BLACK_RATIO = 'NaN';
+    expect(parseNearBlackRatioThreshold()).toBe(0.9);
+  });
+});
+
 describe('detectBlackFrames', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -285,10 +495,16 @@ describe('detectBlackFrames', () => {
     expect(result.blackFrameCount).toBeGreaterThanOrEqual(0);
     expect(result.thresholdUsed).toBe(10);
 
-    // With brightness=128 (all frames), no frames should be black
+    // With brightness=128 (all frames), no frames should be black or near-black
     expect(result.blackFrameCount).toBe(0);
     expect(result.blackFrameScore).toBe(1.0);
     expect(result.isBlackFrameSegment).toBe(false);
+
+    // Near-black fields should also be present and valid
+    expect(result.nearBlackRatio).toBe(0);
+    expect(result.nearBlackFrameCount).toBe(0);
+    expect(result.isNearBlackSegment).toBe(false);
+    expect(result.nearBlackThresholdUsed).toBe(20);
   });
 
   it('short segment (<0.5s) — samples exactly 2 frames', async () => {
@@ -367,5 +583,38 @@ describe('detectBlackFrames', () => {
 
     expect(mockFfmpeg).toHaveBeenCalledTimes(10);
     expect(result.sampledFrameCount).toBe(10);
+  });
+
+  it('detects near-black frames when sharp returns dim pixels', async () => {
+    // Return near-black buffer (brightness 15: above pure-black 10, below near-black 20)
+    mockSharpChain.toBuffer.mockResolvedValue(Buffer.alloc(100, 15));
+
+    const result = await detectBlackFrames('/fake/video.mp4', 0, 2, {
+      brightnessThreshold: 10,
+      nearBlackThreshold: 20,
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.sampledFrameCount).toBe(5);
+    expect(result.blackFrameCount).toBe(0); // 15 >= 10
+    expect(result.isBlackFrameSegment).toBe(false);
+    expect(result.nearBlackFrameCount).toBe(5); // 15 < 20
+    expect(result.nearBlackRatio).toBe(1.0);
+    expect(result.isNearBlackSegment).toBe(true);
+  });
+
+  it('passes near-black options through to classifyBlackFrames', async () => {
+    // Return buffer with brightness 25 (above default near-black threshold 20)
+    mockSharpChain.toBuffer.mockResolvedValue(Buffer.alloc(100, 25));
+
+    const result = await detectBlackFrames('/fake/video.mp4', 0, 2, {
+      nearBlackThreshold: 30, // custom threshold: 25 < 30
+      nearBlackRatioThreshold: 0.9,
+    });
+
+    expect(result.nearBlackFrameCount).toBe(5); // 25 < 30
+    expect(result.nearBlackRatio).toBe(1.0);
+    expect(result.isNearBlackSegment).toBe(true);
+    expect(result.nearBlackThresholdUsed).toBe(30);
   });
 });

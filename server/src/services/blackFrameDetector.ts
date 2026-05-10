@@ -19,13 +19,53 @@ export interface BlackFrameResult {
   sampledFrameCount: number;
   blackFrameCount: number;
   thresholdUsed: number;
+
+  // Near-black frame detection fields
+  nearBlackRatio: number;           // [0.0, 1.0] — 近黑帧占比
+  nearBlackFrameCount: number;      // 近黑帧数量
+  isNearBlackSegment: boolean;      // nearBlackRatio > nearBlackRatioThreshold
+  nearBlackThresholdUsed: number;   // 使用的近黑亮度阈值
 }
 
 export interface BlackFrameDetectionOptions {
-  brightnessThreshold?: number;  // default 10
-  ratioThreshold?: number;       // default 0.8
-  minSamples?: number;           // default 5
+  brightnessThreshold?: number;     // 纯黑阈值，默认 10
+  ratioThreshold?: number;          // 纯黑占比阈值，默认 0.8
+  minSamples?: number;              // 最小采样数，默认 5
+  nearBlackThreshold?: number;      // 近黑亮度阈值，默认 20
+  nearBlackRatioThreshold?: number; // 近黑占比阈值，默认 0.9
 }
+
+// ---------------------------------------------------------------------------
+// Environment variable parsing for near-black detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse VIDEO_NEAR_BLACK_THRESHOLD from environment.
+ * Valid range: 1-255 (integer). Returns default 20 if invalid.
+ */
+export function parseNearBlackThreshold(): number {
+  const raw = process.env.VIDEO_NEAR_BLACK_THRESHOLD;
+  if (raw === undefined) return 20;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 255) return 20;
+  return Math.round(parsed);
+}
+
+/**
+ * Parse VIDEO_NEAR_BLACK_RATIO from environment.
+ * Valid range: 0.0-1.0 (float). Returns default 0.9 if invalid.
+ */
+export function parseNearBlackRatioThreshold(): number {
+  const raw = process.env.VIDEO_NEAR_BLACK_RATIO;
+  if (raw === undefined) return 0.9;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0.0 || parsed > 1.0) return 0.9;
+  return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Core functions
+// ---------------------------------------------------------------------------
 
 /**
  * Compute the mean brightness of a raw grayscale pixel buffer.
@@ -48,8 +88,12 @@ export function computeFrameBrightness(grayPixels: Buffer): number {
 }
 
 /**
- * Classify black frames from an array of brightness values.
- * Pure function: computes blackFrameRatio, blackFrameScore, isBlackFrameSegment.
+ * Classify black frames and near-black frames from an array of brightness values.
+ * Pure function: computes blackFrameRatio, nearBlackRatio, and segment classification.
+ *
+ * Priority: pure black frame segment takes precedence over near-black frame segment.
+ * When both blackFrameRatio > ratioThreshold AND nearBlackRatio > nearBlackRatioThreshold,
+ * the segment is marked as pure black (isBlackFrameSegment = true, isNearBlackSegment = false).
  *
  * @param brightnesses - Array of per-frame mean brightness values
  * @param options - Detection options (thresholds)
@@ -61,6 +105,8 @@ export function classifyBlackFrames(
 ): BlackFrameResult {
   const brightnessThreshold = options?.brightnessThreshold ?? 10;
   const ratioThreshold = options?.ratioThreshold ?? 0.8;
+  const nearBlackThreshold = options?.nearBlackThreshold ?? parseNearBlackThreshold();
+  const nearBlackRatioThreshold = options?.nearBlackRatioThreshold ?? parseNearBlackRatioThreshold();
 
   if (brightnesses.length === 0) {
     return {
@@ -70,19 +116,32 @@ export function classifyBlackFrames(
       sampledFrameCount: 0,
       blackFrameCount: 0,
       thresholdUsed: brightnessThreshold,
+      nearBlackRatio: 0,
+      nearBlackFrameCount: 0,
+      isNearBlackSegment: false,
+      nearBlackThresholdUsed: nearBlackThreshold,
     };
   }
 
   let blackFrameCount = 0;
+  let nearBlackFrameCount = 0;
+
   for (const brightness of brightnesses) {
     if (brightness < brightnessThreshold) {
       blackFrameCount++;
     }
+    if (brightness < nearBlackThreshold) {
+      nearBlackFrameCount++;
+    }
   }
 
   const blackFrameRatio = blackFrameCount / brightnesses.length;
+  const nearBlackRatio = nearBlackFrameCount / brightnesses.length;
   const blackFrameScore = 1.0 - blackFrameRatio;
   const isBlackFrameSegment = blackFrameRatio > ratioThreshold;
+
+  // Priority: pure black frame segment takes precedence over near-black
+  const isNearBlackSegment = !isBlackFrameSegment && nearBlackRatio > nearBlackRatioThreshold;
 
   return {
     blackFrameRatio,
@@ -91,6 +150,10 @@ export function classifyBlackFrames(
     sampledFrameCount: brightnesses.length,
     blackFrameCount,
     thresholdUsed: brightnessThreshold,
+    nearBlackRatio,
+    nearBlackFrameCount,
+    isNearBlackSegment,
+    nearBlackThresholdUsed: nearBlackThreshold,
   };
 }
 
@@ -217,6 +280,10 @@ export async function persistBlackFrameResult(
     sampledFrameCount: result.sampledFrameCount,
     blackFrameCount: result.blackFrameCount,
     thresholdUsed: result.thresholdUsed,
+    nearBlackRatio: result.nearBlackRatio,
+    nearBlackFrameCount: result.nearBlackFrameCount,
+    isNearBlackSegment: result.isNearBlackSegment,
+    nearBlackThresholdUsed: result.nearBlackThresholdUsed,
   });
 
   upsertAnalysisResult({

@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { getTempDir } from '../helpers/tempDir';
 import { computeSharpness } from './blurDetector';
 import { VIDEO_THRESHOLDS } from './videoThresholds';
+import { createDefaultConcurrencyController, ConcurrencyController } from './concurrencyController';
 
 export interface VideoSegment {
   index: number;
@@ -80,13 +81,14 @@ async function estimateStability(
     await extractFrameAt(videoPath, startTime, startFramePath);
     await extractFrameAt(videoPath, endTime, endFramePath);
 
-    const startBuf = await sharp(startFramePath)
+    // Load both frames as 64x64 grayscale (max 2 frames in memory for stability comparison)
+    let startBuf: Buffer | null = await sharp(startFramePath)
       .resize(64, 64)
       .grayscale()
       .raw()
       .toBuffer();
 
-    const endBuf = await sharp(endFramePath)
+    let endBuf: Buffer | null = await sharp(endFramePath)
       .resize(64, 64)
       .grayscale()
       .raw()
@@ -99,6 +101,10 @@ async function estimateStability(
     }
     const meanDiff = totalDiff / pixelCount;
 
+    // Release Buffer references immediately after pixel comparison (Requirement 11.4)
+    startBuf = null;
+    endBuf = null;
+
     // Map mean difference to stability score
     if (meanDiff < 5) {
       return 100;
@@ -110,9 +116,13 @@ async function estimateStability(
       return Math.max(0, 50 - ((meanDiff - 15) / 30) * 50);
     }
   } finally {
-    // Clean up temp frame files
-    try { fs.unlinkSync(startFramePath); } catch { /* ignore */ }
-    try { fs.unlinkSync(endFramePath); } catch { /* ignore */ }
+    // Clean up temp frame files immediately (Requirement 11.3)
+    try { fs.unlinkSync(startFramePath); } catch (err) {
+      console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${startFramePath}`, err);
+    }
+    try { fs.unlinkSync(endFramePath); } catch (err) {
+      console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${endFramePath}`, err);
+    }
   }
 }
 
@@ -164,7 +174,8 @@ export function assignLabel(
 export async function analyzeVideo(
   videoPath: string,
   mediaId: string,
-  segmentDuration: number = 2
+  segmentDuration: number = 2,
+  concurrencyController?: ConcurrencyController
 ): Promise<VideoAnalysisResult> {
   const duration = await getVideoDuration(videoPath);
 
@@ -181,50 +192,62 @@ export async function analyzeVideo(
   // Create a temp directory for intermediate frame files
   const tempDir = fs.mkdtempSync(path.join(getTempDir(), `video-analysis-${mediaId}-`));
 
+  // Use provided ConcurrencyController or create a default one (Requirement 11.1, 4.2)
+  const cc = concurrencyController ?? createDefaultConcurrencyController();
+
   try {
+    // Process segments sequentially with concurrency control (Requirement 11.1)
     for (let i = 0; i < boundaries.length; i++) {
-      const { start: startTime, end: endTime } = boundaries[i];
-      const segDuration = endTime - startTime;
-      const midTime = startTime + segDuration / 2;
-
-      // Extract middle frame for sharpness and exposure
-      const midFramePath = path.join(tempDir, `seg${i}_mid.png`);
-      let sharpnessScore = 0;
-      let exposureScore = 50;
+      await cc.acquire();
       try {
-        await extractFrameAt(videoPath, midTime, midFramePath);
-        sharpnessScore = await computeSharpness(midFramePath);
-        const exposureResult = await computeExposureScore(midFramePath);
-        exposureScore = exposureResult.exposureScore;
-      } catch {
-        sharpnessScore = 0;
-        exposureScore = 50;
+        const { start: startTime, end: endTime } = boundaries[i];
+        const segDuration = endTime - startTime;
+        const midTime = startTime + segDuration / 2;
+
+        // Extract middle frame for sharpness and exposure (max 1 frame in memory)
+        const midFramePath = path.join(tempDir, `seg${i}_mid.png`);
+        let sharpnessScore = 0;
+        let exposureScore = 50;
+        try {
+          await extractFrameAt(videoPath, midTime, midFramePath);
+          sharpnessScore = await computeSharpness(midFramePath);
+          const exposureResult = await computeExposureScore(midFramePath);
+          exposureScore = exposureResult.exposureScore;
+        } catch {
+          sharpnessScore = 0;
+          exposureScore = 50;
+        } finally {
+          // Delete temp frame immediately after analysis (Requirement 11.3)
+          try { fs.unlinkSync(midFramePath); } catch (err) {
+            console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${midFramePath}`, err);
+          }
+        }
+
+        // Estimate stability from start/end frame comparison (max 2 frames in memory)
+        let stabilityScore = 100;
+        try {
+          stabilityScore = await estimateStability(videoPath, startTime, endTime, tempDir, i);
+        } catch {
+          stabilityScore = 100; // Default to stable if estimation fails
+        }
+
+        const overallScore = sharpnessScore * 0.4 + stabilityScore * 0.3 + exposureScore * 0.3;
+        const label = assignLabel(sharpnessScore, stabilityScore, exposureScore);
+
+        segments.push({
+          index: i,
+          startTime,
+          endTime,
+          duration: segDuration,
+          sharpnessScore,
+          stabilityScore,
+          exposureScore,
+          overallScore,
+          label,
+        });
       } finally {
-        try { fs.unlinkSync(midFramePath); } catch { /* ignore */ }
+        cc.release();
       }
-
-      // Estimate stability from start/end frame comparison
-      let stabilityScore = 100;
-      try {
-        stabilityScore = await estimateStability(videoPath, startTime, endTime, tempDir, i);
-      } catch {
-        stabilityScore = 100; // Default to stable if estimation fails
-      }
-
-      const overallScore = sharpnessScore * 0.4 + stabilityScore * 0.3 + exposureScore * 0.3;
-      const label = assignLabel(sharpnessScore, stabilityScore, exposureScore);
-
-      segments.push({
-        index: i,
-        startTime,
-        endTime,
-        duration: segDuration,
-        sharpnessScore,
-        stabilityScore,
-        exposureScore,
-        overallScore,
-        label,
-      });
     }
   } finally {
     // Clean up temp directory
@@ -308,13 +331,21 @@ export interface ExposureAnalysis {
  */
 export async function computeExposureScore(framePath: string): Promise<ExposureAnalysis> {
   try {
-    const rawBuf = await sharp(framePath).grayscale().raw().toBuffer();
+    // Resize to 64x64 grayscale before pixel computation (Requirement 11.5)
+    let rawBuf: Buffer | null = await sharp(framePath)
+      .resize(64, 64)
+      .grayscale()
+      .raw()
+      .toBuffer();
     const totalPixels = rawBuf.length;
     const histogram = new Float64Array(256);
 
     for (let i = 0; i < totalPixels; i++) {
       histogram[rawBuf[i]]++;
     }
+
+    // Release Buffer reference immediately after extracting histogram (Requirement 11.2)
+    rawBuf = null;
 
     // Compute mean brightness
     let mean = 0;
