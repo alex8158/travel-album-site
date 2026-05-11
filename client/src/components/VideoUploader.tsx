@@ -558,9 +558,12 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    if (inputRef.current) inputRef.current.value = '';
 
+    // IMPORTANT: convert FileList to array BEFORE clearing input.value,
+    // because setting value='' empties the FileList reference.
     const fileArray = Array.from(files);
+
+    if (inputRef.current) inputRef.current.value = '';
 
     // Check if this is a resume scenario (single file matching resume data)
     const rd = resumeDataRef.current;
