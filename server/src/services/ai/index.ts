@@ -4,15 +4,26 @@ export { AIProviderRegistry, type InvocationContext } from './registry';
 export { BedrockProvider } from './bedrockProvider';
 export { OpenAIProvider } from './openaiProvider';
 export { ContentAnalyzer } from './contentAnalyzer';
-export { EditPlanner } from './editPlanner';
+export { EditPlanner, hasAIAnalysis, calculateWeightedScore, fallbackSelection } from './editPlanner';
 export { TextGenerator } from './textGenerator';
 export { CostTracker } from './costTracker';
 export { BudgetController } from './budgetController';
+export { getModelPricing, FALLBACK_INPUT_PRICE_PER_MTOKEN, FALLBACK_OUTPUT_PRICE_PER_MTOKEN } from './pricingConfig';
 export { resizeForProvider, getImageDimensions } from './imageUtils';
+export {
+  executeDegradationChain,
+  getAvailableProvider,
+  isAIServiceConfigured,
+  setRegistryGetter,
+  type DegradationLevel,
+  type DegradationResult,
+  type DegradationOptions,
+} from './degradationStrategy';
 
 import { AIProviderRegistry } from './registry';
 import { BedrockProvider } from './bedrockProvider';
 import { OpenAIProvider } from './openaiProvider';
+import { setRegistryGetter } from './degradationStrategy';
 
 let registryInstance: AIProviderRegistry | null = null;
 
@@ -31,6 +42,9 @@ export function getAIProviderRegistry(): AIProviderRegistry {
       const provider = new OpenAIProvider();
       registryInstance.register(provider.metadata.name, provider);
     }
+
+    // Inject the registry getter into degradationStrategy to avoid circular dependency
+    setRegistryGetter(() => getAIProviderRegistry());
   }
   return registryInstance;
 }

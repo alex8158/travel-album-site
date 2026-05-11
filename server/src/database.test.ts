@@ -64,11 +64,13 @@ describe('Database initialization', () => {
   it('should allow inserting and querying a trip', () => {
     const db = getDb();
     const now = new Date().toISOString();
+    // Clean up from any previous test run
+    db.prepare('DELETE FROM trips WHERE id = ?').run('trip-db-test-1');
     db.prepare(
       'INSERT INTO trips (id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-    ).run('trip-1', 'Test Trip', 'A test trip', now, now);
+    ).run('trip-db-test-1', 'Test Trip', 'A test trip', now, now);
 
-    const row = db.prepare('SELECT * FROM trips WHERE id = ?').get('trip-1') as any;
+    const row = db.prepare('SELECT * FROM trips WHERE id = ?').get('trip-db-test-1') as any;
     expect(row.title).toBe('Test Trip');
     expect(row.description).toBe('A test trip');
   });

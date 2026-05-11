@@ -89,17 +89,52 @@ export function validateEditPlan(
 }
 
 /**
- * Fallback strategy: select segments by weighted score (narrativeScore * 0.4 + overallScore * 0.6)
- * in descending order, respecting duration limit.
+ * Determine if AI analysis results are available for the given segments.
+ * AI analysis is considered available if at least one segment has a non-default narrativeScore.
+ * (Default narrativeScore is 50 when no AI analysis exists.)
+ */
+export function hasAIAnalysis(segments: SegmentWithScores[]): boolean {
+  // If all segments have narrativeScore === 50 and empty sceneDescription,
+  // it's likely that no AI analysis was performed (all defaults).
+  return segments.some(s => s.narrativeScore !== 50 || s.sceneDescription !== '');
+}
+
+/**
+ * Calculate weighted score for a segment.
+ * When AI analysis is available: narrativeScore * 0.4 + overallScore * 0.6
+ * When AI analysis is not available: pure overallScore
+ *
+ * Requirements: 9.5, 9.6
+ */
+export function calculateWeightedScore(
+  segment: SegmentWithScores,
+  aiAvailable: boolean,
+): number {
+  if (!aiAvailable) {
+    return segment.overallScore;
+  }
+  return segment.narrativeScore * 0.4 + segment.overallScore * 0.6;
+}
+
+/**
+ * Fallback strategy: select segments by weighted score in descending order,
+ * respecting duration limit.
+ *
+ * When AI analysis is available: uses narrativeScore * 0.4 + overallScore * 0.6
+ * When AI analysis is not available: falls back to pure overallScore sorting
+ *
+ * Requirements: 9.5, 9.6
  */
 export function fallbackSelection(
   segments: SegmentWithScores[],
   mediaId: string,
   targetDuration: number,
 ): EditPlan {
+  const aiAvailable = hasAIAnalysis(segments);
+
   const sorted = [...segments].sort((a, b) => {
-    const scoreA = a.narrativeScore * 0.4 + a.overallScore * 0.6;
-    const scoreB = b.narrativeScore * 0.4 + b.overallScore * 0.6;
+    const scoreA = calculateWeightedScore(a, aiAvailable);
+    const scoreB = calculateWeightedScore(b, aiAvailable);
     return scoreB - scoreA;
   });
 
@@ -108,9 +143,12 @@ export function fallbackSelection(
 
   for (const seg of sorted) {
     if (totalDuration >= targetDuration) break;
+    const reason = aiAvailable
+      ? `质量评分 ${seg.overallScore.toFixed(0)}, 叙事评分 ${seg.narrativeScore}`
+      : `质量评分 ${seg.overallScore.toFixed(0)}`;
     selected.push({
       segmentIndex: seg.index,
-      reason: `质量评分 ${seg.overallScore.toFixed(0)}, 叙事评分 ${seg.narrativeScore}`,
+      reason,
       transitionTo: 'cut',
     });
     totalDuration += seg.duration;
@@ -123,12 +161,16 @@ export function fallbackSelection(
     return segA.startTime - segB.startTime;
   });
 
+  const narrativeSummary = aiAvailable
+    ? '基于质量和叙事评分自动选择的片段组合'
+    : '基于质量评分自动选择的片段组合（AI 分析不可用）';
+
   return {
     mediaId,
     segments: selected,
     pace: 'medium',
     totalDuration,
-    narrativeSummary: '基于质量和叙事评分自动选择的片段组合',
+    narrativeSummary,
   };
 }
 

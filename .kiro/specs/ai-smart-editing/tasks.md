@@ -54,7 +54,7 @@
     - 返回 usage 信息
     - _Requirements: 1.3, 1.6, 1.7, 1.8, 10.1, 10.2, 10.6_
 
-  - [~] 2.4 实现图片缩放工具函数 resizeForProvider
+  - [x] 2.4 实现图片缩放工具函数 resizeForProvider
     - 创建 `server/src/services/ai/imageUtils.ts`
     - 实现 `resizeForProvider(base64, maxWidth, maxHeight)` 函数
     - 保持宽高比不变，缩放至提供商最大尺寸限制内（默认 768×768）
@@ -73,11 +73,11 @@
     - 验证工厂函数根据环境变量正确选择提供商
     - _Requirements: 1.5, 1.6, 1.7_
 
-- [~] 3. Checkpoint - 确保 AI Provider 层测试通过
+- [x] 3. Checkpoint - 确保 AI Provider 层测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. 成本追踪与预算控制
-  - [~] 4.1 实现 CostTracker 成本追踪器
+- [x] 4. 成本追踪与预算控制
+  - [x] 4.1 实现 CostTracker 成本追踪器
     - 创建 `server/src/services/ai/costTracker.ts`
     - 实现 `recordUsage()` 方法：记录 AI 调用到 ai_usage_records 表
     - 实现 `calculateCost()` 方法：基于配置单价计算费用
@@ -106,7 +106,7 @@
     - 使用 fast-check 生成随机中英文混合字符串
     - 验证 estimateTokens 返回值在 len(s)/6 到 len(s)/2 范围内
 
-  - [~] 4.5 实现 BudgetController 预算控制器
+  - [x] 4.5 实现 BudgetController 预算控制器
     - 创建 `server/src/services/ai/budgetController.ts`
     - 实现 `checkBudget()` 方法：检查用户预算（含 80% 警告阈值）
     - 实现 `getBudgetConfig()` 方法：获取用户预算配置
@@ -128,11 +128,11 @@
     - 验证记录创建、费用计算、统计查询、预算检查、警告级别、重置操作
     - _Requirements: 5.1, 5.2, 6.3, 6.4, 6.5, 6.7_
 
-- [~] 5. Checkpoint - 确保成本追踪与预算控制测试通过
+- [x] 5. Checkpoint - 确保成本追踪与预算控制测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. ContentAnalyzer 内容分析器
-  - [~] 6.1 实现 ContentAnalyzer 核心逻辑
+- [x] 6. ContentAnalyzer 内容分析器
+  - [x] 6.1 实现 ContentAnalyzer 核心逻辑
     - 创建 `server/src/services/ai/contentAnalyzer.ts`
     - 实现 `analyzeContent()` 方法：从 video_segments 提取代表帧，调用 AI 多模态分析
     - 实现批量分析模式（每批最大 5 个片段合并为一次 AI 调用）
@@ -161,8 +161,8 @@
     - Mock AIProvider，验证批量分析、缓存命中、默认值设置
     - _Requirements: 2.5, 2.6, 2.7, 2.8_
 
-- [ ] 7. EditPlanner 剪辑方案规划器
-  - [~] 7.1 实现 EditPlanner 核心逻辑
+- [x] 7. EditPlanner 剪辑方案规划器
+  - [x] 7.1 实现 EditPlanner 核心逻辑
     - 创建 `server/src/services/ai/editPlanner.ts`
     - 实现 `generateEditPlan()` 方法：构建 prompt（含所有片段分析结果 + 质量评分 + 时长）
     - 实现 `validateEditPlan()` 验证函数：检查 JSON 格式、片段索引范围、必填字段
@@ -202,11 +202,11 @@
     - Mock AIProvider，验证 prompt 构建、方案解析、回退触发
     - _Requirements: 3.1, 3.6, 3.7_
 
-- [~] 8. Checkpoint - 确保 ContentAnalyzer 和 EditPlanner 测试通过
+- [x] 8. Checkpoint - 确保 ContentAnalyzer 和 EditPlanner 测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 9. TextGenerator 文本生成器
-  - [~] 9.1 实现 TextGenerator 核心逻辑
+- [x] 9. TextGenerator 文本生成器
+  - [x] 9.1 实现 TextGenerator 核心逻辑
     - 创建 `server/src/services/ai/textGenerator.ts`
     - 实现 `generateText()` 方法：根据 type 参数分发到不同生成逻辑
     - 实现标题生成：基于所有片段 Scene_Description + Emotion_Tag 生成 3 个候选标题
@@ -230,8 +230,8 @@
     - Mock AIProvider，验证各类型文案生成、风格参数传递、失败处理
     - _Requirements: 4.1, 4.6, 4.7_
 
-- [ ] 10. API 路由层
-  - [~] 10.1 实现 AI 剪辑 API 路由
+- [x] 10. API 路由层
+  - [x] 10.1 实现 AI 剪辑 API 路由
     - 创建 `server/src/routes/aiEditing.ts`
     - 实现 `POST /api/media/:id/ai-analyze`：触发 AI 内容分析，创建 processing_job，返回 jobId
     - 实现 `GET /api/media/:id/ai-analysis`：返回该视频所有片段的 AI 分析结果
@@ -244,14 +244,14 @@
     - 实现参数校验、认证检查、404/401/503 错误处理
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 8.10_
 
-  - [~] 10.2 实现管理员 AI 端点
+  - [x] 10.2 实现管理员 AI 端点
     - 在 `server/src/routes/aiEditing.ts` 中添加管理员路由
     - 实现 `GET /api/admin/ai/usage`：查看所有用户 AI 使用情况
     - 实现 `PUT /api/admin/ai/budget/:userId`：设置用户自定义预算
     - 实现 `POST /api/admin/ai/budget/:userId/reset`：重置用户已用预算
     - _Requirements: 6.2, 6.6, 6.7_
 
-  - [~] 10.3 注册 AI 路由到 Express 应用
+  - [x] 10.3 注册 AI 路由到 Express 应用
     - 在 `server/src/index.ts` 或主路由文件中引入并注册 aiEditing 路由
     - 确保 AI Provider 配置缺失时 API 返回 HTTP 503
     - _Requirements: 10.5_
@@ -263,24 +263,24 @@
     - 测试预算超出时 API 拒绝
     - _Requirements: 8.9, 8.10, 6.4_
 
-- [~] 11. Checkpoint - 确保 API 路由测试通过
+- [x] 11. Checkpoint - 确保 API 路由测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 12. 管线集成与降级策略
-  - [~] 12.1 集成 AI 分析到现有视频处理管线
+- [x] 12. 管线集成与降级策略
+  - [x] 12.1 集成 AI 分析到现有视频处理管线
     - 修改现有视频处理管线代码，在片段分析完成后支持可选的 AI 分析步骤
     - 通过环境变量 `AI_AUTO_ANALYZE` 控制是否自动触发（默认关闭）
     - 自动触发前检查预算是否充足，不足则跳过并记录日志
     - 确保 AI 分析失败不影响管线其余步骤
     - _Requirements: 9.1, 9.2, 9.3, 9.4_
 
-  - [~] 12.2 实现 EditPlanner 与现有质量评分的融合
+  - [x] 12.2 实现 EditPlanner 与现有质量评分的融合
     - 修改 EditPlanner，在生成方案时同时考虑 narrativeScore 和 overallScore
     - 实现加权策略：narrativeScore * 0.4 + overallScore * 0.6
     - 当 AI 分析结果不可用时，回退到纯 overallScore 排序
     - _Requirements: 9.5, 9.6_
 
-  - [~] 12.3 实现完整降级策略链
+  - [x] 12.3 实现完整降级策略链
     - 实现降级优先级：AI 完整功能 → AI 部分可用 → 纯质量评分策略 → 错误提示
     - 确保每个降级层级都能产出可用的剪辑结果
     - 实现 AI Provider 配置缺失时的 503 响应
@@ -300,7 +300,7 @@
     - 确保每个属性测试最少运行 100 次迭代
     - _Requirements: 全部正确性属性 P1-P12_
 
-- [~] 14. Final Checkpoint - 确保所有测试通过
+- [x] 14. Final Checkpoint - 确保所有测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

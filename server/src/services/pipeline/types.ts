@@ -93,7 +93,8 @@ export type PipelineStage =
   | 'blackFrameDetect'
   | 'junkDetect'
   | 'versionGenerate'
-  | 'cover';
+  | 'cover'
+  | 'aiAnalysis';
 
 export interface PipelineProgressCallback {
   (stage: PipelineStage, status: 'start' | 'complete' | 'progress', detail?: string): void;

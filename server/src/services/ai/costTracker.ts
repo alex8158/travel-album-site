@@ -9,19 +9,7 @@
 import { v4 as uuid } from 'uuid';
 import { getDb } from '../../database';
 import type { AICallType, AIUsageRecord, ModelPricing, UsageStats } from './types';
-
-// ---------------------------------------------------------------------------
-// Pricing Configuration
-// ---------------------------------------------------------------------------
-
-/** Default model pricing (per million tokens, USD) */
-const DEFAULT_PRICING: ModelPricing[] = [
-  { provider: 'bedrock', model: 'anthropic.claude-3-haiku-20240307-v1:0', inputPricePerMToken: 0.25, outputPricePerMToken: 1.25 },
-  { provider: 'bedrock', model: 'anthropic.claude-3-sonnet-20240229-v1:0', inputPricePerMToken: 3.0, outputPricePerMToken: 15.0 },
-  { provider: 'bedrock', model: 'anthropic.claude-3-5-sonnet-20241022-v2:0', inputPricePerMToken: 3.0, outputPricePerMToken: 15.0 },
-  { provider: 'openai', model: 'gpt-4o-mini', inputPricePerMToken: 0.15, outputPricePerMToken: 0.60 },
-  { provider: 'openai', model: 'gpt-4o', inputPricePerMToken: 2.50, outputPricePerMToken: 10.0 },
-];
+import { getModelPricing, FALLBACK_INPUT_PRICE_PER_MTOKEN, FALLBACK_OUTPUT_PRICE_PER_MTOKEN } from './pricingConfig';
 
 // ---------------------------------------------------------------------------
 // CostTracker Implementation
@@ -31,7 +19,7 @@ export class CostTracker {
   private pricing: ModelPricing[];
 
   constructor() {
-    this.pricing = DEFAULT_PRICING;
+    this.pricing = getModelPricing();
   }
 
   /**
@@ -42,8 +30,8 @@ export class CostTracker {
     const pricing = this.pricing.find(p => p.provider === provider && p.model === model);
 
     // Fallback: use generic pricing if model not found
-    const inputPrice = pricing?.inputPricePerMToken ?? 1.0;
-    const outputPrice = pricing?.outputPricePerMToken ?? 3.0;
+    const inputPrice = pricing?.inputPricePerMToken ?? FALLBACK_INPUT_PRICE_PER_MTOKEN;
+    const outputPrice = pricing?.outputPricePerMToken ?? FALLBACK_OUTPUT_PRICE_PER_MTOKEN;
 
     return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000;
   }

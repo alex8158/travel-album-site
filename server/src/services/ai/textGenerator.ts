@@ -195,12 +195,12 @@ ${context}
   }
 
   private async generateSubtitles(request: TextGenerationRequest): Promise<TextGenerationResult> {
-    const context = this.loadAnalysisContext(request.mediaId);
+    const context = this.loadSelectedSegmentsContext(request.mediaId);
     const styleDesc = request.style ? STYLE_DESCRIPTIONS[request.style] : '';
 
-    const prompt = `基于以下视频片段内容，为每个片段生成一句字幕。每句字幕不超过20个字符。${styleDesc ? `\n风格要求：${styleDesc}` : ''}
+    const prompt = `基于以下选中的视频片段内容，为每个片段生成一句字幕。每句字幕不超过20个字符。${styleDesc ? `\n风格要求：${styleDesc}` : ''}
 
-片段内容：
+选中片段内容：
 ${context}
 
 请以JSON格式返回：{"subtitles": [{"segmentIndex": 0, "text": "字幕内容"}]}`;
@@ -243,6 +243,7 @@ ${context}
 
   private async generateNarration(request: TextGenerationRequest): Promise<TextGenerationResult> {
     const context = this.loadAnalysisContext(request.mediaId);
+    const editPlanContext = this.loadEditPlanContext(request.mediaId);
     const styleDesc = request.style ? STYLE_DESCRIPTIONS[request.style] : '';
 
     // Get video total duration for length constraint
@@ -260,6 +261,7 @@ ${context}
 片段内容：
 ${context}
 
+${editPlanContext ? `剪辑方案：\n${editPlanContext}\n` : ''}
 请以JSON格式返回：{"narration": "旁白文案内容..."}`;
 
     const response = await this.provider.generateText(prompt, { maxTokens: 2048 });
@@ -332,6 +334,100 @@ ${context}
       const tags = JSON.parse(row.emotion_tags || '[]');
       return `片段${row.segment_index}: ${row.scene_description} [${tags.join(',')}]`;
     }).join('\n');
+  }
+
+  /**
+   * Load context for selected segments only (from EditPlan).
+   * Falls back to all segments if no EditPlan exists.
+   */
+  private loadSelectedSegmentsContext(mediaId: string): string {
+    const db = getDb();
+
+    // Try to get selected segment indices from the latest EditPlan
+    const planRow = db.prepare(
+      `SELECT plan_json FROM ai_edit_plans WHERE media_id = ? ORDER BY created_at DESC LIMIT 1`
+    ).get(mediaId) as { plan_json: string } | undefined;
+
+    let selectedIndices: number[] | null = null;
+    if (planRow) {
+      try {
+        const plan = JSON.parse(planRow.plan_json);
+        if (Array.isArray(plan.segments)) {
+          selectedIndices = plan.segments.map((s: any) => s.segmentIndex);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    const rows = db.prepare(`
+      SELECT segment_index, scene_description, emotion_tags
+      FROM segment_ai_analysis
+      WHERE media_id = ?
+      ORDER BY segment_index
+    `).all(mediaId) as Array<{
+      segment_index: number;
+      scene_description: string;
+      emotion_tags: string;
+    }>;
+
+    if (rows.length === 0) {
+      // Fallback: use segment basic info
+      const segments = db.prepare(
+        `SELECT segment_index, start_time, end_time, duration FROM video_segments WHERE media_id = ? ORDER BY segment_index`
+      ).all(mediaId) as Array<{ segment_index: number; start_time: number; end_time: number; duration: number }>;
+
+      const filtered = selectedIndices
+        ? segments.filter(s => selectedIndices!.includes(s.segment_index))
+        : segments;
+
+      return filtered.map(s =>
+        `片段${s.segment_index}: ${s.start_time.toFixed(1)}-${s.end_time.toFixed(1)}s`
+      ).join('\n');
+    }
+
+    const filtered = selectedIndices
+      ? rows.filter(r => selectedIndices!.includes(r.segment_index))
+      : rows;
+
+    return filtered.map(row => {
+      const tags = JSON.parse(row.emotion_tags || '[]');
+      return `片段${row.segment_index}: ${row.scene_description} [${tags.join(',')}]`;
+    }).join('\n');
+  }
+
+  /**
+   * Load EditPlan context for narration generation.
+   */
+  private loadEditPlanContext(mediaId: string): string | null {
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT plan_json FROM ai_edit_plans WHERE media_id = ? ORDER BY created_at DESC LIMIT 1`
+    ).get(mediaId) as { plan_json: string } | undefined;
+
+    if (!row) return null;
+
+    try {
+      const plan = JSON.parse(row.plan_json);
+      const parts: string[] = [];
+
+      if (plan.narrativeSummary) {
+        parts.push(`叙事概要：${plan.narrativeSummary}`);
+      }
+      if (plan.pace) {
+        parts.push(`节奏：${plan.pace}`);
+      }
+      if (Array.isArray(plan.segments)) {
+        const segmentDescs = plan.segments.map((s: any) =>
+          `片段${s.segmentIndex}: ${s.reason || ''}${s.transitionTo ? ` → ${s.transitionTo}` : ''}`
+        );
+        parts.push(`片段顺序：\n${segmentDescs.join('\n')}`);
+      }
+
+      return parts.join('\n');
+    } catch {
+      return null;
+    }
   }
 
   private saveGeneratedText(mediaId: string, textType: TextType, style: TextStyle | undefined, content: any): void {

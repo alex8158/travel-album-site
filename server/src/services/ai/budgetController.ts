@@ -124,13 +124,19 @@ export class BudgetController {
   }
 
   /**
-   * Reset a user's budget by deleting their usage records for the current month.
-   * (In practice, this just removes the custom limit so they get the global default again.)
+   * Reset a user's budget by removing their custom config and deleting
+   * current month's usage records. This effectively resets them to the
+   * global default and sets their current usage back to 0.
    */
   resetUserBudget(userId: string): void {
     const db = getDb();
-    // Delete the custom budget config — user reverts to global default
-    db.prepare(`DELETE FROM ai_budget_configs WHERE user_id = ?`).run(userId);
+    const startOfMonth = this.getStartOfMonth();
+    db.prepare(
+      `DELETE FROM ai_usage_records WHERE user_id = ? AND created_at >= ?`
+    ).run(userId, startOfMonth);
+    db.prepare(
+      `DELETE FROM ai_budget_configs WHERE user_id = ?`
+    ).run(userId);
   }
 
   /**

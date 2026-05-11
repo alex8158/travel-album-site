@@ -104,7 +104,7 @@ function getDefaultAnalysis(segmentIndex: number): SegmentAIAnalysis {
   return {
     segmentIndex,
     sceneDescription: '',
-    emotionTags: ['宁静'],
+    emotionTags: [],
     narrativeScore: 50,
   };
 }
@@ -249,7 +249,7 @@ export class ContentAnalyzer {
     return rows.map(row => ({
       segmentIndex: row.segment_index,
       sceneDescription: row.scene_description || '',
-      emotionTags: JSON.parse(row.emotion_tags || '["宁静"]') as EmotionTag[],
+      emotionTags: JSON.parse(row.emotion_tags || '[]') as EmotionTag[],
       narrativeScore: row.narrative_score ?? 50,
     }));
   }
