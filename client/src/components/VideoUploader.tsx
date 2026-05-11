@@ -368,6 +368,7 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
       return init.mediaId;
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;
+      console.error(`[VideoUploader] uploadSingleFile failed for ${file.name}:`, err);
       setFileQueue(prev => prev.map((q, i) =>
         i === queueIndex ? { ...q, status: 'failed' as const, error: err.message || '上传失败' } : q
       ));
@@ -376,6 +377,11 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
   }, [tripId, uploadSimple, uploadMultipart, onUploaded]);
 
   const startQueueUpload = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      setError('未选择任何文件');
+      setState('failed');
+      return;
+    }
     setError('');
     setState('uploading');
 
