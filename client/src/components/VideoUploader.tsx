@@ -401,21 +401,29 @@ export default function VideoUploader({ tripId, onUploaded, onCancelled }: Video
     abortRef.current = controller;
 
     try {
+      let successCount = 0;
       for (let i = 0; i < files.length; i++) {
         if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
         const mediaId = await uploadSingleFile(files[i], i, controller);
         // Fire-and-forget process call after each successful upload
         if (mediaId) {
           triggerProcess(mediaId);
+          successCount++;
         }
       }
 
-      setState('completed');
-      // Auto-reset to idle after a short delay
-      setTimeout(() => {
-        setState('idle');
-        setFileQueue([]);
-      }, 2000);
+      if (successCount > 0) {
+        setState('completed');
+        // Auto-reset to idle after a short delay
+        setTimeout(() => {
+          setState('idle');
+          setFileQueue([]);
+        }, 2000);
+      } else {
+        // All files failed
+        setError('所有文件上传失败，请检查网络连接后重试');
+        setState('failed');
+      }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         setState('cancelled');
