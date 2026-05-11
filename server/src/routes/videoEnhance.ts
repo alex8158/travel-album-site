@@ -22,7 +22,7 @@ const tripVideoEnhanceRouter = Router();
  */
 router.post('/:mediaId/versions', async (req: Request, res: Response) => {
   try {
-    const { mediaId } = req.params;
+    const mediaId = req.params.mediaId as string;
     const db = getDb();
 
     // 1. Validate media exists
@@ -110,7 +110,7 @@ router.post('/:mediaId/versions', async (req: Request, res: Response) => {
  */
 tripVideoEnhanceRouter.post('/:tripId/video-enhance', async (req: Request, res: Response) => {
   try {
-    const { tripId } = req.params;
+    const tripId = req.params.tripId as string;
     const db = getDb();
 
     // 1. Validate trip exists
