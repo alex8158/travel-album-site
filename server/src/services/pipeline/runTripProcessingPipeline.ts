@@ -22,6 +22,7 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
+import { CompilationEngine } from '../compilationEngine';
 import type {
   ImageProcessContext,
   ClassificationAssessment,
@@ -510,6 +511,25 @@ export async function runTripProcessingPipeline(
       }
     }
     onProgress('videoAnalysis', 'complete', `${analysisResults.size} analyzed`);
+
+    // ---- Stage: autoCompile ----
+    // Trigger auto-compilation for videos that have segments written to DB
+    // Requirements: 1.1 — auto-compile after video_segments are written
+    onProgress('autoCompile', 'start');
+    const compilationEngine = new CompilationEngine();
+    let autoCompileCount = 0;
+    for (const videoRow of unprocessedVideos) {
+      if (!analysisResults.has(videoRow.id)) continue;
+      try {
+        await compilationEngine.autoCompile(videoRow.id);
+        autoCompileCount++;
+      } catch (err) {
+        // Auto-compilation failure must NOT affect pipeline result
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[pipeline] autoCompile failed for ${videoRow.id}: ${errorMsg}`);
+      }
+    }
+    onProgress('autoCompile', 'complete', `${autoCompileCount} auto-compiled`);
 
     onProgress('videoEdit', 'start');
     for (const videoRow of unprocessedVideos) {

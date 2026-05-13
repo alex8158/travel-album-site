@@ -72,6 +72,7 @@ describe('User Space Routes', () => {
     db.exec('DELETE FROM media_analysis');
     db.exec('DELETE FROM duplicate_group_items');
     db.exec('DELETE FROM ai_invocations');
+    db.exec('DELETE FROM compile_jobs');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');

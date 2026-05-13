@@ -88,6 +88,7 @@ export type PipelineStage =
   | 'optimize'
   | 'thumbnail'
   | 'videoAnalysis'
+  | 'autoCompile'
   | 'videoEdit'
   | 'videoEnhance'
   | 'blackFrameDetect'

@@ -255,10 +255,10 @@ describe('V2 Schema Foundation - New Tables', () => {
       const now = new Date().toISOString();
       // Create a valid group to isolate the media_id FK test
       db.prepare(
-        `INSERT INTO trips (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO trips (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`
       ).run('trip-fk-test2', 'FK Test Trip 2', now, now);
       db.prepare(
-        `INSERT INTO duplicate_groups (id, trip_id, image_count, created_at)
+        `INSERT OR REPLACE INTO duplicate_groups (id, trip_id, image_count, created_at)
          VALUES (?, ?, ?, ?)`
       ).run('group-fk-test', 'trip-fk-test2', 0, now);
 
@@ -278,16 +278,19 @@ describe('V2 Schema Foundation - New Tables', () => {
 
       // Set up prerequisite data
       db.prepare(
-        `INSERT INTO trips (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO trips (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`
       ).run('trip-uniq-test', 'Unique Test Trip', now, now);
       db.prepare(
-        `INSERT INTO duplicate_groups (id, trip_id, image_count, created_at)
+        `INSERT OR REPLACE INTO duplicate_groups (id, trip_id, image_count, created_at)
          VALUES (?, ?, ?, ?)`
       ).run('group-uniq-test', 'trip-uniq-test', 0, now);
       db.prepare(
-        `INSERT INTO media_items (id, trip_id, file_path, mime_type, original_filename, file_size, created_at)
+        `INSERT OR REPLACE INTO media_items (id, trip_id, file_path, mime_type, original_filename, file_size, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).run('media-uniq-test', 'trip-uniq-test', '/path.jpg', 'image/jpeg', 'test.jpg', 1000, now);
+
+      // Clean up any previous duplicate_group_items for this test
+      db.prepare('DELETE FROM duplicate_group_items WHERE group_id = ?').run('group-uniq-test');
 
       // First insert should succeed
       db.prepare(

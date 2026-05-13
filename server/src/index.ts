@@ -26,6 +26,7 @@ import mediaAnalysisRouter from './routes/mediaAnalysis';
 import duplicateGroupItemsRouter from './routes/duplicateGroupItems';
 import aiInvocationsRouter from './routes/aiInvocations';
 import aiEditingRouter from './routes/aiEditing';
+import compileRouter from './routes/compile';
 import { cleanupExpiredUploads } from './services/uploadCleanup';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import enhanceRouter, { tripEnhanceRouter } from './routes/enhance';
@@ -116,6 +117,7 @@ app.use(aiEditingRouter);
 app.use('/api/media', enhanceRouter);
 app.use('/api/trips', tripEnhanceRouter);
 app.use('/api/media', videoEnhanceRouter);
+app.use('/api/media', compileRouter);
 app.use('/api/trips', tripVideoEnhanceRouter);
 
 // Health check

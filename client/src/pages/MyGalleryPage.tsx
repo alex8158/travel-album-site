@@ -4,6 +4,8 @@ import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 import ClipEditor from '../components/ClipEditor';
+import CompilationPreview from '../components/CompilationPreview';
+import SegmentAdjuster from '../components/SegmentAdjuster';
 import FileUploader from '../components/FileUploader';
 import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
@@ -52,6 +54,11 @@ export default function MyGalleryPage() {
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [clipEditorVideoId, setClipEditorVideoId] = useState<string | null>(null);
+
+  // Compilation preview state
+  const [showSegmentAdjuster, setShowSegmentAdjuster] = useState(false);
+  const [videoHasSegments, setVideoHasSegments] = useState(false);
+  const [videoIsCompiling, setVideoIsCompiling] = useState(false);
 
   // Append media state
   const [appendMode, setAppendMode] = useState<AppendMode>('idle');
@@ -213,6 +220,42 @@ export default function MyGalleryPage() {
     }
     return () => { cancelled = true; };
   }, [id]);
+
+  // Fetch segment availability when a video is selected
+  useEffect(() => {
+    if (!selectedVideoId) {
+      setVideoHasSegments(false);
+      setVideoIsCompiling(false);
+      setShowSegmentAdjuster(false);
+      return;
+    }
+    let cancelled = false;
+    async function checkSegments() {
+      try {
+        const res = await authFetch(`/api/media/${selectedVideoId}/segments`);
+        if (!cancelled && res.ok) {
+          const json = await res.json() as { mediaId: string; segments: unknown[] };
+          setVideoHasSegments(json.segments.length > 0);
+        }
+      } catch {
+        // silently fail
+      }
+    }
+    async function checkCompileStatus() {
+      try {
+        const res = await authFetch(`/api/media/${selectedVideoId}/compile/status`);
+        if (!cancelled && res.ok) {
+          const json = await res.json() as { status: string };
+          setVideoIsCompiling(json.status === 'queued' || json.status === 'running');
+        }
+      } catch {
+        // silently fail
+      }
+    }
+    checkSegments();
+    checkCompileStatus();
+    return () => { cancelled = true; };
+  }, [selectedVideoId]);
 
   // --- Edit trip info handlers ---
   function openEditModal() {
@@ -1092,14 +1135,59 @@ export default function MyGalleryPage() {
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            overflowY: 'auto', padding: '24px 0',
           }}
         >
-          <div style={{ width: '90%', maxWidth: '900px' }}>
+          <div style={{ width: '90%', maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
             <VideoPlayer
               videoUrl={`/api/media/${selectedVideoId}/original`}
               mimeType={videos.find(v => v.id === selectedVideoId)?.mimeType || 'video/mp4'}
               onClose={() => setSelectedVideoId(null)}
             />
+
+            {/* Compilation Preview Section */}
+            <div style={{ marginTop: '16px' }}>
+              <CompilationPreview
+                mediaId={selectedVideoId}
+                compiledPath={videos.find(v => v.id === selectedVideoId)?.compiledPath ?? null}
+                hasSegments={videoHasSegments}
+                isProcessing={videoIsCompiling}
+              />
+
+              {/* 重新生成 button — shown when compiled video exists */}
+              {videos.find(v => v.id === selectedVideoId)?.compiledPath && videoHasSegments && !showSegmentAdjuster && (
+                <button
+                  onClick={() => setShowSegmentAdjuster(true)}
+                  data-testid="regenerate-btn"
+                  style={{
+                    marginTop: '12px',
+                    padding: '8px 20px',
+                    backgroundColor: '#ff9800',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  重新生成
+                </button>
+              )}
+
+              {/* Segment Adjuster */}
+              {showSegmentAdjuster && (
+                <div style={{ marginTop: '16px' }}>
+                  <SegmentAdjuster
+                    mediaId={selectedVideoId}
+                    onClose={() => setShowSegmentAdjuster(false)}
+                    onCompileStarted={() => {
+                      setShowSegmentAdjuster(false);
+                      setVideoIsCompiling(true);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -70,6 +70,7 @@ export interface GalleryVideo {
   originalFilename: string;
   fileSize: number;
   thumbnailUrl: string;
+  compiledPath?: string;
 }
 
 export interface GalleryData {

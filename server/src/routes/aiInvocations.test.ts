@@ -19,6 +19,7 @@ describe('AI Invocations API', () => {
     db.exec('DELETE FROM video_segments');
     db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM upload_sessions');
+    db.exec('DELETE FROM compile_jobs');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM processing_job_events');

@@ -320,6 +320,24 @@ function initTables(db: Database.Database): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_budget_user
       ON ai_budget_configs(user_id);
+
+    CREATE TABLE IF NOT EXISTS compile_jobs (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      percent INTEGER DEFAULT 0,
+      segment_indices TEXT,
+      target_duration INTEGER,
+      result_path TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      FOREIGN KEY (media_id) REFERENCES media_items(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_compile_jobs_media ON compile_jobs(media_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_compile_jobs_active ON compile_jobs(media_id) WHERE status IN ('queued', 'running');
   `);
 
   // Migration: add visibility column to existing trips table
