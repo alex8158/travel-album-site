@@ -181,7 +181,7 @@ router.get('/:mediaId/compile/download', authMiddleware, requireAuth, async (req
     });
   }
 
-  // Serve the compiled video file
+  // Serve the compiled video file with Range support (iOS Safari compatibility)
   const storageProvider = getStorageProvider();
 
   try {
@@ -193,9 +193,37 @@ router.get('/:mediaId/compile/download', authMiddleware, requireAuth, async (req
       });
     }
 
-    res.set('Content-Type', 'video/mp4');
-    res.set('Content-Disposition', `inline; filename="compiled_${mediaId}.mp4"`);
-    return res.sendFile(localPath);
+    // Range-aware streaming for iOS Safari
+    const stat = fs.statSync(localPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': 'video/mp4',
+        'Content-Disposition': `inline; filename="compiled_${mediaId}.mp4"`,
+      });
+
+      const stream = fs.createReadStream(localPath, { start, end });
+      return stream.pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': `inline; filename="compiled_${mediaId}.mp4"`,
+      });
+
+      return fs.createReadStream(localPath).pipe(res);
+    }
   } catch (err) {
     console.error(`[Compile] Error serving compiled file for ${mediaId}:`, err);
     return res.status(404).json({

@@ -46,6 +46,8 @@ export default function VideoPlayer({ videoUrl, mimeType, onClose }: VideoPlayer
       <video
         controls
         autoPlay
+        playsInline
+        preload="metadata"
         data-testid="video-element"
         aria-label="视频内容"
         style={{ width: '100%', maxHeight: '60vh', display: 'block', borderRadius: '4px' }}

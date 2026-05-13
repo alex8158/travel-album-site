@@ -1,8 +1,86 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { getDb } from '../database';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { getStorageProvider } from '../storage/factory';
+
+// ---------------------------------------------------------------------------
+// Range-aware video streaming for iOS Safari compatibility
+// iOS Safari requires HTTP Range requests (206 Partial Content) for video playback
+// ---------------------------------------------------------------------------
+
+const MIME_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.avi': 'video/x-msvideo',
+  '.mkv': 'video/x-matroska',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.heic': 'image/heic',
+};
+
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_TYPES[ext] || 'application/octet-stream';
+}
+
+function isVideoMime(mime: string): boolean {
+  return mime.startsWith('video/');
+}
+
+/**
+ * Serve a file with Range request support (required for iOS Safari video playback).
+ * For non-video files or requests without Range header, falls back to sendFile.
+ */
+function serveFileWithRange(req: Request, res: Response, localPath: string, cacheControl?: string): void {
+  const stat = fs.statSync(localPath);
+  const fileSize = stat.size;
+  const mime = getMimeType(localPath);
+
+  if (cacheControl) {
+    res.set('Cache-Control', cacheControl);
+  }
+
+  // For video files, always support Range requests
+  if (isVideoMime(mime)) {
+    const range = req.headers.range;
+
+    if (range) {
+      // Parse Range header: "bytes=start-end"
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': mime,
+      });
+
+      const stream = fs.createReadStream(localPath, { start, end });
+      stream.pipe(res);
+    } else {
+      // No Range header — return full file with Accept-Ranges to signal support
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': mime,
+        'Accept-Ranges': 'bytes',
+      });
+
+      fs.createReadStream(localPath).pipe(res);
+    }
+  } else {
+    // Non-video: use sendFile as before
+    res.sendFile(localPath);
+  }
+}
 
 const router = Router();
 
@@ -132,14 +210,13 @@ router.get('/:id/original', async (req: Request, res: Response) => {
     }
   }
 
-  // Non-S3: download to temp and sendFile
+  // Non-S3: download to temp and serve with Range support
   try {
     const localPath = await storageProvider.downloadToTemp(servePath);
     if (!fs.existsSync(localPath)) {
       return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
     }
-    res.set('Cache-Control', 'public, max-age=3600');
-    return res.sendFile(localPath);
+    return serveFileWithRange(req, res, localPath, 'public, max-age=3600');
   } catch {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
   }
@@ -173,7 +250,7 @@ router.get('/:id/raw', async (req: Request, res: Response) => {
     if (!fs.existsSync(localPath)) {
       return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
     }
-    return res.sendFile(localPath);
+    return serveFileWithRange(req, res, localPath);
   } catch {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '原始文件不存在' } });
   }
