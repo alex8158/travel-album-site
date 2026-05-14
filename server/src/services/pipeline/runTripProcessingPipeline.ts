@@ -13,7 +13,7 @@ import { PROCESS_THRESHOLDS } from '../dedupThresholds';
 import { assessDedup, ImageRow } from '../hybridDedupEngine';
 import { analyzeTrip } from '../imageAnalyzer';
 import { optimizeTrip } from '../imageOptimizer';
-import { generateThumbnailsForTrip } from '../thumbnailGenerator';
+import { generateThumbnailsForTrip, generateVideoThumbnail } from '../thumbnailGenerator';
 import { selectCoverImage } from '../coverSelector';
 import { analyzeVideo, VideoSegment } from '../videoAnalyzer';
 import { editVideo } from '../videoEditor';
@@ -544,6 +544,16 @@ export async function runTripProcessingPipeline(
         if (editResult.compiledPath) {
           updateCompiledStmt.run(editResult.compiledPath, videoRow.id);
           compiledCount++;
+
+          // Regenerate thumbnail from compiled video
+          try {
+            const compiledLocalPath = await storageProvider.downloadToTemp(editResult.compiledPath);
+            const thumbPath = await generateVideoThumbnail(compiledLocalPath, tripId, videoRow.id);
+            db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbPath, videoRow.id);
+          } catch (thumbErr) {
+            const thumbMsg = thumbErr instanceof Error ? thumbErr.message : String(thumbErr);
+            console.warn(`[pipeline] thumbnail regeneration failed for ${videoRow.id}: ${thumbMsg}`);
+          }
         } else if (editResult.error) {
           const errorText = `[videoEdit] ${editResult.error}`;
           updateErrorStmt.run(errorText, errorText, videoRow.id);

@@ -164,6 +164,7 @@ export function selectSegments(
 
 /**
  * Extract a segment from a video file to a separate file.
+ * First tries stream copy; falls back to re-encoding on failure.
  */
 function extractSegment(
   videoPath: string,
@@ -179,7 +180,23 @@ function extractSegment(
       .output(outputPath)
       .outputOptions(['-c', 'copy'])
       .on('end', () => resolve())
-      .on('error', (err: Error) => reject(err))
+      .on('error', () => {
+        // Fallback: re-encode with libx264/aac
+        ffmpeg(videoPath)
+          .seekInput(startTime)
+          .duration(duration)
+          .output(outputPath)
+          .outputOptions([
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-c:a', 'aac',
+            '-movflags', '+faststart',
+            '-avoid_negative_ts', 'make_zero',
+          ])
+          .on('end', () => resolve())
+          .on('error', (err: Error) => reject(err))
+          .run();
+      })
       .run();
   });
 }
@@ -413,9 +430,10 @@ function buildCrossfadeFilters(
   const audioFilters: string[] = [];
 
   // For crossfade, chain xfade filters between consecutive segments
-  // First, label all inputs
+  // Track cumulative composed duration for correct offset calculation
   let prevVideoLabel = '0:v';
   let prevAudioLabel = '0:a';
+  let composedDuration = segments[0].duration;
 
   for (let i = 1; i < segments.length; i++) {
     const prevSeg = segments[i - 1];
@@ -427,7 +445,7 @@ function buildCrossfadeFilters(
     const outLabel = i === segments.length - 1 ? 'vout' : `xv${i}`;
 
     if (canTransition) {
-      const offset = prevSeg.duration - transitionDuration;
+      const offset = composedDuration - transitionDuration;
       videoFilters.push(
         `[${prevVideoLabel}][${i}:v]xfade=transition=fade:duration=${transitionDuration}:offset=${offset}[${outLabel}]`
       );
@@ -438,6 +456,7 @@ function buildCrossfadeFilters(
         );
         prevAudioLabel = aOutLabel;
       }
+      composedDuration += currSeg.duration - transitionDuration;
     } else {
       // Skip transition — just concat
       videoFilters.push(
@@ -450,6 +469,7 @@ function buildCrossfadeFilters(
         );
         prevAudioLabel = aOutLabel;
       }
+      composedDuration += currSeg.duration;
     }
     prevVideoLabel = outLabel;
   }
@@ -557,7 +577,7 @@ export async function editVideo(
     const transitionDuration = options?.transitionDuration ?? VIDEO_THRESHOLDS.defaultTransitionDuration;
 
     if (transitionType !== 'none' && segmentPaths.length > 1) {
-      // Build and apply transition filters
+      // Build and apply transition filters (fade or crossfade only)
       const filters = buildTransitionFilters(selected, transitionType, transitionDuration, withAudio);
 
       await concatenateWithTransitions(
@@ -567,19 +587,8 @@ export async function editVideo(
         withAudio,
         options,
       );
-    } else if (transitionType === 'none' && withAudio && segmentPaths.length > 1) {
-      // 'none' mode with audio: video hardcut + audio afade via filter graph
-      const filters = buildTransitionFilters(selected, 'none', transitionDuration, true);
-
-      await concatenateWithTransitions(
-        segmentPaths,
-        compiledTempPath,
-        filters,
-        withAudio,
-        options,
-      );
     } else {
-      // Simple concatenation (single segment or no audio)
+      // Simple concatenation for 'none' transition, single segment, or no audio
       await concatenateSegments(segmentPaths, compiledTempPath, tempDir, options);
     }
 
@@ -625,6 +634,10 @@ function concatenateWithTransitions(
   withAudio: boolean,
   options?: EditOptions,
 ): Promise<void> {
+  if (!filters.videoFilter) {
+    throw new Error('Invalid transition filter graph: missing video output [vout]');
+  }
+
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -657,11 +670,13 @@ function concatenateWithTransitions(
 
     if (filterParts.length > 0) {
       // Append scale to the video output of the filter graph
+      const scaleChain = `[vout]${scaleFilter}[vscaled]`;
+      filterParts.push(scaleChain);
       const fullFilter = filterParts.join(';');
       cmd = cmd.complexFilter(fullFilter);
 
       // Map the filter outputs
-      outputOptions.push('-map', '[vout]');
+      outputOptions.push('-map', '[vscaled]');
       if (withAudio && filters.audioFilter) {
         outputOptions.push('-map', '[aout]');
       }
