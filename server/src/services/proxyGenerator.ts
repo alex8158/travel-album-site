@@ -73,48 +73,54 @@ export async function generateProxies(mediaId: string, tripId: string, storageKe
     const thumbTime = Math.max(0, meta.duration * 0.1);
     const thumbLocal = path.join(tmpDir, `${mediaId}_thumb.jpg`);
     tmpFiles.push(thumbLocal);
-    await runFfmpeg(localPath, thumbLocal, ['-ss', String(thumbTime), '-frames:v', '1', '-q:v', '2']);
-    const thumbnailKey = `${tripId}/thumbnails/${mediaId}.jpg`;
-    await storage.save(thumbnailKey, await fs.promises.readFile(thumbLocal));
+    try {
+      await runFfmpeg(localPath, thumbLocal, ['-ss', String(thumbTime), '-frames:v', '1', '-q:v', '2']);
+      const thumbnailKey = `${tripId}/thumbnails/${mediaId}.jpg`;
+      await storage.save(thumbnailKey, await fs.promises.readFile(thumbLocal));
+      db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbnailKey, mediaId);
+      console.log(`[proxyGenerator] Thumbnail generated for ${mediaId}`);
+    } catch (thumbErr) {
+      console.warn(`[proxyGenerator] Thumbnail failed for ${mediaId}:`, thumbErr);
+    }
 
-    // 4. Generate Preview Proxy (max 1080p, CRF 23)
+    // 4. Generate Preview Proxy (max 720p, CRF 28 — lighter than before to avoid OOM)
     const previewLocal = path.join(tmpDir, `${mediaId}_preview.mp4`);
     tmpFiles.push(previewLocal);
-    await runFfmpeg(localPath, previewLocal, [
-      '-vf', "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
-      '-c:v', 'libx264', '-crf', '23', '-preset', 'medium',
-      '-c:a', 'aac', '-b:a', '128k',
-      '-movflags', '+faststart',
-    ]);
-    const previewKey = `${tripId}/proxies/${mediaId}_preview.mp4`;
-    await storage.save(previewKey, fs.createReadStream(previewLocal));
+    try {
+      await runFfmpeg(localPath, previewLocal, [
+        '-vf', "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+        '-c:v', 'libx264', '-crf', '28', '-preset', 'fast',
+        '-c:a', 'aac', '-b:a', '96k',
+        '-movflags', '+faststart',
+        '-threads', '1',
+      ]);
+      const previewKey = `${tripId}/proxies/${mediaId}_preview.mp4`;
+      await storage.save(previewKey, fs.createReadStream(previewLocal));
+      console.log(`[proxyGenerator] Preview proxy generated for ${mediaId}`);
 
-    // 5. Generate Edit Proxy (720p CBR 4Mbps, keyint=30)
-    const editLocal = path.join(tmpDir, `${mediaId}_edit.mp4`);
-    tmpFiles.push(editLocal);
-    await runFfmpeg(localPath, editLocal, [
-      '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease',
-      '-c:v', 'libx264', '-b:v', '4M', '-maxrate', '4M', '-bufsize', '8M',
-      '-g', '30', '-preset', 'medium',
-      '-c:a', 'aac', '-b:a', '128k',
-      '-movflags', '+faststart',
-    ]);
-    const editKey = `${tripId}/proxies/${mediaId}_edit.mp4`;
-    await storage.save(editKey, fs.createReadStream(editLocal));
+      // Update DB with preview proxy and mark as ready
+      db.prepare(
+        `UPDATE media_items SET processing_status = 'ready', preview_proxy_path = ?,
+         video_duration = COALESCE(video_duration, ?), video_width = COALESCE(video_width, ?), video_height = COALESCE(video_height, ?),
+         video_codec = COALESCE(video_codec, ?), video_bitrate = COALESCE(video_bitrate, ?) WHERE id = ?`
+      ).run(previewKey, meta.duration, meta.width, meta.height, meta.codec, meta.bitrate, mediaId);
+    } catch (previewErr) {
+      console.error(`[proxyGenerator] Preview proxy failed for ${mediaId}:`, previewErr);
+      // Still mark as ready so user can see original
+      db.prepare(
+        `UPDATE media_items SET processing_status = 'ready',
+         video_duration = COALESCE(video_duration, ?), video_width = COALESCE(video_width, ?), video_height = COALESCE(video_height, ?),
+         video_codec = COALESCE(video_codec, ?), video_bitrate = COALESCE(video_bitrate, ?) WHERE id = ?`
+      ).run(meta.duration, meta.width, meta.height, meta.codec, meta.bitrate, mediaId);
+    }
 
-    // 6. Update media_items to ready
-    db.prepare(
-      `UPDATE media_items SET processing_status = 'ready', thumbnail_path = ?, preview_proxy_path = ?, edit_proxy_path = ?,
-       video_duration = COALESCE(video_duration, ?), video_width = COALESCE(video_width, ?), video_height = COALESCE(video_height, ?),
-       video_codec = COALESCE(video_codec, ?), video_bitrate = COALESCE(video_bitrate, ?) WHERE id = ?`
-    ).run(thumbnailKey, previewKey, editKey, meta.duration, meta.width, meta.height, meta.codec, meta.bitrate, mediaId);
+    console.log(`[proxyGenerator] Proxy generation complete for ${mediaId}, skipping heavy video analysis for stability`);
 
-    // 7. Auto-trigger video analysis + editing (fire-and-forget, non-blocking)
-    processVideoAfterProxy(localPath, mediaId, tripId).catch(err => {
-      console.error(`[proxyGenerator] Auto video processing failed for ${mediaId}:`, err);
-    });
+    // Skip analyzeVideo + editVideo entirely for now.
+    // The preview proxy serves as the viewable version.
+    // Users can trigger manual compilation later via the UI if needed.
+
   } catch (err: any) {
-    // 7. On failure: mark proxy_failed
     console.error(`[proxyGenerator] Failed for ${mediaId}:`, err);
     db.prepare(
       `UPDATE media_items SET processing_status = 'proxy_failed', processing_error = ? WHERE id = ?`
