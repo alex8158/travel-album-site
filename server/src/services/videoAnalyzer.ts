@@ -163,9 +163,10 @@ export function assignLabel(
  */
 function getAdaptiveSegmentDuration(duration: number): number {
   if (duration < 60) return 2;
-  if (duration <= 600) return 5;
-  if (duration <= 1800) return 10;
-  return 15;
+  if (duration <= 300) return 5;
+  if (duration <= 600) return 15;
+  if (duration <= 1800) return 30;
+  return 60;
 }
 
 /**
@@ -244,11 +245,14 @@ export async function analyzeVideo(
         }
 
         // Estimate stability from start/end frame comparison (max 2 frames in memory)
+        // Skip stability estimation for long videos (> 300s) to avoid OOM on small instances
         let stabilityScore = 100;
-        try {
-          stabilityScore = await estimateStability(videoPath, startTime, endTime, tempDir, i);
-        } catch {
-          stabilityScore = 100; // Default to stable if estimation fails
+        if (duration <= 300) {
+          try {
+            stabilityScore = await estimateStability(videoPath, startTime, endTime, tempDir, i);
+          } catch {
+            stabilityScore = 100; // Default to stable if estimation fails
+          }
         }
 
         const overallScore = sharpnessScore * 0.4 + stabilityScore * 0.3 + exposureScore * 0.3;
@@ -274,6 +278,7 @@ export async function analyzeVideo(
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 
+  console.log(`[VideoAnalyzer] analyzeVideo completed for ${mediaId}: ${segments.length} segments, duration=${duration.toFixed(1)}s`);
   return { mediaId, duration, segments };
 }
 
