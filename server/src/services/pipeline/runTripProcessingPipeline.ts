@@ -546,8 +546,12 @@ export async function runTripProcessingPipeline(
     onProgress('autoCompile', 'complete', `${autoCompileCount} auto-compiled`);
 
     onProgress('videoEdit', 'start');
+    const videoEditAuto = process.env.VIDEO_EDIT_AUTO === 'true';
     const videoEditStart = Date.now();
-    console.log(`[pipeline] videoEdit started at ${new Date(videoEditStart).toISOString()}`);
+    if (!videoEditAuto) {
+      console.log(`[pipeline] videoEdit skipped (VIDEO_EDIT_AUTO not enabled)`);
+    } else {
+      console.log(`[pipeline] videoEdit started at ${new Date(videoEditStart).toISOString()}`);
     for (const videoRow of unprocessedVideos) {
       const analysis = analysisResults.get(videoRow.id);
       if (!analysis) continue;
@@ -588,6 +592,7 @@ export async function runTripProcessingPipeline(
         failedCount++;
       }
     }
+    } // end if (videoEditAuto)
     const videoEditEnd = Date.now();
     console.log(`[pipeline] videoEdit ended at ${new Date(videoEditEnd).toISOString()}, duration=${((videoEditEnd - videoEditStart) / 1000).toFixed(1)}s`);
     onProgress('videoEdit', 'complete', `${compiledCount} compiled`);

@@ -11,6 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
+import fs from 'fs';
 import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
 import { selectSegments, calculateTargetDuration } from './segmentSelector';
@@ -218,6 +219,9 @@ export class CompilationEngine {
       // Compute relative path for storage
       const storagePath = this.computeStoragePath(compileResult.outputPath, mediaRow.trip_id, mediaId);
 
+      // Upload compiled file to storage provider
+      await storageProvider.save(storagePath, fs.createReadStream(compileResult.outputPath));
+
       // Update compiled_path in media_items
       db.prepare('UPDATE media_items SET compiled_path = ?, processing_error = NULL WHERE id = ?')
         .run(storagePath, mediaId);
@@ -344,6 +348,9 @@ export class CompilationEngine {
 
       // Compute relative path for storage
       const storagePath = this.computeStoragePath(compileResult.outputPath, mediaRow.trip_id, mediaId);
+
+      // Upload compiled file to storage provider
+      await storageProvider.save(storagePath, fs.createReadStream(compileResult.outputPath));
 
       // Replace compiled_path with new version (Requirements: 5.6)
       db.prepare('UPDATE media_items SET compiled_path = ?, processing_error = NULL WHERE id = ?')

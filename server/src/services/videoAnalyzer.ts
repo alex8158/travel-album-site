@@ -7,6 +7,7 @@ import { getTempDir } from '../helpers/tempDir';
 import { computeSharpness } from './blurDetector';
 import { VIDEO_THRESHOLDS } from './videoThresholds';
 import { createDefaultConcurrencyController, ConcurrencyController } from './concurrencyController';
+import { runFfmpegWithTimeout, DEFAULT_FFMPEG_TIMEOUT_MS } from './ffmpegRunner';
 
 export interface VideoSegment {
   index: number;
@@ -43,18 +44,15 @@ export function getVideoDuration(videoPath: string): Promise<number> {
  * Extract a single frame from a video at a specific time (in seconds).
  */
 function extractFrameAt(videoPath: string, timeSeconds: number, outputPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const outputDir = path.dirname(outputPath);
-    fs.mkdirSync(outputDir, { recursive: true });
+  const outputDir = path.dirname(outputPath);
+  fs.mkdirSync(outputDir, { recursive: true });
 
-    ffmpeg(videoPath)
-      .seekInput(timeSeconds)
-      .frames(1)
-      .output(outputPath)
-      .on('end', () => resolve())
-      .on('error', (err: Error) => reject(err))
-      .run();
-  });
+  const command = ffmpeg(videoPath)
+    .seekInput(timeSeconds)
+    .frames(1)
+    .output(outputPath);
+
+  return runFfmpegWithTimeout(command, DEFAULT_FFMPEG_TIMEOUT_MS, `extractFrameAt(${timeSeconds.toFixed(1)}s)`);
 }
 
 /**
