@@ -198,6 +198,9 @@ export async function analyzeVideo(
   try {
     // Process segments sequentially with concurrency control (Requirement 11.1)
     for (let i = 0; i < boundaries.length; i++) {
+      if (i % 10 === 0 || i === boundaries.length - 1) {
+        console.log(`[VideoAnalyzer] Processing segment ${i + 1}/${boundaries.length} for ${mediaId}`);
+      }
       await cc.acquire();
       try {
         const { start: startTime, end: endTime } = boundaries[i];
