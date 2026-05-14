@@ -137,9 +137,12 @@ async function processVideoAfterProxy(videoPath: string, mediaId: string, tripId
 
   try {
     console.log(`[proxyGenerator] Starting auto video processing for ${mediaId}`);
+    const startTime = Date.now();
 
     // Analyze video (scene detection, quality scoring, segment creation)
+    console.log(`[proxyGenerator] Starting video analysis for ${mediaId}...`);
     const analysis = await analyzeVideo(videoPath, mediaId);
+    console.log(`[proxyGenerator] Video analysis completed for ${mediaId}: ${analysis.segments.length} segments in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
     // Persist segments to DB for ClipEditor
     saveSegments(mediaId, analysis.segments);

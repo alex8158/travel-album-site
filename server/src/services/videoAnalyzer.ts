@@ -438,6 +438,7 @@ export function detectSceneCuts(
   threshold?: number,
 ): Promise<SceneCut[]> {
   const th = threshold ?? VIDEO_THRESHOLDS.sceneDetectThreshold;
+  const TIMEOUT_MS = 60_000; // 60 seconds max for scene detection
 
   return new Promise((resolve) => {
     const args = [
@@ -450,17 +451,34 @@ export function detectSceneCuts(
     const proc = spawn('ffmpeg', args);
 
     let stderr = '';
+    let killed = false;
+
+    // Timeout: kill ffmpeg if scene detection takes too long (large videos)
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill('SIGKILL');
+      console.warn(`[VideoAnalyzer] detectSceneCuts timed out after ${TIMEOUT_MS / 1000}s, falling back to fixed-duration splitting`);
+    }, TIMEOUT_MS);
 
     proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
     proc.on('error', () => {
+      clearTimeout(timer);
       // ffmpeg not found or spawn failure → fall back to empty
       resolve([]);
     });
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
+
+      if (killed) {
+        // Timed out → fall back to fixed-duration splitting
+        resolve([]);
+        return;
+      }
+
       if (code !== 0 && stderr === '') {
         // Process failed with no output → fall back
         resolve([]);
