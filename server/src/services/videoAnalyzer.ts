@@ -158,6 +158,17 @@ export function assignLabel(
 }
 
 /**
+ * Get adaptive segment duration based on video length.
+ * Longer videos use larger segments to reduce total processing work.
+ */
+function getAdaptiveSegmentDuration(duration: number): number {
+  if (duration < 60) return 2;
+  if (duration <= 600) return 5;
+  if (duration <= 1800) return 10;
+  return 15;
+}
+
+/**
  * Analyze a video by splitting it into segments and computing quality scores.
  *
  * Segment boundaries are determined by scene cuts (via detectSceneCuts) when
@@ -174,7 +185,7 @@ export function assignLabel(
 export async function analyzeVideo(
   videoPath: string,
   mediaId: string,
-  segmentDuration: number = 2,
+  segmentDuration?: number,
   concurrencyController?: ConcurrencyController
 ): Promise<VideoAnalysisResult> {
   const duration = await getVideoDuration(videoPath);
@@ -183,9 +194,15 @@ export async function analyzeVideo(
     return { mediaId, duration: 0, segments: [] };
   }
 
-  // Attempt scene-cut-based segmentation first
-  const sceneCuts = await detectSceneCuts(videoPath);
-  const boundaries = buildSegmentBoundaries(sceneCuts, duration, segmentDuration);
+  const effectiveSegmentDuration = segmentDuration ?? getAdaptiveSegmentDuration(duration);
+
+  // Skip scene detection for long videos (> 10 minutes)
+  const shouldDetectScenes = duration <= 600;
+  const sceneCuts = shouldDetectScenes ? await detectSceneCuts(videoPath) : [];
+  if (!shouldDetectScenes) {
+    console.log(`[VideoAnalyzer] Skipping scene detection for ${mediaId} (duration ${duration.toFixed(0)}s > 600s)`);
+  }
+  const boundaries = buildSegmentBoundaries(sceneCuts, duration, effectiveSegmentDuration);
 
   const segments: VideoSegment[] = [];
 

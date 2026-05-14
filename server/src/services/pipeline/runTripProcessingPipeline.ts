@@ -497,6 +497,8 @@ export async function runTripProcessingPipeline(
     );
 
     onProgress('videoAnalysis', 'start');
+    const videoAnalysisStart = Date.now();
+    console.log(`[pipeline] videoAnalysis started at ${new Date(videoAnalysisStart).toISOString()}`);
     const analysisResults = new Map<string, Awaited<ReturnType<typeof analyzeVideo>>>();
     for (const videoRow of unprocessedVideos) {
       try {
@@ -510,28 +512,37 @@ export async function runTripProcessingPipeline(
         failedCount++;
       }
     }
+    const videoAnalysisEnd = Date.now();
+    console.log(`[pipeline] videoAnalysis ended at ${new Date(videoAnalysisEnd).toISOString()}, duration=${((videoAnalysisEnd - videoAnalysisStart) / 1000).toFixed(1)}s`);
     onProgress('videoAnalysis', 'complete', `${analysisResults.size} analyzed`);
 
     // ---- Stage: autoCompile ----
     // Trigger auto-compilation for videos that have segments written to DB
     // Requirements: 1.1 — auto-compile after video_segments are written
+    const autoCompileEnabled = process.env.VIDEO_AUTO_COMPILE_ENGINE === 'true';
     onProgress('autoCompile', 'start');
-    const compilationEngine = new CompilationEngine();
     let autoCompileCount = 0;
-    for (const videoRow of unprocessedVideos) {
-      if (!analysisResults.has(videoRow.id)) continue;
-      try {
-        await compilationEngine.autoCompile(videoRow.id);
-        autoCompileCount++;
-      } catch (err) {
-        // Auto-compilation failure must NOT affect pipeline result
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[pipeline] autoCompile failed for ${videoRow.id}: ${errorMsg}`);
+    if (autoCompileEnabled) {
+      const compilationEngine = new CompilationEngine();
+      for (const videoRow of unprocessedVideos) {
+        if (!analysisResults.has(videoRow.id)) continue;
+        try {
+          await compilationEngine.autoCompile(videoRow.id);
+          autoCompileCount++;
+        } catch (err) {
+          // Auto-compilation failure must NOT affect pipeline result
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[pipeline] autoCompile failed for ${videoRow.id}: ${errorMsg}`);
+        }
       }
+    } else {
+      console.log(`[pipeline] autoCompile skipped (editVideo handles compilation)`);
     }
     onProgress('autoCompile', 'complete', `${autoCompileCount} auto-compiled`);
 
     onProgress('videoEdit', 'start');
+    const videoEditStart = Date.now();
+    console.log(`[pipeline] videoEdit started at ${new Date(videoEditStart).toISOString()}`);
     for (const videoRow of unprocessedVideos) {
       const analysis = analysisResults.get(videoRow.id);
       if (!analysis) continue;
@@ -566,92 +577,99 @@ export async function runTripProcessingPipeline(
         failedCount++;
       }
     }
+    const videoEditEnd = Date.now();
+    console.log(`[pipeline] videoEdit ended at ${new Date(videoEditEnd).toISOString()}, duration=${((videoEditEnd - videoEditStart) / 1000).toFixed(1)}s`);
     onProgress('videoEdit', 'complete', `${compiledCount} compiled`);
 
     // ---- Stage: videoEnhance ----
     // Run black frame detection, junk detection, and multi-version generation for each video
+    const videoEnhanceAuto = process.env.VIDEO_ENHANCE_AUTO === 'true';
     onProgress('videoEnhance', 'start');
     t0 = Date.now();
     let versionsGenerated = 0;
-    for (const videoRow of videoRows) {
-      try {
-        const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
-        const mediaId = videoRow.id;
+    if (videoEnhanceAuto) {
+      for (const videoRow of videoRows) {
+        try {
+          const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
+          const mediaId = videoRow.id;
 
-        // Get segments from the database
-        const segmentRows = db.prepare(
-          'SELECT * FROM video_segments WHERE media_id = ? ORDER BY start_time'
-        ).all(mediaId) as any[];
+          // Get segments from the database
+          const segmentRows = db.prepare(
+            'SELECT * FROM video_segments WHERE media_id = ? ORDER BY start_time'
+          ).all(mediaId) as any[];
 
-        if (segmentRows.length === 0) continue;
+          if (segmentRows.length === 0) continue;
 
-        const segments: VideoSegment[] = segmentRows.map((s: any, idx: number) => ({
-          index: idx,
-          startTime: s.start_time,
-          endTime: s.end_time,
-          duration: s.end_time - s.start_time,
-          overallScore: s.overall_score || 50,
-          sharpnessScore: s.sharpness_score || 50,
-          stabilityScore: s.stability_score || 50,
-          exposureScore: s.exposure_score || 50,
-          label: s.label || 'good',
-        }));
+          const segments: VideoSegment[] = segmentRows.map((s: any, idx: number) => ({
+            index: idx,
+            startTime: s.start_time,
+            endTime: s.end_time,
+            duration: s.end_time - s.start_time,
+            overallScore: s.overall_score || 50,
+            sharpnessScore: s.sharpness_score || 50,
+            stabilityScore: s.stability_score || 50,
+            exposureScore: s.exposure_score || 50,
+            label: s.label || 'good',
+          }));
 
-        // Run black frame detection on each segment
-        onProgress('blackFrameDetect', 'start');
-        const blackFrameResults = new Map<number, BlackFrameResult>();
-        for (const segment of segments) {
-          try {
-            const result = await detectBlackFrames(videoPath, segment.startTime, segment.endTime);
-            blackFrameResults.set(segment.index, result);
-          } catch {
-            // Skip failed detection, continue with remaining segments
+          // Run black frame detection on each segment
+          onProgress('blackFrameDetect', 'start');
+          const blackFrameResults = new Map<number, BlackFrameResult>();
+          for (const segment of segments) {
+            try {
+              const result = await detectBlackFrames(videoPath, segment.startTime, segment.endTime);
+              blackFrameResults.set(segment.index, result);
+            } catch {
+              // Skip failed detection, continue with remaining segments
+            }
           }
-        }
-        onProgress('blackFrameDetect', 'complete', `${blackFrameResults.size}/${segments.length} segments checked`);
+          onProgress('blackFrameDetect', 'complete', `${blackFrameResults.size}/${segments.length} segments checked`);
 
-        // Run junk clip detection on each segment
-        onProgress('junkDetect', 'start');
-        const junkResults = new Map<number, JunkClipResult>();
-        for (const segment of segments) {
-          try {
-            const result = await detectJunkClip(videoPath, segment.startTime, segment.endTime);
-            junkResults.set(segment.index, result);
-          } catch {
-            // Skip failed detection, continue with remaining segments
+          // Run junk clip detection on each segment
+          onProgress('junkDetect', 'start');
+          const junkResults = new Map<number, JunkClipResult>();
+          for (const segment of segments) {
+            try {
+              const result = await detectJunkClip(videoPath, segment.startTime, segment.endTime);
+              junkResults.set(segment.index, result);
+            } catch {
+              // Skip failed detection, continue with remaining segments
+            }
           }
-        }
-        onProgress('junkDetect', 'complete', `${junkResults.size}/${segments.length} segments checked`);
+          onProgress('junkDetect', 'complete', `${junkResults.size}/${segments.length} segments checked`);
 
-        // Generate multiple versions with detection results
-        onProgress('versionGenerate', 'start');
-        const profiles = Object.values(DEFAULT_PROFILES);
-        const versionResult = await generateVersions(
-          videoPath,
-          mediaId,
-          tripId,
-          segments,
-          profiles,
-          { blackFrameResults, junkResults, videoResolution: options?.videoResolution },
-        );
-        onProgress('versionGenerate', 'complete', `${versionResult.versions.length} versions created`);
+          // Generate multiple versions with detection results
+          onProgress('versionGenerate', 'start');
+          const profiles = Object.values(DEFAULT_PROFILES);
+          const versionResult = await generateVersions(
+            videoPath,
+            mediaId,
+            tripId,
+            segments,
+            profiles,
+            { blackFrameResults, junkResults, videoResolution: options?.videoResolution },
+          );
+          onProgress('versionGenerate', 'complete', `${versionResult.versions.length} versions created`);
 
-        versionsGenerated += versionResult.versions.length;
+          versionsGenerated += versionResult.versions.length;
 
-        if (versionResult.errors.length > 0) {
-          for (const err of versionResult.errors) {
-            console.warn(`[pipeline] videoEnhance version error for ${mediaId}: ${err.profile}: ${err.error}`);
+          if (versionResult.errors.length > 0) {
+            for (const err of versionResult.errors) {
+              console.warn(`[pipeline] videoEnhance version error for ${mediaId}: ${err.profile}: ${err.error}`);
+            }
           }
+        } catch (err) {
+          // Handle individual video failures without stopping the batch
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[pipeline] videoEnhance failed for ${videoRow.id}: ${errorMsg}`);
+          const errorText = `[videoEnhance] ${errorMsg}`;
+          updateErrorStmt.run(errorText, errorText, videoRow.id);
         }
-      } catch (err) {
-        // Handle individual video failures without stopping the batch
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.warn(`[pipeline] videoEnhance failed for ${videoRow.id}: ${errorMsg}`);
-        const errorText = `[videoEnhance] ${errorMsg}`;
-        updateErrorStmt.run(errorText, errorText, videoRow.id);
       }
+      console.log(`[pipeline] videoEnhance: ${versionsGenerated} versions generated, ${Date.now() - t0}ms`);
+    } else {
+      console.log(`[pipeline] videoEnhance skipped by default`);
     }
-    console.log(`[pipeline] videoEnhance: ${versionsGenerated} versions generated, ${Date.now() - t0}ms`);
     onProgress('videoEnhance', 'complete', `${versionsGenerated} versions generated`);
 
     // ---- Stage: aiAnalysis (optional) ----

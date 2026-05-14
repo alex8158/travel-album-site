@@ -556,16 +556,19 @@ export async function editVideo(
       }
     }
 
-    // Normalize audio levels across extracted segments
-    const normalizedDir = path.join(tempDir, 'normalized');
-    const normResults = await normalizeSegments(segmentPaths, normalizedDir);
-
-    // Replace segment paths with normalized versions where available
+    // Normalize audio levels across extracted segments (only if enabled)
+    const audioNormalizeEnabled = process.env.VIDEO_AUDIO_NORMALIZE === 'true';
     const normalizedSegmentIndices: number[] = [];
-    for (let i = 0; i < normResults.length; i++) {
-      if (!normResults[i].skipped && normResults[i].normalizedPath) {
-        segmentPaths[i] = normResults[i].normalizedPath!;
-        normalizedSegmentIndices.push(selected[i].index);
+    if (audioNormalizeEnabled) {
+      const normalizedDir = path.join(tempDir, 'normalized');
+      const normResults = await normalizeSegments(segmentPaths, normalizedDir);
+
+      // Replace segment paths with normalized versions where available
+      for (let i = 0; i < normResults.length; i++) {
+        if (!normResults[i].skipped && normResults[i].normalizedPath) {
+          segmentPaths[i] = normResults[i].normalizedPath!;
+          normalizedSegmentIndices.push(selected[i].index);
+        }
       }
     }
 
