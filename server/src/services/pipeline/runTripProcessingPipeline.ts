@@ -16,6 +16,7 @@ import { optimizeTrip } from '../imageOptimizer';
 import { generateThumbnailsForTrip, generateVideoThumbnail } from '../thumbnailGenerator';
 import { selectCoverImage } from '../coverSelector';
 import { analyzeVideo, VideoSegment } from '../videoAnalyzer';
+import { saveSegments } from '../../helpers/videoSegmentStore';
 import { editVideo } from '../videoEditor';
 import { detectBlackFrames, BlackFrameResult } from '../blackFrameDetector';
 import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
@@ -505,9 +506,13 @@ export async function runTripProcessingPipeline(
         const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
         const analysis = await analyzeVideo(videoPath, videoRow.id);
         analysisResults.set(videoRow.id, analysis);
+        // Persist segments to DB so they're available for autoCompile and frontend
+        saveSegments(videoRow.id, analysis.segments);
+        console.log(`[pipeline] videoAnalysis OK for ${videoRow.id}: ${analysis.segments.length} segments, duration=${analysis.duration.toFixed(1)}s`);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const errorText = `[videoAnalysis] ${errorMsg}`;
+        console.error(`[pipeline] videoAnalysis FAILED for ${videoRow.id}: ${errorMsg}`);
         updateErrorStmt.run(errorText, errorText, videoRow.id);
         failedCount++;
       }
@@ -548,6 +553,7 @@ export async function runTripProcessingPipeline(
       if (!analysis) continue;
 
       try {
+        console.log(`[pipeline] videoEdit processing ${videoRow.id}: ${analysis.segments.length} segments`);
         const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
         const editResult = await editVideo(videoPath, analysis, tripId, videoRow.id, {
           videoResolution: options?.videoResolution,
@@ -555,6 +561,7 @@ export async function runTripProcessingPipeline(
         if (editResult.compiledPath) {
           updateCompiledStmt.run(editResult.compiledPath, videoRow.id);
           compiledCount++;
+          console.log(`[pipeline] videoEdit OK for ${videoRow.id}: compiled_path=${editResult.compiledPath}`);
 
           // Regenerate thumbnail from compiled video
           try {
@@ -566,13 +573,17 @@ export async function runTripProcessingPipeline(
             console.warn(`[pipeline] thumbnail regeneration failed for ${videoRow.id}: ${thumbMsg}`);
           }
         } else if (editResult.error) {
+          console.error(`[pipeline] videoEdit returned error for ${videoRow.id}: ${editResult.error}`);
           const errorText = `[videoEdit] ${editResult.error}`;
           updateErrorStmt.run(errorText, errorText, videoRow.id);
           failedCount++;
+        } else {
+          console.log(`[pipeline] videoEdit skipped for ${videoRow.id}: no compilation needed (short video, all segments good)`);
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const errorText = `[videoEdit] ${errorMsg}`;
+        console.error(`[pipeline] videoEdit FAILED for ${videoRow.id}: ${errorMsg}`);
         updateErrorStmt.run(errorText, errorText, videoRow.id);
         failedCount++;
       }
