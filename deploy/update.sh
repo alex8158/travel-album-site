@@ -21,8 +21,8 @@ err() { echo -e "${RED}>> $1${NC}"; exit 1; }
 do_update() {
   log "拉取最新代码..."
   cd "$APP_DIR"
-  git fetch origin main
-  git reset --hard origin/main
+  git fetch origin v2-smart-media
+  git reset --hard origin/v2-smart-media
 
   # 首次部署时自动创建 .env 配置文件
   if [ ! -f "$APP_DIR/server/.env" ]; then
@@ -209,8 +209,8 @@ APP_DIR="/home/ec2-user/travel-album-site"
 
 echo ">> 拉取最新代码..."
 cd "$APP_DIR"
-git fetch origin main
-git reset --hard origin/main
+git fetch origin v2-smart-media
+git reset --hard origin/v2-smart-media
 
 # 首次部署时自动创建 .env 配置文件
 if [ ! -f "$APP_DIR/server/.env" ]; then
