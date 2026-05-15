@@ -114,11 +114,24 @@ export async function generateProxies(mediaId: string, tripId: string, storageKe
       ).run(meta.duration, meta.width, meta.height, meta.codec, meta.bitrate, mediaId);
     }
 
-    console.log(`[proxyGenerator] Proxy generation complete for ${mediaId}, skipping heavy video analysis for stability`);
+    console.log(`[proxyGenerator] Proxy generation complete for ${mediaId}, starting background video processing`);
 
-    // Skip analyzeVideo + editVideo entirely for now.
-    // The preview proxy serves as the viewable version.
-    // Users can trigger manual compilation later via the UI if needed.
+    // Fire-and-forget: trigger video analysis + editing in background
+    // localPath is NOT in tmpFiles, so it won't be cleaned by finally block
+    // processVideoAfterProxy will use it and we clean it after
+    const videoLocalPath = localPath;
+    if (videoLocalPath) {
+      setImmediate(() => {
+        processVideoAfterProxy(videoLocalPath, mediaId, tripId)
+          .catch(err => {
+            console.error(`[proxyGenerator] Background processing failed for ${mediaId}:`, err);
+          })
+          .finally(() => {
+            // Clean up the downloaded original after background processing
+            try { fs.unlinkSync(videoLocalPath); } catch { /* ignore */ }
+          });
+      });
+    }
 
   } catch (err: any) {
     console.error(`[proxyGenerator] Failed for ${mediaId}:`, err);
