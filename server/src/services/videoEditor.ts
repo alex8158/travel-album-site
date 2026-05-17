@@ -174,29 +174,24 @@ function extractSegment(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    // Always re-encode segments to ensure clean keyframe boundaries.
+    // Stream copy (-c copy) causes visual glitches and audio sync issues
+    // when the cut point doesn't align with a keyframe.
     ffmpeg(videoPath)
       .seekInput(startTime)
       .duration(duration)
       .output(outputPath)
-      .outputOptions(['-c', 'copy'])
+      .outputOptions([
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-movflags', '+faststart',
+        '-avoid_negative_ts', 'make_zero',
+      ])
       .on('end', () => resolve())
-      .on('error', () => {
-        // Fallback: re-encode with libx264/aac
-        ffmpeg(videoPath)
-          .seekInput(startTime)
-          .duration(duration)
-          .output(outputPath)
-          .outputOptions([
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-c:a', 'aac',
-            '-movflags', '+faststart',
-            '-avoid_negative_ts', 'make_zero',
-          ])
-          .on('end', () => resolve())
-          .on('error', (err: Error) => reject(err))
-          .run();
-      })
+      .on('error', (err: Error) => reject(err))
       .run();
   });
 }
@@ -265,21 +260,19 @@ async function concatenateSegments(
     ? `scale='min(${options.videoResolution},iw)':min(${options.videoResolution},ih):force_original_aspect_ratio=decrease`
     : null;
 
-  // Try stream copy first (no scale filter allowed with -c copy)
-  if (!scaleFilter) {
-    try {
-      await concatWithOptions(concatListPath, outputPath, ['-c', 'copy']);
-      return;
-    } catch {
-      // Fall through to re-encode
-    }
-  }
-
-  // Re-encode fallback (or required for scale filter)
-  const outputOptions = ['-c:v', 'libx264', '-c:a', 'aac'];
+  // Always re-encode to ensure smooth transitions between segments.
+  // Stream copy (-c copy) causes audio/video jumps at segment boundaries
+  // because cuts may not align with keyframes.
+  const outputOptions = [
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-movflags', '+faststart',
+    '-avoid_negative_ts', 'make_zero',
+  ];
   if (scaleFilter) {
     outputOptions.push('-vf', scaleFilter);
   }
+
   await concatWithOptions(concatListPath, outputPath, outputOptions);
 }
 
