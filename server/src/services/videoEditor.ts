@@ -260,15 +260,34 @@ async function concatenateSegments(
     ? `scale='min(${options.videoResolution},iw)':min(${options.videoResolution},ih):force_original_aspect_ratio=decrease`
     : null;
 
+  // Check if any segment has an audio stream to determine if audio filter is applicable
+  let hasAudio = false;
+  for (const segPath of segmentPaths) {
+    if (await hasAudioStream(segPath)) {
+      hasAudio = true;
+      break;
+    }
+  }
+
   // Always re-encode to ensure smooth transitions between segments.
   // Stream copy (-c copy) causes audio/video jumps at segment boundaries
   // because cuts may not align with keyframes.
   const outputOptions = [
     '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-    '-c:a', 'aac', '-b:a', '128k',
+  ];
+
+  // Mute original audio by default to avoid jarring audio cuts between segments.
+  // Only add audio filter when segments actually contain audio streams.
+  if (hasAudio) {
+    outputOptions.push('-af', 'volume=0');
+    outputOptions.push('-c:a', 'aac', '-b:a', '128k');
+  }
+
+  outputOptions.push(
     '-movflags', '+faststart',
     '-avoid_negative_ts', 'make_zero',
-  ];
+  );
+
   if (scaleFilter) {
     outputOptions.push('-vf', scaleFilter);
   }
@@ -647,7 +666,12 @@ function concatenateWithTransitions(
     // Build combined filter graph
     const filterParts: string[] = [];
     if (filters.videoFilter) filterParts.push(filters.videoFilter);
-    if (filters.audioFilter) filterParts.push(filters.audioFilter);
+    if (filters.audioFilter) {
+      // Mute original audio by default: rename [aout] to [apre] then apply volume=0
+      const mutedAudioFilter = filters.audioFilter.replace(/\[aout\]$/, '[apre]');
+      filterParts.push(mutedAudioFilter);
+      filterParts.push('[apre]volume=0[aout]');
+    }
 
     const outputOptions: string[] = [
       '-c:v', 'libx264',

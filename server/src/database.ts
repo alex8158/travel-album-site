@@ -338,6 +338,22 @@ function initTables(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_compile_jobs_media ON compile_jobs(media_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_compile_jobs_active ON compile_jobs(media_id) WHERE status IN ('queued', 'running');
+
+    CREATE TABLE IF NOT EXISTS audio_tracks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      format TEXT NOT NULL CHECK(format IN ('mp3', 'aac', 'wav', 'ogg')),
+      duration REAL NOT NULL CHECK(duration > 0),
+      file_size INTEGER NOT NULL CHECK(file_size > 0 AND file_size <= 52428800),
+      source TEXT NOT NULL DEFAULT 'upload' CHECK(source IN ('upload', 'download')),
+      source_url TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audio_tracks_user_id ON audio_tracks(user_id);
   `);
 
   // Migration: add visibility column to existing trips table
@@ -597,6 +613,27 @@ function initTables(db: Database.Database): void {
   // Migration: add junk_reason column to video_segments table (v2-video-processing)
   try {
     db.exec(`ALTER TABLE video_segments ADD COLUMN junk_reason TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add audio_track_id column to media_items table (audio library)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN audio_track_id TEXT REFERENCES audio_tracks(id)`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add audio_trim_start column to media_items table (audio library)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN audio_trim_start REAL`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: add audio_trim_end column to media_items table (audio library)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN audio_trim_end REAL`);
   } catch {
     // Column already exists — ignore for idempotency
   }

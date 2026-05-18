@@ -71,6 +71,7 @@ export interface GalleryVideo {
   fileSize: number;
   thumbnailUrl: string;
   compiledPath?: string;
+  audioTrackId?: string;
 }
 
 export interface GalleryData {

@@ -46,6 +46,9 @@ export interface MediaItem {
   noiseLevel?: number;
   category?: string;
   processingStatus?: 'none' | 'pending' | 'processing' | 'completed' | 'failed';
+  audioTrackId?: string;
+  audioTrimStart?: number;
+  audioTrimEnd?: number;
   createdAt: string;
 }
 
@@ -138,5 +141,18 @@ export interface MediaTag {
   id: string;
   mediaId: string;
   tagName: string;
+  createdAt: string;
+}
+
+export interface AudioTrack {
+  id: string;
+  userId: string;
+  title: string;
+  filePath: string;
+  format: 'mp3' | 'aac' | 'wav' | 'ogg';
+  duration: number;       // seconds
+  fileSize: number;       // bytes
+  source: 'upload' | 'download';
+  sourceUrl?: string;
   createdAt: string;
 }

@@ -12,4 +12,8 @@ __pycache__/
 *.pyc
 server/.tmp/
 server/data/
+!server/data/
+server/data/*
+!server/data/default-audio/
+!server/data/default-audio/*.mp3
 .claude/

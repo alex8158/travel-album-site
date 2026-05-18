@@ -36,6 +36,9 @@ export interface MediaItemRow {
   noise_level: number | null;
   category: string | null;
   processing_status: string | null;
+  audio_track_id: string | null;
+  audio_trim_start: number | null;
+  audio_trim_end: number | null;
   created_at: string;
 }
 
@@ -80,6 +83,9 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     noiseLevel: row.noise_level ?? undefined,
     category: row.category ?? undefined,
     processingStatus: (row.processing_status || 'none') as MediaItem['processingStatus'],
+    audioTrackId: row.audio_track_id ?? undefined,
+    audioTrimStart: row.audio_trim_start ?? undefined,
+    audioTrimEnd: row.audio_trim_end ?? undefined,
     createdAt: row.created_at,
   };
 }

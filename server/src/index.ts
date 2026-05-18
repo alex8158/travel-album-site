@@ -27,7 +27,9 @@ import duplicateGroupItemsRouter from './routes/duplicateGroupItems';
 import aiInvocationsRouter from './routes/aiInvocations';
 import aiEditingRouter from './routes/aiEditing';
 import compileRouter from './routes/compile';
+import audioRouter, { applyAudioRouter } from './routes/audio';
 import { cleanupExpiredUploads } from './services/uploadCleanup';
+import { seedDefaultAudioTracks } from './services/audioSeed';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import enhanceRouter, { tripEnhanceRouter } from './routes/enhance';
 import videoEnhanceRouter, { tripVideoEnhanceRouter } from './routes/videoEnhance';
@@ -45,6 +47,9 @@ getDb();
 
 // Cleanup expired uploads (fire-and-forget)
 cleanupExpiredUploads().catch(console.error);
+
+// Seed default audio tracks (fire-and-forget)
+seedDefaultAudioTracks(getDb()).catch(console.error);
 
 // Auto-migrate storage if STORAGE_TYPE changed since last startup
 const STORAGE_TYPE_FILE = path.join(__dirname, '..', 'data', '.storage-type');
@@ -119,6 +124,8 @@ app.use('/api/trips', tripEnhanceRouter);
 app.use('/api/media', videoEnhanceRouter);
 app.use('/api/media', compileRouter);
 app.use('/api/trips', tripVideoEnhanceRouter);
+app.use('/api/audio', audioRouter);
+app.use('/api', applyAudioRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

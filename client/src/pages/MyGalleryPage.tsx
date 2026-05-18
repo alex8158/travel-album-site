@@ -6,6 +6,8 @@ import VideoPlayer from '../components/VideoPlayer';
 import ClipEditor from '../components/ClipEditor';
 import CompilationPreview from '../components/CompilationPreview';
 import SegmentAdjuster from '../components/SegmentAdjuster';
+import AudioPicker from '../components/AudioPicker';
+import AudioLibraryPanel from '../components/AudioLibraryPanel';
 import FileUploader from '../components/FileUploader';
 import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
@@ -94,6 +96,12 @@ export default function MyGalleryPage() {
 
   // Category filter state
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
+
+  // Audio library panel state
+  const [showAudioLibrary, setShowAudioLibrary] = useState(false);
+
+  // Audio version counter for cache-busting video reload after audio apply/remove
+  const [audioVersion, setAudioVersion] = useState(0);
 
   // Category picker state (single image)
   const [categoryPickerMediaId, setCategoryPickerMediaId] = useState<string | null>(null);
@@ -1053,6 +1061,41 @@ export default function MyGalleryPage() {
         </section>
       )}
 
+      {/* Audio Library Section */}
+      <section aria-label="音频库管理" style={{ marginTop: '24px' }}>
+        <button
+          onClick={() => setShowAudioLibrary(!showAudioLibrary)}
+          data-testid="audio-library-toggle-btn"
+          aria-expanded={showAudioLibrary}
+          style={{
+            background: 'none',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            padding: '8px 16px',
+            cursor: 'pointer',
+            fontSize: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          🎵 {showAudioLibrary ? '收起音频库' : '音频库'}
+        </button>
+        {showAudioLibrary && (
+          <div
+            data-testid="audio-library-section"
+            style={{
+              marginTop: '12px',
+              border: '1px solid #e0e0e0',
+              borderRadius: '8px',
+              background: '#fafafa',
+            }}
+          >
+            <AudioLibraryPanel />
+          </div>
+        )}
+      </section>
+
       {/* Trash Zone */}
       {trashedItems.length > 0 && (
         <section aria-label="待删除区" data-testid="trash-zone" style={{ marginTop: '24px' }}>
@@ -1148,6 +1191,7 @@ export default function MyGalleryPage() {
             {/* Compilation Preview Section */}
             <div style={{ marginTop: '16px' }}>
               <CompilationPreview
+                key={`compilation-${selectedVideoId}-${audioVersion}`}
                 mediaId={selectedVideoId}
                 compiledPath={videos.find(v => v.id === selectedVideoId)?.compiledPath ?? null}
                 hasSegments={videoHasSegments}
@@ -1183,6 +1227,45 @@ export default function MyGalleryPage() {
                     onCompileStarted={() => {
                       setShowSegmentAdjuster(false);
                       setVideoIsCompiling(true);
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Audio Picker — shown when compiled video exists */}
+              {videos.find(v => v.id === selectedVideoId)?.compiledPath && (
+                <div style={{ marginTop: '16px' }}>
+                  <AudioPicker
+                    mediaId={selectedVideoId}
+                    videoDuration={0}
+                    currentAudioTrackId={videos.find(v => v.id === selectedVideoId)?.audioTrackId}
+                    onApply={async (trackId: string, trimStart?: number, trimEnd?: number) => {
+                      try {
+                        const res = await authFetch(`/api/media/${selectedVideoId}/apply-audio`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ audioTrackId: trackId, trimStart, trimEnd }),
+                        });
+                        if (res.ok) {
+                          setAudioVersion(v => v + 1);
+                          await fetchGallery();
+                        }
+                      } catch {
+                        // user can retry
+                      }
+                    }}
+                    onRemove={async () => {
+                      try {
+                        const res = await authFetch(`/api/media/${selectedVideoId}/applied-audio`, {
+                          method: 'DELETE',
+                        });
+                        if (res.ok) {
+                          setAudioVersion(v => v + 1);
+                          await fetchGallery();
+                        }
+                      } catch {
+                        // user can retry
+                      }
                     }}
                   />
                 </div>
