@@ -7,6 +7,7 @@ import { getStorageProvider } from '../storage/factory';
 import { analyzeVideo } from '../services/videoAnalyzer';
 import { editVideo } from '../services/videoEditor';
 import { generateVideoThumbnail } from '../services/thumbnailGenerator';
+import { saveSegments } from '../helpers/videoSegmentStore';
 
 const router = Router();
 
@@ -46,6 +47,7 @@ router.post('/:id/process', authMiddleware, requireAuth, async (req: Request, re
 
     // Analyze → Edit → Thumbnail
     const analysis = await analyzeVideo(videoPath, mediaId);
+    saveSegments(mediaId, analysis.segments);
     const editResult = await editVideo(videoPath, analysis, mediaRow.trip_id, mediaId);
 
     let compiledPath: string | null = editResult.compiledPath;
