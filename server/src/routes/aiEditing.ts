@@ -75,7 +75,7 @@ function requireAI(_req: Request, res: Response, next: NextFunction): void {
 // Helper: validate media exists and belongs to user
 // ---------------------------------------------------------------------------
 
-function getMediaOrFail(mediaId: string, res: Response): { id: string; trip_id: string } | null {
+function getMediaOrFail(mediaId: string, userId: string, userRole: string, res: Response): { id: string; trip_id: string } | null {
   const db = getDb();
   const media = db.prepare(`SELECT id, trip_id FROM media_items WHERE id = ?`).get(mediaId) as
     | { id: string; trip_id: string }
@@ -84,6 +84,16 @@ function getMediaOrFail(mediaId: string, res: Response): { id: string; trip_id: 
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Media not found' } });
     return null;
   }
+
+  // Ownership check: verify user owns the trip or is admin
+  if (userRole !== 'admin') {
+    const trip = db.prepare('SELECT user_id FROM trips WHERE id = ?').get(media.trip_id) as { user_id: string } | undefined;
+    if (!trip || trip.user_id !== userId) {
+      res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此媒体' } });
+      return null;
+    }
+  }
+
   return media;
 }
 
@@ -119,7 +129,7 @@ router.post(
   requireAI,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const userId = req.user!.userId;
@@ -182,7 +192,7 @@ router.get(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const db = getDb();
@@ -223,7 +233,7 @@ router.post(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const userId = req.user!.userId;
@@ -292,7 +302,7 @@ router.post(
       if (err.message?.startsWith('BUDGET_EXCEEDED')) {
         // Budget exceeded — try degradation chain for a fallback plan
         try {
-          const media = getMediaOrFail(req.params.id as string, res);
+          const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
           if (!media) return;
           const degradationResult = await executeDegradationChain({
             mediaId: media.id,
@@ -327,7 +337,7 @@ router.get(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const db = getDb();
@@ -369,7 +379,7 @@ router.post(
   requireAI,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const userId = req.user!.userId;
@@ -433,7 +443,7 @@ router.get(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const media = getMediaOrFail(req.params.id as string, res);
+      const media = getMediaOrFail(req.params.id as string, req.user!.userId, req.user!.role, res);
       if (!media) return;
 
       const db = getDb();

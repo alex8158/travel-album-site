@@ -7,11 +7,19 @@ import type { JwtPayload } from '../types';
 
 /**
  * Get or generate JWT secret.
- * Priority: env var > persisted file > auto-generate and persist.
+ * Priority: env var > persisted file (NOT committed to repo) > auto-generate and persist.
+ * In production (NODE_ENV=production), JWT_SECRET env var is REQUIRED.
  */
 function getJwtSecret(): string {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
 
+  // In production, require explicit secret — never fall back to file
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[FATAL] JWT_SECRET environment variable is required in production.');
+    process.exit(1);
+  }
+
+  // Development: use persisted file (auto-generated, never committed)
   const secretFile = path.join(__dirname, '..', '..', 'data', '.jwt-secret');
   try {
     const existing = fs.readFileSync(secretFile, 'utf-8').trim();

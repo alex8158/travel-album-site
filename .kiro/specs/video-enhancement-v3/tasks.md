@@ -249,7 +249,7 @@
     - _Requirements: 11.1, 11.3, 11.6_
 
 - [ ] 13. 处理管线整体集成
-  - [~] 13.1 集成内存保护到处理管线
+  - [ ] 13.1 集成内存保护到处理管线
     - 修改视频处理管线入口（集成 MemoryManager 生命周期）
     - 实现管线启动时注册内存监控定时器
     - 实现批量处理时同一时间只有一个视频进行完整管线
@@ -268,7 +268,7 @@
     - 测试 MemorySummary 输出内容
     - _Requirements: 12.1, 12.3, 12.5, 12.6_
 
-- [~] 14. Final checkpoint - 确保所有测试通过
+- [ ] 14. Final checkpoint - 确保所有测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

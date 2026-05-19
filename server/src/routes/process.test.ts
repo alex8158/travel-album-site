@@ -93,7 +93,9 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should return 404 for non-existent trip', async () => {
-    const res = await request(app).post('/api/trips/non-existent/process');
+    const res = await request(app)
+      .post('/api/trips/non-existent/process')
+      .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
   });
@@ -107,7 +109,9 @@ describe('POST /api/trips/:id/process', () => {
     const tripId = trip.body.id;
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    const res = await request(app).post(`/api/trips/${tripId}/process`);
+    const res = await request(app)
+      .post(`/api/trips/${tripId}/process`)
+      .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       tripId,
@@ -152,7 +156,9 @@ describe('POST /api/trips/:id/process', () => {
       dedupDeletedCount: 1,
     });
 
-    const res = await request(app).post(`/api/trips/${tripId}/process`);
+    const res = await request(app)
+      .post(`/api/trips/${tripId}/process`)
+      .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(200);
     expect(res.body.tripId).toBe(tripId);
     expect(res.body.totalImages).toBe(3);
@@ -180,7 +186,9 @@ describe('POST /api/trips/:id/process', () => {
 
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    await request(app).post(`/api/trips/${tripId}/process`);
+    await request(app)
+      .post(`/api/trips/${tripId}/process`)
+      .set('Authorization', `Bearer ${authToken}`);
 
     // pipeline receives tripId as first arg
     expect(mockRunPipeline).toHaveBeenCalledTimes(1);
@@ -205,7 +213,9 @@ describe('POST /api/trips/:id/process', () => {
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
     // POST should detect the active job and return 409
-    const res = await request(app).post(`/api/trips/${tripId}/process`);
+    const res = await request(app)
+      .post(`/api/trips/${tripId}/process`)
+      .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ALREADY_PROCESSING');
   });
@@ -219,7 +229,9 @@ describe('POST /api/trips/:id/process', () => {
 
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    await request(app).post(`/api/trips/${tripId}/process?videoResolution=720`);
+    await request(app)
+      .post(`/api/trips/${tripId}/process?videoResolution=720`)
+      .set('Authorization', `Bearer ${authToken}`);
 
     expect(mockRunPipeline).toHaveBeenCalledTimes(1);
     expect(mockRunPipeline.mock.calls[0][1]).toEqual({ videoResolution: 720 });

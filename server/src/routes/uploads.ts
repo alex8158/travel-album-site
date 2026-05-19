@@ -16,6 +16,21 @@ const router = Router();
 // Apply auth to all routes
 router.use(authMiddleware, requireAuth);
 
+/**
+ * Verify the current user owns the upload session (via trip ownership).
+ * Returns the session if authorized, null otherwise (response already sent).
+ */
+function verifySessionOwnership(session: any, req: Request, res: Response): boolean {
+  if (req.user!.role === 'admin') return true;
+  const db = getDb();
+  const trip = db.prepare('SELECT user_id FROM trips WHERE id = ?').get(session.trip_id) as { user_id: string } | undefined;
+  if (!trip || trip.user_id !== req.user!.userId) {
+    res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此上传会话' } });
+    return false;
+  }
+  return true;
+}
+
 // --- 5.1: POST /init ---
 router.post('/init', async (req: Request, res: Response) => {
   const { filename, fileSize, tripId } = req.body;
@@ -113,6 +128,8 @@ router.post('/:mediaId/parts/presign', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在或已完成' } });
   }
 
+  if (!verifySessionOwnership(session, req, res)) return;
+
   if (session.id !== uploadId) {
     return res.status(409).json({ error: { code: 'UPLOAD_ID_MISMATCH', message: 'uploadId 不匹配' } });
   }
@@ -148,6 +165,8 @@ router.put('/:mediaId/parts/:partNumber', express.raw({ limit: '200mb', type: '*
   if (!session) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
+
+  if (!verifySessionOwnership(session, req, res)) return;
 
   if (session.id !== uploadId) {
     return res.status(409).json({ error: { code: 'UPLOAD_ID_MISMATCH', message: 'uploadId 不匹配' } });
@@ -185,6 +204,8 @@ router.put('/:mediaId/simple', express.raw({ limit: '200mb', type: '*/*' }), asy
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
 
+  if (!verifySessionOwnership(session, req, res)) return;
+
   try {
     const storageProvider = getStorageProvider();
     const body = req.body as Buffer;
@@ -211,6 +232,8 @@ router.post('/:mediaId/complete', async (req: Request, res: Response) => {
   if (!session) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
+
+  if (!verifySessionOwnership(session, req, res)) return;
 
   if (session.id !== uploadId) {
     return res.status(409).json({ error: { code: 'UPLOAD_ID_MISMATCH', message: 'uploadId 不匹配' } });
@@ -258,6 +281,8 @@ router.post('/:mediaId/finalize', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
 
+  if (!verifySessionOwnership(session, req, res)) return;
+
   if (session.id !== uploadId) {
     return res.status(409).json({ error: { code: 'UPLOAD_ID_MISMATCH', message: 'uploadId 不匹配' } });
   }
@@ -303,6 +328,8 @@ router.get('/:mediaId/status', async (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
 
+  if (!verifySessionOwnership(session, req, res)) return;
+
   try {
     const storageProvider = getStorageProvider();
     let uploadedParts: Array<{ partNumber: number; etag: string; size: number }> = [];
@@ -337,6 +364,8 @@ router.post('/:mediaId/abort', async (req: Request, res: Response) => {
   if (!session) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '上传会话不存在' } });
   }
+
+  if (!verifySessionOwnership(session, req, res)) return;
 
   if (session.id !== uploadId) {
     return res.status(409).json({ error: { code: 'UPLOAD_ID_MISMATCH', message: 'uploadId 不匹配' } });

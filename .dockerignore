@@ -5,3 +5,4 @@ uploads
 *.sqlite
 .git
 .DS_Store
+server/data/.jwt-secret

@@ -3,19 +3,24 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { runTripProcessingPipeline } from '../services/pipeline/runTripProcessingPipeline';
 import { JobProgressReporter } from '../services/jobProgressReporter';
+import { authMiddleware, requireAuth } from '../middleware/auth';
 
 const router = Router();
 
 // POST /api/trips/:id/process — Trigger full processing pipeline and return summary
-// Kept as-is for backward compatibility (synchronous, no job backend).
-router.post('/:id/process', async (req: Request, res: Response) => {
+router.post('/:id/process', authMiddleware, requireAuth, async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists
-  const trip = db.prepare('SELECT id FROM trips WHERE id = ?').get(tripId);
+  const trip = db.prepare('SELECT id, user_id FROM trips WHERE id = ?').get(tripId) as { id: string; user_id: string } | undefined;
   if (!trip) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify ownership
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
   // Clean up stale queued jobs (older than 1 hour, never started)
@@ -84,14 +89,19 @@ interface JobStatusRow {
   total: number;
 }
 
-router.get('/:id/process/stream', async (req: Request, res: Response) => {
+router.get('/:id/process/stream', authMiddleware, requireAuth, async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const db = getDb();
 
   // Verify trip exists before establishing SSE connection
-  const trip = db.prepare('SELECT id FROM trips WHERE id = ?').get(tripId);
+  const trip = db.prepare('SELECT id, user_id FROM trips WHERE id = ?').get(tripId) as { id: string; user_id: string } | undefined;
   if (!trip) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Verify ownership
+  if (req.user!.role !== 'admin' && trip.user_id !== req.user!.userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
   // Create a processing_job record (atomic check + insert, same as POST /process-jobs)
