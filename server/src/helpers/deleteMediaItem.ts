@@ -2,7 +2,7 @@ import { getDb } from '../database';
 
 /**
  * Permanently delete a media item from the database, cleaning up all
- * foreign key references first (media_tags, duplicate_groups).
+ * foreign key references first (media_tags, duplicate_groups, merged_video_sources).
  */
 export function deleteMediaItemFromDb(mediaId: string): void {
   const db = getDb();
@@ -16,6 +16,12 @@ export function deleteMediaItemFromDb(mediaId: string): void {
   // 3. Remove duplicate_group_id reference from this media item (in case FK is enforced)
   db.prepare('UPDATE media_items SET duplicate_group_id = NULL WHERE id = ?').run(mediaId);
 
-  // 4. Delete the media item itself
+  // 4. Clean up merged_video_sources:
+  //    - If this is a merged video, delete its source records (ON DELETE CASCADE handles this too)
+  db.prepare('DELETE FROM merged_video_sources WHERE merged_media_id = ?').run(mediaId);
+  //    - If this is a source video, set source_media_id to NULL (ON DELETE SET NULL handles this too)
+  db.prepare('UPDATE merged_video_sources SET source_media_id = NULL WHERE source_media_id = ?').run(mediaId);
+
+  // 5. Delete the media item itself
   db.prepare('DELETE FROM media_items WHERE id = ?').run(mediaId);
 }

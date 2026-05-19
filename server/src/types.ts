@@ -49,6 +49,7 @@ export interface MediaItem {
   audioTrackId?: string;
   audioTrimStart?: number;
   audioTrimEnd?: number;
+  mediaSource?: 'upload' | 'merged';
   createdAt: string;
 }
 

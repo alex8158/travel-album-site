@@ -393,8 +393,8 @@ describe('listUserTracks', () => {
 
     const result = await listUserTracks('user-1');
 
-    expect(mockPrepare).toHaveBeenCalledWith('SELECT * FROM audio_tracks WHERE user_id = ?');
-    expect(mockAll).toHaveBeenCalledWith('user-1');
+    expect(mockPrepare).toHaveBeenCalledWith('SELECT * FROM audio_tracks WHERE user_id = ? OR user_id = ? ORDER BY created_at DESC');
+    expect(mockAll).toHaveBeenCalledWith('user-1', 'system');
     expect(result).toHaveLength(2);
     expect(result[0].id).toBe('track-1');
     expect(result[0].userId).toBe('user-1');

@@ -20,6 +20,7 @@ const {
   mockComputeSharpness,
   mockAssessBlur,
   mockAssessDedup,
+  mockAutoCompile,
 } = vi.hoisted(() => ({
   mockDownloadToTemp: vi.fn(),
   mockSave: vi.fn(),
@@ -38,6 +39,7 @@ const {
   mockComputeSharpness: vi.fn(),
   mockAssessBlur: vi.fn(),
   mockAssessDedup: vi.fn(),
+  mockAutoCompile: vi.fn(),
 }));
 
 // ---- Mock external dependencies ----
@@ -110,6 +112,12 @@ vi.mock('../hybridDedupEngine', () => ({
   PROCESS_THRESHOLDS: { minImagesForDedup: 2 },
 }));
 
+vi.mock('../compilationEngine', () => ({
+  CompilationEngine: class {
+    autoCompile = mockAutoCompile;
+  },
+}));
+
 vi.mock('../dedupThresholds', () => ({
   PROCESS_THRESHOLDS: { minImagesForDedup: 2 },
 }));
@@ -177,6 +185,9 @@ function setupDefaultMocks() {
   // Storage
   mockDownloadToTemp.mockResolvedValue('/tmp/fake-video.mp4');
   mockSave.mockResolvedValue(undefined);
+
+  // CompilationEngine autoCompile
+  mockAutoCompile.mockResolvedValue({ success: true, compiledPath: null, selectedSegments: [], totalDuration: 0 });
 
   // Python / classification / blur — not needed for video-focused tests but pipeline calls them
   mockIsPythonAvailable.mockReturnValue(false);
@@ -259,11 +270,17 @@ describe('runTripProcessingPipeline integration', () => {
     db.exec('DELETE FROM trips');
     db.pragma('foreign_keys = ON');
 
+    // Enable video edit and enhance stages for tests
+    process.env.VIDEO_EDIT_AUTO = 'true';
+    process.env.VIDEO_ENHANCE_AUTO = 'true';
+
     setupDefaultMocks();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    delete process.env.VIDEO_EDIT_AUTO;
+    delete process.env.VIDEO_ENHANCE_AUTO;
   });
 
   describe('Stage ordering', () => {
@@ -332,6 +349,7 @@ describe('runTripProcessingPipeline integration', () => {
         'optimize',
         'thumbnail',
         'videoAnalysis',
+        'autoCompile',
         'videoEdit',
         'videoEnhance',
         'blackFrameDetect',

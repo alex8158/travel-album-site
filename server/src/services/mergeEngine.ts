@@ -1,13 +1,29 @@
+/**
+ * MergeEngine — 视频合并引擎
+ *
+ * 包含两个功能：
+ * 1. mergeSegments: 将单个视频的多个片段合并为一个输出视频（已有功能）
+ * 2. MergeEngine.merge: 将多个已编译视频合并为一个新视频（新功能）
+ *
+ * Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.1, 6.2, 6.3
+ */
+
 import ffmpeg from 'fluent-ffmpeg';
+import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
-import { getTempDir } from '../helpers/tempDir';
+import { getDb } from '../database';
 import { getStorageProvider } from '../storage/factory';
+import { concatenateSegments, buildTransitionFilters } from './videoEditor';
+import { getTempDir } from '../helpers/tempDir';
 import { VideoSegment } from './videoAnalyzer';
-import { buildTransitionFilters } from './videoEditor';
 import { VIDEO_THRESHOLDS } from './videoThresholds';
 
-export interface MergeRequest {
+// ---------------------------------------------------------------------------
+// Types — mergeSegments (existing)
+// ---------------------------------------------------------------------------
+
+export interface SegmentMergeRequest {
   mediaId: string;
   tripId: string;
   segmentIndices: number[];
@@ -15,11 +31,34 @@ export interface MergeRequest {
   transitionDuration?: number;
 }
 
-export interface MergeResult {
+export interface SegmentMergeResult {
   success: boolean;
   mergedPath: string | null;
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Types — MergeEngine (new multi-video merge)
+// ---------------------------------------------------------------------------
+
+export interface MergeRequest {
+  userId: string;
+  tripId: string;
+  sourceMediaIds: string[];  // 按顺序排列的源视频 ID
+  name?: string;             // 可选自定义名称
+}
+
+export interface MergeResult {
+  success: boolean;
+  mediaId: string | null;    // 新创建的 media_items.id
+  filePath: string | null;   // 合并后文件的存储路径
+  error?: string;
+}
+
+
+// ---------------------------------------------------------------------------
+// mergeSegments — merge segments from a single video (existing functionality)
+// ---------------------------------------------------------------------------
 
 /**
  * Merge user-selected video segments into a single output video.
@@ -33,8 +72,8 @@ export interface MergeResult {
 export async function mergeSegments(
   videoPath: string,
   segments: VideoSegment[],
-  request: MergeRequest,
-): Promise<MergeResult> {
+  request: SegmentMergeRequest,
+): Promise<SegmentMergeResult> {
   if (request.segmentIndices.length === 0) {
     return { success: false, mergedPath: null, error: '片段选择列表不能为空' };
   }
@@ -94,9 +133,158 @@ export async function mergeSegments(
   }
 }
 
+// ---------------------------------------------------------------------------
+// MergeEngine Class — multi-video merge (new functionality)
+// ---------------------------------------------------------------------------
+
+export class MergeEngine {
+  /**
+   * 合并多个已编译视频为一个新视频。
+   *
+   * 流程：
+   * 1. 验证所有源视频存在且有 compiled_path
+   * 2. 下载所有 compiled 文件到临时目录
+   * 3. 调用 concatenateSegments 拼接
+   * 4. 上传结果到存储
+   * 5. 创建 media_items 记录 (media_source='merged')
+   * 6. 写入 merged_video_sources 关联记录
+   *
+   * Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 6.1, 6.2, 6.3
+   */
+  async merge(request: MergeRequest): Promise<MergeResult> {
+    const { userId, tripId, sourceMediaIds, name } = request;
+    const db = getDb();
+    const storageProvider = getStorageProvider();
+
+    // Temp directory for this merge operation
+    const mergeTempDir = path.join(getTempDir(), `merge_${uuidv4()}`);
+    fs.mkdirSync(mergeTempDir, { recursive: true });
+
+    try {
+      // Step 1: Validate all source videos exist and have compiled_path
+      const sourceRows = this.validateSources(sourceMediaIds);
+
+      // Step 2: Download compiled files to temp directory
+      const downloadedPaths: string[] = [];
+      for (let i = 0; i < sourceRows.length; i++) {
+        const row = sourceRows[i];
+        const tempPath = await storageProvider.downloadToTemp(row.compiled_path);
+        downloadedPaths.push(tempPath);
+      }
+
+      // Step 3: Concatenate using ffmpeg via videoEditor's concatenateSegments
+      const mergedId = uuidv4();
+      const outputFilename = `${mergedId}_merged.mp4`;
+      const outputPath = path.join(mergeTempDir, outputFilename);
+
+      await concatenateSegments(downloadedPaths, outputPath, mergeTempDir);
+
+      // Step 4: Upload result to storage
+      const storagePath = `${tripId}/merged/${outputFilename}`;
+      await storageProvider.save(storagePath, fs.createReadStream(outputPath));
+
+      // Step 5: Create media_items record with media_source='merged'
+      const mergedName = name || this.generateDefaultName(tripId);
+      const now = new Date().toISOString();
+      const fileSize = fs.statSync(outputPath).size;
+
+      db.prepare(`
+        INSERT INTO media_items (
+          id, trip_id, file_path, media_type, mime_type,
+          original_filename, file_size, status, visibility,
+          user_id, media_source, compiled_path, created_at
+        ) VALUES (?, ?, ?, 'video', 'video/mp4', ?, ?, 'active', 'public', ?, 'merged', ?, ?)
+      `).run(
+        mergedId,
+        tripId,
+        storagePath,
+        mergedName,
+        fileSize,
+        userId,
+        storagePath,
+        now,
+      );
+
+      // Step 6: Write merged_video_sources relation records
+      const insertSource = db.prepare(`
+        INSERT INTO merged_video_sources (id, merged_media_id, source_media_id, sort_order, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      for (let i = 0; i < sourceMediaIds.length; i++) {
+        insertSource.run(uuidv4(), mergedId, sourceMediaIds[i], i, now);
+      }
+
+      return {
+        success: true,
+        mediaId: mergedId,
+        filePath: storagePath,
+      };
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[MergeEngine] merge failed: ${errorMsg}`);
+      return {
+        success: false,
+        mediaId: null,
+        filePath: null,
+        error: errorMsg,
+      };
+    } finally {
+      // Clean up temp directory
+      try {
+        fs.rmSync(mergeTempDir, { recursive: true, force: true });
+      } catch {
+        /* ignore cleanup errors */
+      }
+    }
+  }
+
+  /**
+   * Validate that all source media IDs exist and have compiled_path.
+   * Returns the rows in the same order as sourceMediaIds.
+   * Throws if any source is invalid.
+   *
+   * Requirements: 4.1
+   */
+  private validateSources(sourceMediaIds: string[]): Array<{ id: string; compiled_path: string; trip_id: string }> {
+    const db = getDb();
+    const results: Array<{ id: string; compiled_path: string; trip_id: string }> = [];
+
+    for (const mediaId of sourceMediaIds) {
+      const row = db.prepare(
+        'SELECT id, compiled_path, trip_id FROM media_items WHERE id = ? AND status = ?'
+      ).get(mediaId, 'active') as { id: string; compiled_path: string | null; trip_id: string } | undefined;
+
+      if (!row) {
+        throw new Error(`源视频不存在: ${mediaId}`);
+      }
+
+      if (!row.compiled_path) {
+        throw new Error(`源视频未完成编译: ${mediaId}`);
+      }
+
+      results.push({ id: row.id, compiled_path: row.compiled_path, trip_id: row.trip_id });
+    }
+
+    return results;
+  }
+
+  /**
+   * 生成默认名称：相册标题 + 4位随机数
+   *
+   * Requirements: 5.2
+   */
+  private generateDefaultName(tripId: string): string {
+    const db = getDb();
+    const trip = db.prepare('SELECT title FROM trips WHERE id = ?').get(tripId) as { title: string } | undefined;
+    const title = trip?.title || '合并视频';
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString();
+    return `${title}${randomSuffix}`;
+  }
+}
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal helpers (for mergeSegments)
 // ---------------------------------------------------------------------------
 
 function hasAudioStream(videoPath: string): Promise<boolean> {

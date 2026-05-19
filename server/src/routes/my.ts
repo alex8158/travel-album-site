@@ -3,7 +3,7 @@ import { getDb } from '../database';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 import { authMiddleware, requireAuth } from '../middleware/auth';
-import type { GalleryImage, GalleryData, DuplicateGroup } from '../types';
+import type { GalleryImage, DuplicateGroup } from '../types';
 
 interface DuplicateGroupRow {
   id: string;
@@ -131,7 +131,23 @@ router.get('/trips/:id/gallery', (req: Request, res: Response) => {
     thumbnailUrl: `/api/media/${row.id}/thumbnail`,
   }));
 
-  const galleryData: GalleryData = { trip, images, videos };
+  // originalVideos: all videos with media_type='video' and media_source != 'merged'
+  const originalVideos = videoRows
+    .filter((row) => row.media_source !== 'merged')
+    .map((row) => ({
+      ...rowToMediaItem(row),
+      thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    }));
+
+  // compiledVideos: videos with compiled_path (showing compiled version) + media_source='merged' videos
+  const compiledVideos = videoRows
+    .filter((row) => row.compiled_path != null || row.media_source === 'merged')
+    .map((row) => ({
+      ...rowToMediaItem(row),
+      thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    }));
+
+  const galleryData = { trip, images, videos, originalVideos, compiledVideos };
   return res.json(galleryData);
 });
 

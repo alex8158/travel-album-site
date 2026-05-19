@@ -241,7 +241,7 @@ async function stabilizeSegment(
  * Concatenate segments using ffmpeg concat demuxer.
  * First tries stream copy; falls back to re-encoding on failure.
  */
-async function concatenateSegments(
+export async function concatenateSegments(
   segmentPaths: string[],
   outputPath: string,
   tempDir: string,

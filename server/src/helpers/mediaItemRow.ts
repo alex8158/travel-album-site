@@ -39,6 +39,7 @@ export interface MediaItemRow {
   audio_track_id: string | null;
   audio_trim_start: number | null;
   audio_trim_end: number | null;
+  media_source: string | null;
   created_at: string;
 }
 
@@ -86,6 +87,7 @@ export function rowToMediaItem(row: MediaItemRow): MediaItem {
     audioTrackId: row.audio_track_id ?? undefined,
     audioTrimStart: row.audio_trim_start ?? undefined,
     audioTrimEnd: row.audio_trim_end ?? undefined,
+    mediaSource: row.media_source as MediaItem['mediaSource'] ?? undefined,
     createdAt: row.created_at,
   };
 }

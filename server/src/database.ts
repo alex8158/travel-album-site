@@ -638,6 +638,29 @@ function initTables(db: Database.Database): void {
     // Column already exists — ignore for idempotency
   }
 
+  // Migration: add media_source column to media_items table (video-auto-compile-and-merge)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN media_source TEXT DEFAULT 'upload'`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
+  // Migration: create merged_video_sources table (video-auto-compile-and-merge)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS merged_video_sources (
+      id TEXT PRIMARY KEY,
+      merged_media_id TEXT NOT NULL,
+      source_media_id TEXT,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (merged_media_id) REFERENCES media_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (source_media_id) REFERENCES media_items(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_merged_sources_merged ON merged_video_sources(merged_media_id);
+    CREATE INDEX IF NOT EXISTS idx_merged_sources_source ON merged_video_sources(source_media_id);
+  `);
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();

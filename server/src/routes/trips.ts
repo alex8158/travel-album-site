@@ -206,6 +206,9 @@ router.delete('/:id', authMiddleware, requireAuth, (req: Request, res: Response)
       db.prepare(`DELETE FROM media_analysis WHERE media_id IN (${placeholders})`).run(...ids);
       db.prepare(`DELETE FROM duplicate_group_items WHERE media_id IN (${placeholders})`).run(...ids);
       db.prepare(`DELETE FROM ai_invocations WHERE media_id IN (${placeholders})`).run(...ids);
+      // Clean up merged_video_sources: remove records where these items are merged videos or sources
+      db.prepare(`DELETE FROM merged_video_sources WHERE merged_media_id IN (${placeholders})`).run(...ids);
+      db.prepare(`UPDATE merged_video_sources SET source_media_id = NULL WHERE source_media_id IN (${placeholders})`).run(...ids);
     }
     // Delete upload_sessions by trip_id (covers orphan sessions where media_id may not exist)
     db.prepare('DELETE FROM upload_sessions WHERE trip_id = ?').run(tripId);

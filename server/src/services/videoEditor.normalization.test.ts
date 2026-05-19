@@ -123,6 +123,11 @@ function makeAnalysis(segments: VideoSegment[], duration: number): VideoAnalysis
 describe('editVideo — audio normalization integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.VIDEO_AUDIO_NORMALIZE = 'true';
+  });
+
+  afterEach(() => {
+    delete process.env.VIDEO_AUDIO_NORMALIZE;
   });
 
   describe('success path — all segments normalized', () => {

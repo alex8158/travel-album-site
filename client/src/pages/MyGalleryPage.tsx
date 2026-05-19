@@ -22,6 +22,7 @@ import type {
 } from './GalleryPage';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
+type VideoTab = 'original' | 'compiled';
 
 const CATEGORY_LABELS: Record<CategoryTab, string> = {
   all: '全部',
@@ -102,6 +103,9 @@ export default function MyGalleryPage() {
 
   // Audio version counter for cache-busting video reload after audio apply/remove
   const [audioVersion, setAudioVersion] = useState(0);
+
+  // Video tab state
+  const [activeVideoTab, setActiveVideoTab] = useState<VideoTab>('original');
 
   // Category picker state (single image)
   const [categoryPickerMediaId, setCategoryPickerMediaId] = useState<string | null>(null);
@@ -498,6 +502,8 @@ export default function MyGalleryPage() {
   // --- Hooks must be called before any conditional returns (React rules of hooks) ---
   const images = data?.images ?? [];
   const videos = data?.videos ?? [];
+  const originalVideos = data?.originalVideos ?? videos;
+  const compiledVideos = data?.compiledVideos ?? [];
 
   const categoryCounts = useMemo(() => {
     const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
@@ -911,153 +917,351 @@ export default function MyGalleryPage() {
       {videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
-          <div
-            data-testid="video-grid"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: '12px',
-            }}
-          >
-            {videos.map((video) => (
-              <div
-                key={video.id}
-                data-testid={`video-${video.id}`}
-                style={{
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  border: '1px solid #eee',
-                  position: 'relative',
-                  cursor: 'pointer',
-                }}
-                role="button"
-                tabIndex={0}
-                aria-label={multiSelectMode ? `选择 ${video.originalFilename}` : `播放 ${video.originalFilename}`}
-                onClick={() => multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id);
-                }}
-              >
-                {video.thumbnailUrl ? (
-                  <img
-                    src={video.thumbnailUrl}
-                    alt={video.originalFilename}
-                    style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
-                  />
-                ) : (
-                  <div
-                    data-testid={`video-placeholder-${video.id}`}
-                    style={{
-                      width: '100%',
-                      aspectRatio: '1',
-                      background: '#e0e0e0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '2rem',
-                    }}
-                  >
-                    <span role="img" aria-label="视频占位图">🎬</span>
-                  </div>
-                )}
+          <div data-testid="video-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+            <button
+              onClick={() => setActiveVideoTab('original')}
+              data-testid="video-tab-original"
+              style={{
+                padding: '6px 16px',
+                borderRadius: '4px',
+                border: activeVideoTab === 'original' ? '2px solid #4a90d9' : '1px solid #ccc',
+                background: activeVideoTab === 'original' ? '#e8f0fe' : '#fff',
+                fontWeight: activeVideoTab === 'original' ? 'bold' : 'normal',
+                cursor: 'pointer',
+              }}
+            >
+              原始视频 ({originalVideos.length})
+            </button>
+            <button
+              onClick={() => setActiveVideoTab('compiled')}
+              data-testid="video-tab-compiled"
+              style={{
+                padding: '6px 16px',
+                borderRadius: '4px',
+                border: activeVideoTab === 'compiled' ? '2px solid #4a90d9' : '1px solid #ccc',
+                background: activeVideoTab === 'compiled' ? '#e8f0fe' : '#fff',
+                fontWeight: activeVideoTab === 'compiled' ? 'bold' : 'normal',
+                cursor: 'pointer',
+              }}
+            >
+              剪辑视频 ({compiledVideos.length})
+            </button>
+          </div>
+          {activeVideoTab === 'original' && (
+            originalVideos.length > 0 ? (
+            <div
+              data-testid="video-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '12px',
+              }}
+            >
+              {originalVideos.map((video) => (
                 <div
-                  data-testid={`play-icon-${video.id}`}
+                  key={video.id}
+                  data-testid={`video-${video.id}`}
                   style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    fontSize: '2.5rem',
-                    color: 'rgba(255,255,255,0.9)',
-                    textShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                    pointerEvents: 'none',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    border: '1px solid #eee',
+                    position: 'relative',
+                    cursor: 'pointer',
                   }}
-                  aria-hidden="true"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={multiSelectMode ? `选择 ${video.originalFilename}` : `播放 ${video.originalFilename}`}
+                  onClick={() => multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id);
+                  }}
                 >
-                  ▶
-                </div>
-                {!multiSelectMode && (
-                  <div style={{ position: 'absolute', bottom: '4px', right: '4px', display: 'flex', gap: '4px' }}>
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        try {
-                          const res = await authFetch(`/api/media/${video.id}/raw`);
-                          if (!res.ok) throw new Error('下载失败');
-                          const blob = await res.blob();
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a');
-                          a.href = url;
-                          a.download = video.originalFilename || `video-${video.id}.mp4`;
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          URL.revokeObjectURL(url);
-                        } catch {
-                          alert('下载失败，请重试');
-                        }
-                      }}
-                      data-testid={`download-btn-${video.id}`}
-                      aria-label={`下载 ${video.originalFilename}`}
+                  {video.thumbnailUrl ? (
+                    <img
+                      src={video.thumbnailUrl}
+                      alt={video.originalFilename}
+                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                    />
+                  ) : (
+                    <div
+                      data-testid={`video-placeholder-${video.id}`}
                       style={{
-                        background: 'rgba(255,255,255,0.9)',
-                        border: '1px solid #ccc',
-                        borderRadius: '4px',
-                        padding: '2px 8px',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
+                        width: '100%',
+                        aspectRatio: '1',
+                        background: '#e0e0e0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '2rem',
                       }}
                     >
-                      ⬇️ 下载
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setClipEditorVideoId(video.id); }}
-                      data-testid={`clip-edit-btn-${video.id}`}
-                      aria-label={`智能剪辑 ${video.originalFilename}`}
-                      style={{
-                        background: 'rgba(255,255,255,0.9)',
-                        border: '1px solid #ccc',
-                        borderRadius: '4px',
-                        padding: '2px 8px',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      ✂️ 智能剪辑
-                    </button>
-                  </div>
-                )}
-                {multiSelectMode && (
+                      <span role="img" aria-label="视频占位图">🎬</span>
+                    </div>
+                  )}
                   <div
-                    data-testid={`select-checkbox-${video.id}`}
-                    onClick={(e) => { e.stopPropagation(); toggleSelect(video.id); }}
+                    data-testid={`play-icon-${video.id}`}
                     style={{
                       position: 'absolute',
-                      top: '6px',
-                      left: '6px',
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '4px',
-                      border: '2px solid #fff',
-                      background: selectedIds.has(video.id) ? '#4a90d9' : 'rgba(0,0,0,0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                      color: '#fff',
-                      fontSize: '14px',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                      top: '50%',
+                      left: '50%',
+                      transform: 'translate(-50%, -50%)',
+                      fontSize: '2.5rem',
+                      color: 'rgba(255,255,255,0.9)',
+                      textShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                      pointerEvents: 'none',
                     }}
-                    role="checkbox"
-                    aria-checked={selectedIds.has(video.id)}
-                    aria-label={`选中 ${video.originalFilename}`}
+                    aria-hidden="true"
                   >
-                    {selectedIds.has(video.id) ? '✓' : ''}
+                    ▶
                   </div>
-                )}
+                  {!multiSelectMode && (
+                    <div style={{ position: 'absolute', bottom: '4px', right: '4px', display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const res = await authFetch(`/api/media/${video.id}/raw`);
+                            if (!res.ok) throw new Error('下载失败');
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = video.originalFilename || `video-${video.id}.mp4`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          } catch {
+                            alert('下载失败，请重试');
+                          }
+                        }}
+                        data-testid={`download-btn-${video.id}`}
+                        aria-label={`下载 ${video.originalFilename}`}
+                        style={{
+                          background: 'rgba(255,255,255,0.9)',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          padding: '2px 8px',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ⬇️ 下载
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setClipEditorVideoId(video.id); }}
+                        data-testid={`clip-edit-btn-${video.id}`}
+                        aria-label={`智能剪辑 ${video.originalFilename}`}
+                        style={{
+                          background: 'rgba(255,255,255,0.9)',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          padding: '2px 8px',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ✂️ 智能剪辑
+                      </button>
+                    </div>
+                  )}
+                  {multiSelectMode && (
+                    <div
+                      data-testid={`select-checkbox-${video.id}`}
+                      onClick={(e) => { e.stopPropagation(); toggleSelect(video.id); }}
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        left: '6px',
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '4px',
+                        border: '2px solid #fff',
+                        background: selectedIds.has(video.id) ? '#4a90d9' : 'rgba(0,0,0,0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        color: '#fff',
+                        fontSize: '14px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                      }}
+                      role="checkbox"
+                      aria-checked={selectedIds.has(video.id)}
+                      aria-label={`选中 ${video.originalFilename}`}
+                    >
+                      {selectedIds.has(video.id) ? '✓' : ''}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            ) : (
+              <div data-testid="empty-original-videos" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
+                暂无原始视频
               </div>
-            ))}
-          </div>
+            )
+          )}
+          {activeVideoTab === 'compiled' && (
+            compiledVideos.length > 0 ? (
+            <div
+              data-testid="compiled-video-grid"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '12px',
+              }}
+            >
+              {compiledVideos.map((video) => (
+                <div
+                  key={video.id}
+                  data-testid={`compiled-video-${video.id}`}
+                  style={{
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    border: '1px solid #eee',
+                    position: 'relative',
+                    cursor: 'pointer',
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={multiSelectMode ? `选择 ${video.originalFilename}` : `播放 ${video.originalFilename}`}
+                  onClick={() => multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') multiSelectMode ? toggleSelect(video.id) : setSelectedVideoId(video.id);
+                  }}
+                >
+                  {video.thumbnailUrl ? (
+                    <img
+                      src={video.thumbnailUrl}
+                      alt={video.originalFilename}
+                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                    />
+                  ) : (
+                    <div
+                      data-testid={`video-placeholder-${video.id}`}
+                      style={{
+                        width: '100%',
+                        aspectRatio: '1',
+                        background: '#e0e0e0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '2rem',
+                      }}
+                    >
+                      <span role="img" aria-label="视频占位图">🎬</span>
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '50%',
+                      transform: 'translate(-50%, -50%)',
+                      fontSize: '2.5rem',
+                      color: 'rgba(255,255,255,0.9)',
+                      textShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                      pointerEvents: 'none',
+                    }}
+                    aria-hidden="true"
+                  >
+                    ▶
+                  </div>
+                  {video.mediaSource === 'merged' && (
+                    <div
+                      data-testid={`merged-badge-${video.id}`}
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        right: '6px',
+                        background: 'rgba(74, 144, 217, 0.9)',
+                        color: '#fff',
+                        borderRadius: '4px',
+                        padding: '2px 6px',
+                        fontSize: '0.7rem',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      合并
+                    </div>
+                  )}
+                  {!multiSelectMode && (
+                    <div style={{ position: 'absolute', bottom: '4px', right: '4px', display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const endpoint = video.compiledPath
+                              ? `/api/media/${video.id}/compiled`
+                              : `/api/media/${video.id}/raw`;
+                            const res = await authFetch(endpoint);
+                            if (!res.ok) throw new Error('下载失败');
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = video.originalFilename || `video-${video.id}.mp4`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          } catch {
+                            alert('下载失败，请重试');
+                          }
+                        }}
+                        data-testid={`download-compiled-btn-${video.id}`}
+                        aria-label={`下载 ${video.originalFilename}`}
+                        style={{
+                          background: 'rgba(255,255,255,0.9)',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
+                          padding: '2px 8px',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ⬇️ 下载
+                      </button>
+                    </div>
+                  )}
+                  {multiSelectMode && (
+                    <div
+                      data-testid={`select-checkbox-${video.id}`}
+                      onClick={(e) => { e.stopPropagation(); toggleSelect(video.id); }}
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        left: '6px',
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '4px',
+                        border: '2px solid #fff',
+                        background: selectedIds.has(video.id) ? '#4a90d9' : 'rgba(0,0,0,0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        color: '#fff',
+                        fontSize: '14px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                      }}
+                      role="checkbox"
+                      aria-checked={selectedIds.has(video.id)}
+                      aria-label={`选中 ${video.originalFilename}`}
+                    >
+                      {selectedIds.has(video.id) ? '✓' : ''}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            ) : (
+              <div data-testid="empty-compiled-videos" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
+                暂无剪辑视频
+              </div>
+            )
+          )}
         </section>
       )}
 

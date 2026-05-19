@@ -40,20 +40,22 @@ function createTrip(userId: string): string {
 function createMediaItem(
   tripId: string,
   mediaType: 'image' | 'video',
-  opts?: { duplicateGroupId?: string; mimeType?: string; visibility?: string }
+  opts?: { duplicateGroupId?: string; mimeType?: string; visibility?: string; compiledPath?: string; mediaSource?: string }
 ): string {
   const db = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
   const mime = opts?.mimeType ?? (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
   const visibility = opts?.visibility ?? 'public';
+  const compiledPath = opts?.compiledPath ?? null;
+  const mediaSource = opts?.mediaSource ?? null;
   db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, visibility, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, visibility, compiled_path, media_source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id, tripId, `${tripId}/originals/${id}.${mediaType === 'image' ? 'jpg' : 'mp4'}`,
     mediaType, mime, `test.${mediaType === 'image' ? 'jpg' : 'mp4'}`, 1024,
-    opts?.duplicateGroupId ?? null, visibility, now
+    opts?.duplicateGroupId ?? null, visibility, compiledPath, mediaSource, now
   );
   return id;
 }
@@ -118,8 +120,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
     const img1 = createMediaItem(tripId, 'image');
     const img2 = createMediaItem(tripId, 'image');
-    const vid1 = createMediaItem(tripId, 'video');
-    const vid2 = createMediaItem(tripId, 'video');
+    const vid1 = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid1.mp4` });
+    const vid2 = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid2.mp4` });
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
@@ -193,7 +195,7 @@ describe('GET /api/trips/:id/gallery', () => {
 
   it('should return thumbnailUrl for videos with thumbnail_path', async () => {
     const tripId = createTrip(owner.userId);
-    const vidId = createMediaItem(tripId, 'video');
+    const vidId = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid.mp4` });
 
     const db = getDb();
     db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(
@@ -208,7 +210,7 @@ describe('GET /api/trips/:id/gallery', () => {
 
   it('should return thumbnailUrl for videos even without thumbnail_path', async () => {
     const tripId = createTrip(owner.userId);
-    const vidId = createMediaItem(tripId, 'video');
+    const vidId = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid.mp4` });
 
     const res = await request(app).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
@@ -222,8 +224,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
       const publicImg = createMediaItem(tripId, 'image', { visibility: 'public' });
       createMediaItem(tripId, 'image', { visibility: 'private' });
-      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public' });
-      createMediaItem(tripId, 'video', { visibility: 'private' });
+      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
+      createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const res = await request(app).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
@@ -239,8 +241,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
       const publicImg = createMediaItem(tripId, 'image', { visibility: 'public' });
       createMediaItem(tripId, 'image', { visibility: 'private' });
-      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public' });
-      createMediaItem(tripId, 'video', { visibility: 'private' });
+      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
+      createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const other = createTestUser('regular');
       const res = await request(app)
@@ -259,8 +261,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
       createMediaItem(tripId, 'image', { visibility: 'public' });
       createMediaItem(tripId, 'image', { visibility: 'private' });
-      createMediaItem(tripId, 'video', { visibility: 'public' });
-      createMediaItem(tripId, 'video', { visibility: 'private' });
+      createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
+      createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const res = await request(app)
         .get(`/api/trips/${tripId}/gallery`)
@@ -276,8 +278,8 @@ describe('GET /api/trips/:id/gallery', () => {
 
       createMediaItem(tripId, 'image', { visibility: 'public' });
       createMediaItem(tripId, 'image', { visibility: 'private' });
-      createMediaItem(tripId, 'video', { visibility: 'public' });
-      createMediaItem(tripId, 'video', { visibility: 'private' });
+      createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
+      createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const admin = createTestUser('admin');
       const res = await request(app)
@@ -382,8 +384,8 @@ describe('GET /api/trips/:id/gallery', () => {
     it('should filter videos by category too', async () => {
       const tripId = createTrip(owner.userId);
 
-      const vid1 = createMediaItem(tripId, 'video');
-      const vid2 = createMediaItem(tripId, 'video');
+      const vid1 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v1.mp4' });
+      const vid2 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v2.mp4' });
       setCategory(vid1, 'animal');
       setCategory(vid2, 'landscape');
 
@@ -413,8 +415,8 @@ describe('GET /api/trips/:id/gallery', () => {
     it('should return only videos with the specified tag', async () => {
       const tripId = createTrip(owner.userId);
 
-      const vid1 = createMediaItem(tripId, 'video');
-      const vid2 = createMediaItem(tripId, 'video');
+      const vid1 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v1.mp4' });
+      const vid2 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v2.mp4' });
       createTag(vid1, 'beach');
 
       const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=beach`);
@@ -455,7 +457,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const tripId = createTrip(owner.userId);
 
       const img1 = createMediaItem(tripId, 'image');
-      const vid1 = createMediaItem(tripId, 'video');
+      const vid1 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v1.mp4' });
       createTag(img1, 'sunset');
 
       const res = await request(app).get(`/api/trips/${tripId}/gallery`);
@@ -469,7 +471,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const tripId = createTrip(owner.userId);
 
       const img1 = createMediaItem(tripId, 'image');
-      const vid1 = createMediaItem(tripId, 'video');
+      const vid1 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v1.mp4' });
       const img2 = createMediaItem(tripId, 'image');
       createTag(img1, '2024-01');
       createTag(vid1, '2024-01');

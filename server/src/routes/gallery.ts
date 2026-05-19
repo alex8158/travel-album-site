@@ -111,7 +111,7 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
     });
   }
 
-  // Get all videos
+  // Get all videos — only return compiled or merged videos for public gallery
   const videoParams: unknown[] = [tripId, 'video'];
   if (normalizedTag) videoParams.push(normalizedTag);
   if (category) videoParams.push(category);
@@ -119,12 +119,14 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
   const videoRows = db.prepare(
     `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active'
      AND (m.processing_status IS NULL OR m.processing_status NOT IN ('uploading', 'cancelled'))
+     AND (m.compiled_path IS NOT NULL OR m.media_source = 'merged')
      ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...videoParams) as MediaItemRow[];
 
   const videos = videoRows.map((row) => ({
     ...rowToMediaItem(row),
     thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    ...(row.compiled_path ? { compiledUrl: `/api/media/${row.id}/compiled` } : {}),
   }));
 
   const galleryData: GalleryData = { trip, images, videos };

@@ -502,6 +502,8 @@ export async function runTripProcessingPipeline(
     console.log(`[pipeline] videoAnalysis started at ${new Date(videoAnalysisStart).toISOString()}`);
     const analysisResults = new Map<string, Awaited<ReturnType<typeof analyzeVideo>>>();
     for (const videoRow of unprocessedVideos) {
+      // Skip merged videos — they should not be re-analyzed (Requirement 7.2)
+      if (videoRow.media_source === 'merged') continue;
       try {
         const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
         const analysis = await analyzeVideo(videoPath, videoRow.id);
@@ -523,25 +525,22 @@ export async function runTripProcessingPipeline(
 
     // ---- Stage: autoCompile ----
     // Trigger auto-compilation for videos that have segments written to DB
-    // Requirements: 1.1 — auto-compile after video_segments are written
-    const autoCompileEnabled = process.env.VIDEO_AUTO_COMPILE_ENGINE === 'true';
+    // Requirements: 1.1, 1.2, 1.3 — always auto-compile after video_segments are written
     onProgress('autoCompile', 'start');
     let autoCompileCount = 0;
-    if (autoCompileEnabled) {
-      const compilationEngine = new CompilationEngine();
-      for (const videoRow of unprocessedVideos) {
-        if (!analysisResults.has(videoRow.id)) continue;
-        try {
-          await compilationEngine.autoCompile(videoRow.id);
-          autoCompileCount++;
-        } catch (err) {
-          // Auto-compilation failure must NOT affect pipeline result
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          console.error(`[pipeline] autoCompile failed for ${videoRow.id}: ${errorMsg}`);
-        }
+    const compilationEngine = new CompilationEngine();
+    for (const videoRow of unprocessedVideos) {
+      if (!analysisResults.has(videoRow.id)) continue;
+      // Skip merged videos — they should not be re-compiled (Requirement 7.2)
+      if (videoRow.media_source === 'merged') continue;
+      try {
+        await compilationEngine.autoCompile(videoRow.id);
+        autoCompileCount++;
+      } catch (err) {
+        // Auto-compilation failure must NOT affect pipeline result (Requirement 1.3)
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[pipeline] autoCompile failed for ${videoRow.id}: ${errorMsg}`);
       }
-    } else {
-      console.log(`[pipeline] autoCompile skipped (editVideo handles compilation)`);
     }
     onProgress('autoCompile', 'complete', `${autoCompileCount} auto-compiled`);
 
@@ -553,6 +552,8 @@ export async function runTripProcessingPipeline(
     } else {
       console.log(`[pipeline] videoEdit started at ${new Date(videoEditStart).toISOString()}`);
     for (const videoRow of unprocessedVideos) {
+      // Skip merged videos — they should not be re-edited (Requirement 7.2)
+      if (videoRow.media_source === 'merged') continue;
       const analysis = analysisResults.get(videoRow.id);
       if (!analysis) continue;
 
@@ -605,6 +606,8 @@ export async function runTripProcessingPipeline(
     let versionsGenerated = 0;
     if (videoEnhanceAuto) {
       for (const videoRow of videoRows) {
+        // Skip merged videos — they should not be re-enhanced (Requirement 7.2)
+        if (videoRow.media_source === 'merged') continue;
         try {
           const videoPath = await storageProvider.downloadToTemp(videoRow.file_path);
           const mediaId = videoRow.id;

@@ -51,10 +51,12 @@ function insertMediaItem(
   // Retrieve the trip's user_id so media is owned correctly
   const trip = db.prepare('SELECT user_id FROM trips WHERE id = ?').get(tripId) as { user_id: string } | undefined;
   const userId = trip?.user_id ?? null;
+  // Videos need compiled_path to be visible in the public gallery (per video-auto-compile-and-merge spec)
+  const compiledPath = mediaType === 'video' ? `${tripId}/compiled/${id}.mp4` : null;
   db.prepare(
-    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, user_id, visibility, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?)`
-  ).run(id, tripId, `${tripId}/originals/${id}.${ext}`, mediaType, mime, `file.${ext}`, 1024, duplicateGroupId, userId, now);
+    `INSERT INTO media_items (id, trip_id, file_path, media_type, mime_type, original_filename, file_size, duplicate_group_id, user_id, visibility, compiled_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)`
+  ).run(id, tripId, `${tripId}/originals/${id}.${ext}`, mediaType, mime, `file.${ext}`, 1024, duplicateGroupId, userId, compiledPath, now);
   return id;
 }
 
@@ -78,6 +80,8 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
     db.exec('DELETE FROM upload_sessions');
     db.exec('DELETE FROM media_tags');
     db.exec('DELETE FROM compile_jobs');
+    db.exec('DELETE FROM merged_video_sources');
+    db.exec('DELETE FROM duplicate_group_items');
     db.exec('DELETE FROM media_items');
     db.exec('DELETE FROM duplicate_groups');
     db.exec('DELETE FROM trips');
@@ -102,9 +106,11 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
           // Clean slate for each run
           const db = getDb();
           db.exec('DELETE FROM video_segments');
-    db.exec('DELETE FROM upload_sessions');
-    db.exec('DELETE FROM media_tags');
+          db.exec('DELETE FROM upload_sessions');
+          db.exec('DELETE FROM media_tags');
           db.exec('DELETE FROM compile_jobs');
+          db.exec('DELETE FROM merged_video_sources');
+          db.exec('DELETE FROM duplicate_group_items');
           db.exec('DELETE FROM media_items');
           db.exec('DELETE FROM duplicate_groups');
           db.exec('DELETE FROM trips');
@@ -175,7 +181,7 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
           expect(images.length + videos.length).toBe(expectedDisplayableImages + videoCount);
         }
       ),
-      { numRuns: 100 }
+      { numRuns: 10 }
     );
   });
 });

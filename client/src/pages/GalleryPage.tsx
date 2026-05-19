@@ -71,6 +71,8 @@ export interface GalleryVideo {
   fileSize: number;
   thumbnailUrl: string;
   compiledPath?: string;
+  compiledUrl?: string;
+  mediaSource?: 'upload' | 'merged';
   audioTrackId?: string;
 }
 
@@ -78,6 +80,8 @@ export interface GalleryData {
   trip: GalleryTrip;
   images: GalleryImage[];
   videos: GalleryVideo[];
+  originalVideos?: GalleryVideo[];
+  compiledVideos?: GalleryVideo[];
 }
 
 export interface TrashedItem {
@@ -324,7 +328,8 @@ export default function GalleryPage() {
                   onClick={async (e) => {
                     e.stopPropagation();
                     try {
-                      const res = await fetch(`/api/media/${video.id}/raw`);
+                      const downloadUrl = video.compiledUrl || `/api/media/${video.id}/raw`;
+                      const res = await fetch(downloadUrl);
                       if (!res.ok) throw new Error('下载失败');
                       const blob = await res.blob();
                       const url = URL.createObjectURL(blob);
@@ -362,27 +367,31 @@ export default function GalleryPage() {
       )}
 
       {/* Video Player Modal */}
-      {selectedVideoId && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="视频播放"
-          data-testid="video-player-modal"
-          onClick={(e) => { if (e.target === e.currentTarget) setSelectedVideoId(null); }}
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-          }}
-        >
-          <div style={{ width: '90%', maxWidth: '900px' }}>
-            <VideoPlayer
-              videoUrl={`/api/media/${selectedVideoId}/original`}
-              mimeType={videos.find(v => v.id === selectedVideoId)?.mimeType || 'video/mp4'}
-              onClose={() => setSelectedVideoId(null)}
-            />
+      {selectedVideoId && (() => {
+        const selectedVideo = videos.find(v => v.id === selectedVideoId);
+        const videoUrl = selectedVideo?.compiledUrl || `/api/media/${selectedVideoId}/original`;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="视频播放"
+            data-testid="video-player-modal"
+            onClick={(e) => { if (e.target === e.currentTarget) setSelectedVideoId(null); }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            }}
+          >
+            <div style={{ width: '90%', maxWidth: '900px' }}>
+              <VideoPlayer
+                videoUrl={videoUrl}
+                mimeType={selectedVideo?.mimeType || 'video/mp4'}
+                onClose={() => setSelectedVideoId(null)}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {images.length === 0 && videos.length === 0 && (
         <div aria-label="空状态" style={{ textAlign: 'center', padding: '48px', color: '#999' }}>
