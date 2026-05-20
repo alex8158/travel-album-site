@@ -167,7 +167,7 @@ export default function GalleryPage() {
 
   if (data.trip.visibility === 'unlisted') {
     return (
-      <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto', textAlign: 'center' }}>
+      <div className="page-container" style={{ textAlign: 'center' }}>
         <p role="alert" style={{ fontSize: '1.25rem', color: '#666', marginTop: '48px' }}>该相册未公开</p>
         <Link to="/" style={{ display: 'inline-block', marginTop: '16px' }}>
           ← 返回首页
@@ -179,33 +179,26 @@ export default function GalleryPage() {
   const { trip } = data;
 
   return (
-    <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div className="page-container">
       <Link to="/" style={{ display: 'inline-block', marginBottom: '16px' }}>
         ← 返回首页
       </Link>
 
-      <header aria-label="旅行信息">
+      <header className="page-header" aria-label="旅行信息">
         <h1>{trip.title}</h1>
-        {trip.description && <p style={{ color: '#666' }}>{trip.description}</p>}
+        {trip.description && <p>{trip.description}</p>}
       </header>
 
       {images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
-          <div data-testid="category-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+          <div data-testid="category-tabs" className="pill-tabs">
             {CATEGORY_TABS.map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveCategory(tab)}
                 data-testid={`category-tab-${tab}`}
-                style={{
-                  padding: '6px 16px',
-                  borderRadius: '4px',
-                  border: activeCategory === tab ? '2px solid #4a90d9' : '1px solid #ccc',
-                  background: activeCategory === tab ? '#e8f0fe' : '#fff',
-                  fontWeight: activeCategory === tab ? 'bold' : 'normal',
-                  cursor: 'pointer',
-                }}
+                className={`pill-tab${activeCategory === tab ? ' active' : ''}`}
               >
                 {CATEGORY_LABELS[tab]} ({categoryCounts[tab]})
               </button>
@@ -214,6 +207,7 @@ export default function GalleryPage() {
           {filteredImages.length > 0 ? (
             <div
               data-testid="image-grid"
+              className="media-grid"
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
@@ -224,12 +218,8 @@ export default function GalleryPage() {
                 <div
                   key={img.item.id}
                   data-testid={`image-${img.item.id}`}
-                  style={{
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    border: trip.coverImageId === img.item.id ? '3px solid #4a90d9' : '1px solid #eee',
-                    position: 'relative',
-                  }}
+                  className="media-card"
+                  style={trip.coverImageId === img.item.id ? { border: '3px solid #4a90d9' } : undefined}
                 >
                   <div
                     style={{ cursor: 'pointer' }}
@@ -249,8 +239,8 @@ export default function GalleryPage() {
               ))}
             </div>
           ) : (
-            <div data-testid="empty-category" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
-              该分类下暂无图片
+            <div data-testid="empty-category" className="empty-state" style={{ padding: '32px' }}>
+              <p>该分类下暂无图片</p>
             </div>
           )}
         </section>
@@ -261,6 +251,7 @@ export default function GalleryPage() {
           <h2>视频 ({videos.length})</h2>
           <div
             data-testid="video-grid"
+            className="media-grid"
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
@@ -271,13 +262,8 @@ export default function GalleryPage() {
               <div
                 key={video.id}
                 data-testid={`video-${video.id}`}
-                style={{
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  border: '1px solid #eee',
-                  position: 'relative',
-                  cursor: 'pointer',
-                }}
+                className="media-card"
+                style={{ cursor: 'pointer' }}
                 role="button"
                 tabIndex={0}
                 aria-label={`播放 ${video.originalFilename}`}
@@ -394,8 +380,8 @@ export default function GalleryPage() {
       })()}
 
       {images.length === 0 && videos.length === 0 && (
-        <div aria-label="空状态" style={{ textAlign: 'center', padding: '48px', color: '#999' }}>
-          这次旅行还没有素材，快去上传吧！
+        <div aria-label="空状态" className="empty-state">
+          <p>这次旅行还没有素材，快去上传吧！</p>
         </div>
       )}
 

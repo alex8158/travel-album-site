@@ -72,113 +72,55 @@ export default function UserSpacePage() {
   if (error) return <div role="alert">{error}</div>;
 
   return (
-    <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <h1 style={{ fontSize: '1.4rem', margin: 0 }}>我的空间</h1>
+    <div className="page-container" style={{ maxWidth: '960px' }}>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1>我的空间</h1>
         <div style={{ display: 'flex', gap: '8px' }}>
           {user?.role === 'admin' && (
-            <Link
-              to="/admin"
-              style={{
-                textDecoration: 'none',
-                color: '#666',
-                border: '1px solid #ccc',
-                borderRadius: '4px',
-                padding: '6px 16px',
-                fontSize: '0.9rem',
-              }}
-            >
+            <Link to="/admin" className="btn-link" style={{ textDecoration: 'none', color: '#666', border: '1px solid #ccc', borderRadius: 'var(--radius)', padding: '6px 16px', fontSize: '0.9rem' }}>
               会员管理
             </Link>
           )}
-          <Link
-            to="/upload"
-            style={{
-              textDecoration: 'none',
-              color: '#fff',
-              backgroundColor: '#4a90d9',
-              padding: '6px 16px',
-              borderRadius: '4px',
-              fontSize: '0.9rem',
-            }}
-          >
+          <Link to="/upload" className="nav-btn-primary" style={{ textDecoration: 'none' }}>
             + 新建相册
           </Link>
         </div>
       </div>
       {trips.length === 0 ? (
-        <p>还没有创建相册，去<Link to="/upload">创建一个</Link>吧！</p>
+        <div className="empty-state">
+          <p>还没有创建相册</p>
+          <Link to="/upload" className="btn-primary" style={{ display: 'inline-block', padding: '8px 20px', borderRadius: 'var(--radius)', textDecoration: 'none' }}>创建一个</Link>
+        </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: '16px',
-          }}
-        >
+        <div className="trip-grid" style={{ padding: 0 }}>
           {trips.map((trip) => (
-            <article
-              key={trip.id}
-              style={{
-                border: '1px solid #ddd',
-                borderRadius: '8px',
-                overflow: 'hidden',
-                position: 'relative',
-              }}
-            >
-              <Link
-                to={`/my/trips/${trip.id}`}
-                style={{ textDecoration: 'none', color: 'inherit' }}
-              >
+            <article key={trip.id} className="trip-card">
+              <Link to={`/my/trips/${trip.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                 <img
                   src={trip.coverImageUrl}
                   alt={`${trip.title} 封面`}
                   style={{ width: '100%', height: '180px', objectFit: 'cover' }}
                 />
-                <div style={{ padding: '12px 12px 4px' }}>
-                  <h2 style={{ margin: '0 0 4px 0', fontSize: '1.1rem' }}>{trip.title}</h2>
-                  <span style={{ fontSize: '0.85rem', color: '#999' }}>
-                    {trip.mediaCount ?? 0} 个素材
-                  </span>
+                <div className="trip-card-body">
+                  <h2>{trip.title}</h2>
+                  <span>{trip.mediaCount ?? 0} 个素材</span>
                 </div>
               </Link>
-              <div style={{ padding: '8px 12px 12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <span
-                  style={{
-                    fontSize: '0.75rem',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    background: trip.visibility === 'public' ? '#e8f5e9' : '#fff3e0',
-                    color: trip.visibility === 'public' ? '#2e7d32' : '#e65100',
-                  }}
-                >
+              <div style={{ padding: '8px 16px 16px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span className={`badge ${trip.visibility === 'public' ? 'badge-success' : 'badge-warning'}`}>
                   {trip.visibility === 'public' ? '公开' : '不公开'}
                 </span>
                 <button
                   onClick={() => handleToggleVisibility(trip.id, trip.visibility)}
-                  style={{
-                    background: 'none',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    padding: '2px 8px',
-                    fontSize: '0.75rem',
-                    cursor: 'pointer',
-                  }}
+                  style={{ padding: '2px 8px', fontSize: '0.75rem' }}
                   aria-label={`切换可见性 ${trip.title}`}
                 >
                   {trip.visibility === 'public' ? '设为不公开' : '设为公开'}
                 </button>
                 <button
                   onClick={() => handleDeleteTrip(trip.id)}
-                  style={{
-                    background: 'none',
-                    border: '1px solid #e74c3c',
-                    borderRadius: '4px',
-                    padding: '2px 8px',
-                    fontSize: '0.75rem',
-                    cursor: 'pointer',
-                    color: '#e74c3c',
-                  }}
+                  className="btn-danger"
+                  style={{ padding: '2px 8px', fontSize: '0.75rem' }}
                   aria-label={`删除相册 ${trip.title}`}
                 >
                   删除相册

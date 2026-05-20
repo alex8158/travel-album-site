@@ -123,16 +123,11 @@ export default function AdminPage() {
   if (loading) return <div role="status" aria-label="加载中">加载中...</div>;
   if (error) return <div role="alert">{error}</div>;
 
-  const sectionStyle: React.CSSProperties = {
-    marginBottom: '32px',
-    border: '1px solid #eee',
-    borderRadius: '8px',
-    padding: '16px',
-  };
-
   return (
-    <div style={{ maxWidth: '960px', margin: '0 auto', padding: '24px 16px' }}>
-      <h1 style={{ fontSize: '1.4rem', marginBottom: '16px' }}>管理后台</h1>
+    <div className="page-container" style={{ maxWidth: '960px' }}>
+      <div className="page-header">
+        <h1>管理后台</h1>
+      </div>
 
       {actionMsg && (
         <div style={{ padding: '8px 12px', marginBottom: '12px', background: '#f0f0f0', borderRadius: '4px' }}>
@@ -141,26 +136,28 @@ export default function AdminPage() {
       )}
 
       {/* User Management */}
-      <section style={sectionStyle}>
+      <section>
         <h2 style={{ fontSize: '1.1rem', marginBottom: '12px' }}>用户管理</h2>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+        <table className="data-table">
           <thead>
-            <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
-              <th style={{ padding: '8px' }}>用户名</th>
-              <th style={{ padding: '8px' }}>角色</th>
-              <th style={{ padding: '8px' }}>状态</th>
-              <th style={{ padding: '8px' }}>操作</th>
+            <tr>
+              <th>用户名</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={{ padding: '8px' }}>{u.username}</td>
-                <td style={{ padding: '8px' }}>{u.role === 'admin' ? '管理员' : '普通用户'}</td>
-                <td style={{ padding: '8px' }}>
-                  {u.status === 'active' ? '活跃' : u.status === 'pending' ? '待审批' : '已禁用'}
+              <tr key={u.id}>
+                <td>{u.username}</td>
+                <td>{u.role === 'admin' ? '管理员' : '普通用户'}</td>
+                <td>
+                  <span className={`badge ${u.status === 'active' ? 'badge-success' : u.status === 'pending' ? 'badge-warning' : 'badge-danger'}`}>
+                    {u.status === 'active' ? '活跃' : u.status === 'pending' ? '待审批' : '已禁用'}
+                  </span>
                 </td>
-                <td style={{ padding: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <td style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   <Link
                     to={`/admin/users/${u.id}/trips`}
                     style={{ textDecoration: 'none', color: '#4a90d9', fontSize: '0.85rem' }}
@@ -169,16 +166,16 @@ export default function AdminPage() {
                   </Link>
                   {u.status === 'pending' && (
                     <>
-                      <button onClick={() => handleAction(`/api/admin/users/${u.id}/approve`, 'PUT')}>
+                      <button className="btn-primary" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => handleAction(`/api/admin/users/${u.id}/approve`, 'PUT')}>
                         通过
                       </button>
-                      <button onClick={() => handleAction(`/api/admin/users/${u.id}/reject`, 'PUT')}>
+                      <button style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => handleAction(`/api/admin/users/${u.id}/reject`, 'PUT')}>
                         拒绝
                       </button>
                     </>
                   )}
                   {u.role !== 'admin' && u.status === 'active' && (
-                    <button onClick={() => handleAction(`/api/admin/users/${u.id}/promote`, 'PUT')}>
+                    <button style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => handleAction(`/api/admin/users/${u.id}/promote`, 'PUT')}>
                       提升管理员
                     </button>
                   )}
@@ -189,18 +186,20 @@ export default function AdminPage() {
                         placeholder="新密码"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
+                        className="form-input"
                         style={{ width: '120px', padding: '2px 6px' }}
                       />
-                      <button onClick={() => handleResetPassword(u.id)}>确认</button>
-                      <button onClick={() => { setResetUserId(null); setNewPassword(''); }}>取消</button>
+                      <button className="btn-primary" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => handleResetPassword(u.id)}>确认</button>
+                      <button style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => { setResetUserId(null); setNewPassword(''); }}>取消</button>
                     </span>
                   ) : (
-                    <button onClick={() => setResetUserId(u.id)}>重置密码</button>
+                    <button style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => setResetUserId(u.id)}>重置密码</button>
                   )}
                   {u.status !== 'disabled' && (
                     <button
+                      className="btn-danger"
+                      style={{ padding: '2px 8px', fontSize: '0.8rem' }}
                       onClick={() => handleAction(`/api/admin/users/${u.id}`, 'DELETE')}
-                      style={{ color: '#d32f2f' }}
                     >
                       删除
                     </button>
@@ -213,7 +212,7 @@ export default function AdminPage() {
       </section>
 
       {/* Storage Management */}
-      <section style={sectionStyle}>
+      <section>
         <h2 style={{ fontSize: '1.1rem', marginBottom: '12px' }}>存储管理</h2>
 
         {storageStatus ? (
@@ -223,28 +222,28 @@ export default function AdminPage() {
             </p>
 
             <h3 style={{ fontSize: '0.95rem', marginBottom: '8px' }}>存储配置状态</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', marginBottom: '16px' }}>
+            <table className="data-table" style={{ marginBottom: '16px' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
-                  <th style={{ padding: '6px 8px' }}>存储类型</th>
-                  <th style={{ padding: '6px 8px' }}>状态</th>
-                  <th style={{ padding: '6px 8px' }}>缺少的环境变量</th>
+                <tr>
+                  <th>存储类型</th>
+                  <th>状态</th>
+                  <th>缺少的环境变量</th>
                 </tr>
               </thead>
               <tbody>
                 {storageStatus.providers.map((p) => (
-                  <tr key={p.type} style={{ borderBottom: '1px solid #eee', background: p.type === storageStatus.currentType ? '#f0f7ff' : undefined }}>
-                    <td style={{ padding: '6px 8px' }}>
+                  <tr key={p.type} style={p.type === storageStatus.currentType ? { background: '#f0f7ff' } : undefined}>
+                    <td>
                       {p.label}
-                      {p.type === storageStatus.currentType && <span style={{ marginLeft: '6px', color: '#4a90d9', fontSize: '0.8rem' }}>（当前）</span>}
+                      {p.type === storageStatus.currentType && <span className="badge badge-info" style={{ marginLeft: '6px' }}>当前</span>}
                     </td>
-                    <td style={{ padding: '6px 8px' }}>
+                    <td>
                       {p.configured
-                        ? <span style={{ color: '#2e7d32' }}>✅ 已配置</span>
-                        : <span style={{ color: '#999' }}>⚠️ 未配置</span>
+                        ? <span className="badge badge-success">✅ 已配置</span>
+                        : <span className="badge badge-warning">⚠️ 未配置</span>
                       }
                     </td>
-                    <td style={{ padding: '6px 8px', color: '#999', fontSize: '0.85rem' }}>
+                    <td style={{ color: '#999', fontSize: '0.85rem' }}>
                       {p.missing.length > 0 ? p.missing.join(', ') : '—'}
                     </td>
                   </tr>

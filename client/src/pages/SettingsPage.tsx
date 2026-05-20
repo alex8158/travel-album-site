@@ -82,8 +82,10 @@ export default function SettingsPage() {
   }
 
   return (
-    <div style={{ maxWidth: '720px', margin: '0 auto', padding: '24px 16px' }}>
-      <h1 style={{ fontSize: '1.4rem', marginBottom: '16px' }}>相册可见性设置</h1>
+    <div className="page-container" style={{ maxWidth: '720px' }}>
+      <div className="page-header">
+        <h1>相册可见性设置</h1>
+      </div>
 
       {toggleError && (
         <div role="alert" style={{ color: '#d32f2f', marginBottom: '12px', fontSize: '0.9rem' }}>

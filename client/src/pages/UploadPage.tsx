@@ -39,7 +39,7 @@ export default function UploadPage() {
   };
 
   return (
-    <div style={{ maxWidth: '700px', margin: '0 auto', padding: '16px' }}>
+    <div className="auth-card" style={{ maxWidth: '700px' }}>
       <h1>创建旅行</h1>
 
       {step === 'create' && (
