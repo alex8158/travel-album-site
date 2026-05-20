@@ -46,12 +46,12 @@ export default function RegisterPage() {
 
   if (success) {
     return (
-      <div style={{ maxWidth: '400px', margin: '80px auto', padding: '0 16px', textAlign: 'center' }}>
+      <div className="auth-card" style={{ textAlign: 'center' }}>
         <h1 style={{ fontSize: '1.4rem', marginBottom: '16px' }}>注册成功</h1>
         <p style={{ color: '#666', marginBottom: '24px' }}>
           您的账户正在等待管理员审批，审批通过后即可登录。
         </p>
-        <Link to="/login" style={{ color: '#4a90d9', fontSize: '0.9rem' }}>
+        <Link to="/login">
           返回登录
         </Link>
       </div>
@@ -59,7 +59,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div style={{ maxWidth: '400px', margin: '80px auto', padding: '0 16px' }}>
+    <div className="auth-card">
       <h1 style={{ fontSize: '1.4rem', marginBottom: '24px', textAlign: 'center' }}>注册</h1>
 
       {error && (
@@ -70,7 +70,7 @@ export default function RegisterPage() {
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '16px' }}>
-          <label htmlFor="username" style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem' }}>
+          <label htmlFor="username" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem' }}>
             用户名
           </label>
           <input
@@ -80,12 +80,12 @@ export default function RegisterPage() {
             onChange={(e) => setUsername(e.target.value)}
             required
             autoComplete="username"
-            style={{ width: '100%', padding: '8px', fontSize: '1rem', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }}
+            className="form-input"
           />
         </div>
 
         <div style={{ marginBottom: '16px' }}>
-          <label htmlFor="password" style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem' }}>
+          <label htmlFor="password" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem' }}>
             密码
           </label>
           <input
@@ -95,12 +95,12 @@ export default function RegisterPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
             autoComplete="new-password"
-            style={{ width: '100%', padding: '8px', fontSize: '1rem', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }}
+            className="form-input"
           />
         </div>
 
         <div style={{ marginBottom: '24px' }}>
-          <label htmlFor="confirmPassword" style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem' }}>
+          <label htmlFor="confirmPassword" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem' }}>
             确认密码
           </label>
           <input
@@ -110,21 +110,19 @@ export default function RegisterPage() {
             onChange={(e) => setConfirmPassword(e.target.value)}
             required
             autoComplete="new-password"
-            style={{ width: '100%', padding: '8px', fontSize: '1rem', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }}
+            className="form-input"
           />
         </div>
 
         <button
           type="submit"
           disabled={loading}
+          className="btn-primary"
           style={{
             width: '100%',
             padding: '10px',
             fontSize: '1rem',
-            color: '#fff',
-            backgroundColor: loading ? '#999' : '#4a90d9',
-            border: 'none',
-            borderRadius: '4px',
+            opacity: loading ? 0.7 : 1,
             cursor: loading ? 'not-allowed' : 'pointer',
           }}
         >
@@ -133,7 +131,7 @@ export default function RegisterPage() {
       </form>
 
       <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '0.9rem', color: '#666' }}>
-        已有账户？<Link to="/login" style={{ color: '#4a90d9' }}>登录</Link>
+        已有账户？<Link to="/login">登录</Link>
       </p>
     </div>
   );

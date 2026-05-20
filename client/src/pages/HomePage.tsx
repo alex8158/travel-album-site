@@ -39,61 +39,65 @@ export default function HomePage() {
   }, []);
 
   if (loading) {
-    return <div role="status" aria-label="加载中">加载中...</div>;
+    return <div role="status" aria-label="加载中" style={{ padding: '48px 24px', textAlign: 'center' }}>加载中...</div>;
   }
 
   if (error) {
-    return <div role="alert">{error}</div>;
+    return <div role="alert" style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--color-danger)' }}>{error}</div>;
   }
 
   if (trips.length === 0) {
     return (
-      <div aria-label="空状态">
+      <div aria-label="空状态" style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
         还没有公开的旅行记录。
       </div>
     );
   }
 
   return (
-    <div
-      aria-label="旅行列表"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-        gap: '16px',
-        padding: '16px',
-      }}
-    >
-      {trips.map((trip) => (
-        <Link
-          key={trip.id}
-          to={`/trips/${trip.id}`}
-          style={{ textDecoration: 'none', color: 'inherit' }}
-          data-testid={`trip-card-${trip.id}`}
-        >
-          <article
-            aria-label={trip.title}
-            style={{
-              border: '1px solid #ddd',
-              borderRadius: '8px',
-              overflow: 'hidden',
-            }}
+    <div>
+      <section className="hero">
+        <h1>🌍 旅行相册</h1>
+        <p>记录每一段旅途的美好瞬间</p>
+      </section>
+      <div
+        aria-label="旅行列表"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: '24px',
+          padding: '0 24px 24px',
+          maxWidth: '1200px',
+          margin: '0 auto',
+        }}
+      >
+        {trips.map((trip) => (
+          <Link
+            key={trip.id}
+            to={`/trips/${trip.id}`}
+            style={{ textDecoration: 'none', color: 'inherit' }}
+            data-testid={`trip-card-${trip.id}`}
           >
-            <img
-              src={trip.coverImageUrl}
-              alt={`${trip.title} 封面`}
-              style={{ width: '100%', height: '200px', objectFit: 'cover' }}
-            />
-            <div style={{ padding: '12px' }}>
-              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.2rem' }}>{trip.title}</h2>
-              {trip.descriptionExcerpt && (
-                <p style={{ margin: '0 0 8px 0', color: '#666' }}>{trip.descriptionExcerpt}</p>
-              )}
-              <span style={{ fontSize: '0.85rem', color: '#999' }}>{trip.mediaCount} 个素材</span>
-            </div>
-          </article>
-        </Link>
-      ))}
+            <article
+              aria-label={trip.title}
+              className="trip-card"
+            >
+              <img
+                src={trip.coverImageUrl}
+                alt={`${trip.title} 封面`}
+                style={{ width: '100%', height: '200px', objectFit: 'cover' }}
+              />
+              <div className="trip-card-body">
+                <h2>{trip.title}</h2>
+                {trip.descriptionExcerpt && (
+                  <p>{trip.descriptionExcerpt}</p>
+                )}
+                <span>{trip.mediaCount} 个素材</span>
+              </div>
+            </article>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

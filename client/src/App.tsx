@@ -29,61 +29,35 @@ function NavHeader() {
   }
 
   return (
-    <header
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '12px 24px',
-        borderBottom: '1px solid #eee',
-        backgroundColor: '#fff',
-      }}
-    >
-      <Link to="/" style={{ textDecoration: 'none', color: '#333', fontSize: '1.2rem', fontWeight: 'bold' }}>
+    <header className="navbar">
+      <Link to="/" className="nav-brand">
         🌍 旅行相册
       </Link>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div className="nav-links">
         {isLoggedIn && user ? (
           <>
-            <span style={{ fontSize: '0.9rem', color: '#333' }}>{user.username}</span>
-            <Link to="/my" style={{ textDecoration: 'none', color: '#666', fontSize: '0.9rem' }}>
+            <span style={{ fontSize: '0.9rem', color: 'var(--color-text)' }}>{user.username}</span>
+            <Link to="/my">
               我的空间
             </Link>
             {isUserSpace && (
               <>
-                <Link to="/settings" style={{ textDecoration: 'none', color: '#666', fontSize: '0.9rem' }}>
+                <Link to="/settings">
                   设置
                 </Link>
                 {user.role === 'admin' && (
-                  <Link to="/admin" style={{ textDecoration: 'none', color: '#666', fontSize: '0.9rem' }}>
+                  <Link to="/admin">
                     会员管理
                   </Link>
                 )}
-                <Link
-                  to="/upload"
-                  style={{
-                    textDecoration: 'none',
-                    color: '#fff',
-                    backgroundColor: '#4a90d9',
-                    padding: '6px 16px',
-                    borderRadius: '4px',
-                    fontSize: '0.9rem',
-                  }}
-                >
+                <Link to="/upload" className="nav-btn-primary">
                   + 新建旅行
                 </Link>
               </>
             )}
             <button
               onClick={handleLogout}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#666',
-                fontSize: '0.9rem',
-                cursor: 'pointer',
-                padding: 0,
-              }}
+              className="nav-logout"
             >
               退出
             </button>
@@ -92,11 +66,10 @@ function NavHeader() {
           <>
             <Link
               to={isUserSpace ? '/login' : `/login?returnTo=${encodeURIComponent(location.pathname)}`}
-              style={{ textDecoration: 'none', color: '#666', fontSize: '0.9rem' }}
             >
               登录
             </Link>
-            <Link to="/register" style={{ textDecoration: 'none', color: '#666', fontSize: '0.9rem' }}>
+            <Link to="/register">
               注册
             </Link>
           </>

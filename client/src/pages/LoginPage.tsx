@@ -78,7 +78,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ maxWidth: '400px', margin: '80px auto', padding: '0 16px' }}>
+    <div className="auth-card">
       <h1 style={{ fontSize: '1.4rem', marginBottom: '24px', textAlign: 'center' }}>登录</h1>
 
       {error && (
@@ -89,7 +89,7 @@ export default function LoginPage() {
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '16px' }}>
-          <label htmlFor="username" style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem' }}>
+          <label htmlFor="username" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem' }}>
             用户名
           </label>
           <input
@@ -99,12 +99,12 @@ export default function LoginPage() {
             onChange={(e) => setUsername(e.target.value)}
             required
             autoComplete="username"
-            style={{ width: '100%', padding: '8px', fontSize: '1rem', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }}
+            className="form-input"
           />
         </div>
 
         <div style={{ marginBottom: '24px' }}>
-          <label htmlFor="password" style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem' }}>
+          <label htmlFor="password" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem' }}>
             密码
           </label>
           <input
@@ -114,21 +114,19 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
             autoComplete="current-password"
-            style={{ width: '100%', padding: '8px', fontSize: '1rem', border: '1px solid #ccc', borderRadius: '4px', boxSizing: 'border-box' }}
+            className="form-input"
           />
         </div>
 
         <button
           type="submit"
           disabled={loading}
+          className="btn-primary"
           style={{
             width: '100%',
             padding: '10px',
             fontSize: '1rem',
-            color: '#fff',
-            backgroundColor: loading ? '#999' : '#4a90d9',
-            border: 'none',
-            borderRadius: '4px',
+            opacity: loading ? 0.7 : 1,
             cursor: loading ? 'not-allowed' : 'pointer',
           }}
         >
@@ -137,7 +135,7 @@ export default function LoginPage() {
       </form>
 
       <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '0.9rem', color: '#666' }}>
-        还没有账户？<Link to="/register" style={{ color: '#4a90d9' }}>注册</Link>
+        还没有账户？<Link to="/register">注册</Link>
       </p>
     </div>
   );
