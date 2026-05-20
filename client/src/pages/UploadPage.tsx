@@ -64,8 +64,7 @@ export default function UploadPage() {
                 setUploadCount(count);
                 setStep('process');
               }}
-              onVideoUploaded={(mediaId, mediaType) => {
-                console.log(`[UploadPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+              onVideoUploaded={() => {
               }}
               onUploadCancelled={(completedCount) => {
                 setUploadCount(completedCount);
@@ -83,12 +82,8 @@ export default function UploadPage() {
             </p>
             <VideoUploader
               tripId={tripId}
-              onUploaded={(mediaId) => {
-                console.log(`[UploadPage] Video ${mediaId} uploaded via new pipeline`);
-              }}
-              onCancelled={() => {
-                console.log('[UploadPage] Video upload cancelled');
-              }}
+              onUploaded={() => {}}
+              onCancelled={() => {}}
             />
           </div>
         </div>

@@ -207,7 +207,6 @@ export default function MyGalleryPage() {
           return;
         }
         const json = await res.json() as GalleryData;
-        console.log('[MyGalleryPage] gallery data:', JSON.stringify(json).slice(0, 500));
         setData(json);
       } catch {
         if (!cancelled) setError('加载相册数据失败，请稍后重试');
@@ -643,8 +642,7 @@ export default function MyGalleryPage() {
             <>
               <div style={{ marginBottom: '16px' }}>
                 <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95em' }}>上传图片</h4>
-                <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} onVideoUploaded={(mediaId, mediaType) => {
-                  console.log(`[MyGalleryPage] Video ${mediaId} (${mediaType}) uploaded, processing triggered`);
+                <FileUploader tripId={id!} onAllUploaded={handleAllUploaded} onVideoUploaded={() => {
                 }} onUploadCancelled={(completedCount) => {
                   setAppendUploadCount(completedCount);
                   if (completedCount > 0) {
@@ -657,7 +655,7 @@ export default function MyGalleryPage() {
                 <p style={{ color: '#666', fontSize: '0.85em', margin: '0 0 8px 0' }}>支持 MP4、MOV、AVI、MKV，大文件自动分片上传</p>
                 <VideoUploader
                   tripId={id!}
-                  onUploaded={(mediaId) => console.log(`[MyGalleryPage] Video ${mediaId} uploaded via new pipeline`)}
+                  onUploaded={() => {}}
                 />
               </div>
               <button
