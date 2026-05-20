@@ -115,11 +115,11 @@ async function estimateStability(
     }
   } finally {
     // Clean up temp frame files immediately (Requirement 11.3)
-    try { fs.unlinkSync(startFramePath); } catch (err) {
-      console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${startFramePath}`, err);
+    try { fs.unlinkSync(startFramePath); } catch {
+      // Ignore — file may not have been created or already cleaned up
     }
-    try { fs.unlinkSync(endFramePath); } catch (err) {
-      console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${endFramePath}`, err);
+    try { fs.unlinkSync(endFramePath); } catch {
+      // Ignore — file may not have been created or already cleaned up
     }
   }
 }
@@ -237,8 +237,8 @@ export async function analyzeVideo(
           exposureScore = 50;
         } finally {
           // Delete temp frame immediately after analysis (Requirement 11.3)
-          try { fs.unlinkSync(midFramePath); } catch (err) {
-            console.warn(`[VideoAnalyzer] Failed to delete temp frame: ${midFramePath}`, err);
+          try { fs.unlinkSync(midFramePath); } catch {
+            // Ignore — file may not have been created
           }
         }
 
@@ -477,7 +477,7 @@ export function detectSceneCuts(
     const timer = setTimeout(() => {
       killed = true;
       proc.kill('SIGKILL');
-      console.warn(`[VideoAnalyzer] detectSceneCuts timed out after ${TIMEOUT_MS / 1000}s, falling back to fixed-duration splitting`);
+      // This is expected for large videos — not an error, just a performance optimization
     }, TIMEOUT_MS);
 
     proc.stderr.on('data', (chunk: Buffer) => {
