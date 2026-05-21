@@ -82,6 +82,7 @@ export type PipelineStage =
   | 'classify'
   | 'blur'
   | 'dedup'
+  | 'aiScreening'
   | 'reduce'
   | 'write'
   | 'analyze'

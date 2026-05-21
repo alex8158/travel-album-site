@@ -21,6 +21,7 @@ import { editVideo } from '../videoEditor';
 import { detectBlackFrames, BlackFrameResult } from '../blackFrameDetector';
 import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
+import { runAiScreening } from '../aiImageScreener';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -362,6 +363,25 @@ export async function runTripProcessingPipeline(
       dedupAssessment = null;
       console.error(`[pipeline] dedup FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('dedup', 'complete', `failed: ${msg}`);
+    }
+
+    // ---- Stage: aiScreening (optional) ----
+    // Only runs when AI_REVIEW_ENABLED=true and DASHSCOPE_API_KEY is configured
+    const aiReviewEnabled = process.env.AI_REVIEW_ENABLED === 'true';
+    const dashScopeConfigured = !!process.env.DASHSCOPE_API_KEY;
+    if (aiReviewEnabled && dashScopeConfigured) {
+      onProgress('aiScreening', 'start');
+      t0 = Date.now();
+      try {
+        const screeningResult = await runAiScreening(tripId);
+        console.log(`[pipeline] aiScreening: ${screeningResult.totalRemoved} removed from ${screeningResult.totalProcessed} images, ${Date.now() - t0}ms`);
+        onProgress('aiScreening', 'complete', `${screeningResult.totalRemoved} removed`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'aiScreening', error: msg });
+        console.error(`[pipeline] aiScreening FAILED: ${msg} (${Date.now() - t0}ms)`);
+        onProgress('aiScreening', 'complete', `failed: ${msg}`);
+      }
     }
 
     // ---- Stage: reduce ----
