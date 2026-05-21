@@ -25,25 +25,21 @@ export interface AiScreeningResult {
 
 const BATCH_SIZE = 10;
 
-const SCREENING_PROMPT = `You are a photo curator for an underwater travel album. I'm showing you a batch of photos.
+const SCREENING_PROMPT = `You are a photo curator. I'm showing you a batch of photos from an underwater dive trip.
 
 Your tasks:
-1. Remove ONLY photos that are clearly blurry, severely out-of-focus, or completely unrecognizable
-2. If multiple photos show the EXACT same subject from nearly the same angle, keep the sharpest one
-3. Photos of DIFFERENT subjects (even if they look similar) should ALL be kept
-4. When in doubt, KEEP the photo
-
-IMPORTANT: These are underwater photos - slightly green/blue tint is normal, NOT a reason to remove.
-Only remove if the photo is genuinely unusable (completely blurry, black, or accidental shot).
+1. If you see 2+ photos of the SAME subject/scene (same fish, same coral, same angle), keep only the BEST one (sharpest, best framing) and remove the rest
+2. Remove any photo that is clearly blurry, severely out-of-focus, or completely dark/unrecognizable
+3. Photos of DIFFERENT subjects should ALL be kept — even if they look visually similar (e.g. two different fish of the same species)
 
 Return a JSON object:
-{"keep": [0, 1, 2, 3, 5, 6, 7, 8, 9], "remove": [4], "reason": "Photo 4 is completely out of focus"}
+{"keep": [0, 2, 4, 5], "remove": [1, 3], "reason": "Photo 1 is a duplicate angle of photo 0 (same parrotfish); Photo 3 is blurry"}
 
-- "keep": array of image indices (0-based) to keep
-- "remove": array of image indices to trash (should be VERY few, typically 0-2 per batch)
-- "reason": brief explanation
-
-Be CONSERVATIVE. Most photos should be kept. Only remove obvious garbage.`;
+Rules:
+- "keep": indices of photos to keep
+- "remove": indices of photos to remove
+- If all photos are unique and clear, return {"keep": [0,1,2,...,9], "remove": [], "reason": "All photos are unique and clear"}
+- Typically remove 1-4 photos per batch, but 0 is fine if all are unique`;
 
 // ---------------------------------------------------------------------------
 // DashScope client (reuses pattern from llmPairReviewer)
