@@ -25,21 +25,25 @@ export interface AiScreeningResult {
 
 const BATCH_SIZE = 10;
 
-const SCREENING_PROMPT = `You are a photo curator for a travel album. I'm showing you a group of similar photos.
+const SCREENING_PROMPT = `You are a photo curator for an underwater travel album. I'm showing you a batch of photos.
 
 Your tasks:
-1. Identify which photos are of the same subject/scene (even from different angles)
-2. Remove any blurry, out-of-focus, or poorly exposed photos
-3. From photos of the same subject, keep only the BEST 1-2 photos (sharpest, best composition, best lighting)
+1. Remove ONLY photos that are clearly blurry, severely out-of-focus, or completely unrecognizable
+2. If multiple photos show the EXACT same subject from nearly the same angle, keep the sharpest one
+3. Photos of DIFFERENT subjects (even if they look similar) should ALL be kept
+4. When in doubt, KEEP the photo
+
+IMPORTANT: These are underwater photos - slightly green/blue tint is normal, NOT a reason to remove.
+Only remove if the photo is genuinely unusable (completely blurry, black, or accidental shot).
 
 Return a JSON object:
-{"keep": [0, 3], "remove": [1, 2, 4], "reason": "Photos 1,2,4 are blurry or duplicate angles of the same fish"}
+{"keep": [0, 1, 2, 3, 5, 6, 7, 8, 9], "remove": [4], "reason": "Photo 4 is completely out of focus"}
 
 - "keep": array of image indices (0-based) to keep
-- "remove": array of image indices to trash
+- "remove": array of image indices to trash (should be VERY few, typically 0-2 per batch)
 - "reason": brief explanation
 
-Be aggressive about removing duplicates and blurry photos. When in doubt, remove.`;
+Be CONSERVATIVE. Most photos should be kept. Only remove obvious garbage.`;
 
 // ---------------------------------------------------------------------------
 // DashScope client (reuses pattern from llmPairReviewer)
@@ -61,10 +65,11 @@ export async function runAiScreening(tripId: string): Promise<AiScreeningResult>
   const db = getDb();
   const storageProvider = getStorageProvider();
 
-  // Get all active images for this trip after dedup
+  // Get all active, non-blurry images for this trip (after dedup has already removed duplicates)
   const activeImages = db.prepare(
     `SELECT id, file_path FROM media_items
      WHERE trip_id = ? AND media_type = 'image' AND status = 'active'
+       AND (blur_status IS NULL OR blur_status != 'blurry')
      ORDER BY created_at ASC`
   ).all(tripId) as Array<{ id: string; file_path: string }>;
 
