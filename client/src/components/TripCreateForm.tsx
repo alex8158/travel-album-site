@@ -50,8 +50,10 @@ export default function TripCreateForm({ onCreated }: TripCreateFormProps) {
 
   return (
     <form onSubmit={handleSubmit} aria-label="创建旅行">
-      <div>
-        <label htmlFor="trip-title">旅行标题 *</label>
+      <div style={{ marginBottom: '16px' }}>
+        <label htmlFor="trip-title" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem', fontWeight: 500 }}>
+          旅行标题 <span style={{ color: 'var(--color-danger)' }}>*</span>
+        </label>
         <input
           id="trip-title"
           type="text"
@@ -59,22 +61,32 @@ export default function TripCreateForm({ onCreated }: TripCreateFormProps) {
           onChange={(e) => setTitle(e.target.value)}
           placeholder="请输入旅行标题"
           required
+          className="form-input"
         />
         {isTitleEmpty && title !== '' && (
-          <p role="alert" style={{ color: 'red' }}>标题不能为空</p>
+          <p role="alert" style={{ color: 'var(--color-danger)', fontSize: '0.85rem', marginTop: '4px' }}>标题不能为空</p>
         )}
       </div>
-      <div>
-        <label htmlFor="trip-description">旅行说明</label>
+      <div style={{ marginBottom: '24px' }}>
+        <label htmlFor="trip-description" style={{ display: 'block', marginBottom: '6px', fontSize: '0.9rem', fontWeight: 500 }}>
+          旅行说明
+        </label>
         <textarea
           id="trip-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="请输入旅行说明（可选）"
+          className="form-input"
+          style={{ minHeight: '80px', resize: 'vertical' }}
         />
       </div>
-      {error && <p role="alert" style={{ color: 'red' }}>{error}</p>}
-      <button type="submit" disabled={isTitleEmpty || submitting}>
+      {error && <p role="alert" style={{ color: 'var(--color-danger)', fontSize: '0.9rem', marginBottom: '12px' }}>{error}</p>}
+      <button
+        type="submit"
+        disabled={isTitleEmpty || submitting}
+        className="btn-primary"
+        style={{ width: '100%', padding: '10px', fontSize: '1rem', opacity: (isTitleEmpty || submitting) ? 0.6 : 1 }}
+      >
         {submitting ? '创建中...' : '创建旅行'}
       </button>
     </form>
