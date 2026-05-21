@@ -365,25 +365,6 @@ export async function runTripProcessingPipeline(
       onProgress('dedup', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: aiScreening (optional) ----
-    // Only runs when AI_REVIEW_ENABLED=true and DASHSCOPE_API_KEY is configured
-    const aiReviewEnabled = process.env.AI_REVIEW_ENABLED === 'true';
-    const dashScopeConfigured = !!process.env.DASHSCOPE_API_KEY;
-    if (aiReviewEnabled && dashScopeConfigured) {
-      onProgress('aiScreening', 'start');
-      t0 = Date.now();
-      try {
-        const screeningResult = await runAiScreening(tripId);
-        console.log(`[pipeline] aiScreening: ${screeningResult.totalRemoved} removed from ${screeningResult.totalProcessed} images, ${Date.now() - t0}ms`);
-        onProgress('aiScreening', 'complete', `${screeningResult.totalRemoved} removed`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        stageErrors.push({ stage: 'aiScreening', error: msg });
-        console.error(`[pipeline] aiScreening FAILED: ${msg} (${Date.now() - t0}ms)`);
-        onProgress('aiScreening', 'complete', `failed: ${msg}`);
-      }
-    }
-
     // ---- Stage: reduce ----
     let decisions: ReturnType<typeof reduce> = [];
     onProgress('reduce', 'start');
@@ -426,6 +407,26 @@ export async function runTripProcessingPipeline(
       stageErrors.push({ stage: 'write', error: msg });
       console.error(`[pipeline] write FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('write', 'complete', `failed: ${msg}`);
+    }
+
+    // ---- Stage: aiScreening (optional) ----
+    // Runs AFTER write so that dedup trashed images are already committed to DB
+    // Only runs when AI_REVIEW_ENABLED=true and DASHSCOPE_API_KEY is configured
+    const aiReviewEnabled = process.env.AI_REVIEW_ENABLED === 'true';
+    const dashScopeConfigured = !!process.env.DASHSCOPE_API_KEY;
+    if (aiReviewEnabled && dashScopeConfigured) {
+      onProgress('aiScreening', 'start');
+      t0 = Date.now();
+      try {
+        const screeningResult = await runAiScreening(tripId);
+        console.log(`[pipeline] aiScreening: ${screeningResult.totalRemoved} removed from ${screeningResult.totalProcessed} images, ${Date.now() - t0}ms`);
+        onProgress('aiScreening', 'complete', `${screeningResult.totalRemoved} removed`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'aiScreening', error: msg });
+        console.error(`[pipeline] aiScreening FAILED: ${msg} (${Date.now() - t0}ms)`);
+        onProgress('aiScreening', 'complete', `failed: ${msg}`);
+      }
     }
 
     // ---- Compute stats from decisions ----
