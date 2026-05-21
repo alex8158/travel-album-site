@@ -261,14 +261,17 @@ def classify_image(image_path, model, processor):
     # Get image features
     image_inputs = processor(images=img, return_tensors="pt")
     with torch.no_grad():
-        image_features = model.get_image_features(**image_inputs)
+        image_output = model.get_image_features(**image_inputs)
+        # Handle both tensor and BaseModelOutputWithPooling returns
+        image_features = image_output if isinstance(image_output, torch.Tensor) else image_output.last_hidden_state[:, 0, :]
 
     # Get text features for all prompts at once
     text_inputs = processor(
         text=all_prompts, return_tensors="pt", padding=True, truncation=True
     )
     with torch.no_grad():
-        text_features = model.get_text_features(**text_inputs)
+        text_output = model.get_text_features(**text_inputs)
+        text_features = text_output if isinstance(text_output, torch.Tensor) else text_output.last_hidden_state[:, 0, :]
 
     # Normalize embeddings
     image_features = image_features / image_features.norm(
@@ -336,7 +339,9 @@ def extract_embeddings(image_paths, model, processor):
             img = Image.open(path).convert("RGB")
             inputs = processor(images=img, return_tensors="pt")
             with torch.no_grad():
-                features = model.get_image_features(**inputs)
+                output = model.get_image_features(**inputs)
+                # Handle both tensor and BaseModelOutputWithPooling returns
+                features = output if isinstance(output, torch.Tensor) else output.last_hidden_state[:, 0, :]
             # Normalize
             features = features / features.norm(p=2, dim=-1, keepdim=True)
             embeddings.append(features.squeeze(0).cpu().numpy())
