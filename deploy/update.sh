@@ -35,6 +35,9 @@ do_update() {
   cd "$APP_DIR/server"
   npm install
 
+  log "重新编译 native 模块（better-sqlite3, sharp 等）..."
+  npm rebuild
+
   log "编译服务端..."
   npx tsc
 
@@ -222,6 +225,9 @@ fi
 echo ">> 安装服务端依赖..."
 cd "$APP_DIR/server"
 npm install
+
+echo ">> 重新编译 native 模块（better-sqlite3, sharp 等）..."
+npm rebuild
 
 echo ">> 编译服务端..."
 npx tsc
