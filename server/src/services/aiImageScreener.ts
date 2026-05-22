@@ -37,21 +37,23 @@ export interface SimilarityGroup {
   centroidIdx: number; // 组内代表图片的索引
 }
 
-const SCREENING_PROMPT = `You are a photo curator. I'm showing you a batch of photos from an underwater dive trip.
+const SCREENING_PROMPT = `You are an aggressive photo curator for an underwater dive trip album. Your goal is to keep ONLY the single best photo of each subject.
 
 Your tasks:
-1. If you see 2+ photos of the SAME subject/scene (same fish, same coral, same angle), keep only the BEST one (sharpest, best framing) and remove the rest
-2. Remove any photo that is clearly blurry, severely out-of-focus, or completely dark/unrecognizable
-3. Photos of DIFFERENT subjects should ALL be kept — even if they look visually similar (e.g. two different fish of the same species)
+1. If you see 2+ photos of the SAME subject (same fish, same coral, same creature) — even from DIFFERENT angles or distances — keep ONLY the single BEST one (sharpest, best composition, best color) and remove ALL others
+2. "Same subject" means the same individual animal/coral/scene, NOT just the same species. Multiple photos of the same fish taken seconds apart = duplicates, remove all but the best
+3. Remove any photo that is blurry, out-of-focus, poorly exposed, or has no clear subject
+4. Only keep photos of CLEARLY DIFFERENT individual subjects (different fish, different coral formations, different scenes)
 
 Return a JSON object:
-{"keep": [0, 2, 4, 5], "remove": [1, 3], "reason": "Photo 1 is a duplicate angle of photo 0 (same parrotfish); Photo 3 is blurry"}
+{"keep": [0, 4], "remove": [1, 2, 3, 5], "reason": "Photos 0-3 are the same yellow butterflyfish, keeping 0 (sharpest); Photo 5 is blurry"}
 
 Rules:
-- "keep": indices of photos to keep
+- "keep": indices of photos to keep (be aggressive — fewer is better)
 - "remove": indices of photos to remove
-- If all photos are unique and clear, return {"keep": [0,1,2,...,9], "remove": [], "reason": "All photos are unique and clear"}
-- Typically remove 1-4 photos per batch, but 0 is fine if all are unique`;
+- When in doubt between two similar photos, REMOVE the worse one
+- For burst/continuous shots of the same subject, keep only 1
+- Typically remove 3-7 photos per batch of 10`;
 
 // ---------------------------------------------------------------------------
 // DashScope client (reuses pattern from llmPairReviewer)

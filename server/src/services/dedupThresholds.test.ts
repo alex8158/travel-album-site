@@ -12,10 +12,10 @@ describe('dedupThresholds - DINOv2 threshold', () => {
     process.env = originalEnv;
   });
 
-  it('should default dinov2DedupThreshold to 0.9 when env var is not set', async () => {
+  it('should default dinov2DedupThreshold to 0.85 when env var is not set', async () => {
     delete process.env.DINOV2_DEDUP_THRESHOLD;
     const { PROCESS_THRESHOLDS } = await import('./dedupThresholds');
-    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.9);
+    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.85);
   });
 
   it('should use env var value when it is a valid number in [0, 1]', async () => {
@@ -40,7 +40,7 @@ describe('dedupThresholds - DINOv2 threshold', () => {
     process.env.DINOV2_DEDUP_THRESHOLD = 'abc';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { PROCESS_THRESHOLDS } = await import('./dedupThresholds');
-    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.9);
+    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.85);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Invalid DINOV2_DEDUP_THRESHOLD="abc"')
     );
@@ -51,7 +51,7 @@ describe('dedupThresholds - DINOv2 threshold', () => {
     process.env.DINOV2_DEDUP_THRESHOLD = '1.5';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { PROCESS_THRESHOLDS } = await import('./dedupThresholds');
-    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.9);
+    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.85);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Invalid DINOV2_DEDUP_THRESHOLD="1.5"')
     );
@@ -62,7 +62,7 @@ describe('dedupThresholds - DINOv2 threshold', () => {
     process.env.DINOV2_DEDUP_THRESHOLD = '-0.1';
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { PROCESS_THRESHOLDS } = await import('./dedupThresholds');
-    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.9);
+    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.85);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Invalid DINOV2_DEDUP_THRESHOLD="-0.1"')
     );
@@ -74,7 +74,7 @@ describe('dedupThresholds - DINOv2 threshold', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { PROCESS_THRESHOLDS } = await import('./dedupThresholds');
     // parseFloat('') returns NaN
-    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.9);
+    expect(PROCESS_THRESHOLDS.dinov2DedupThreshold).toBe(0.85);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Invalid DINOV2_DEDUP_THRESHOLD=""')
     );
