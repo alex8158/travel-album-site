@@ -279,87 +279,95 @@ export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchRe
     `UPDATE media_items SET optimized_path = ? WHERE id = ?`
   );
 
-  for (const image of activeImages) {
-    try {
-      // Download image and convert to base64
-      const localPath = await storageProvider.downloadToTemp(image.file_path);
-      const base64 = await resizeForAnalysis(localPath);
+  const CONCURRENCY = 3; // Process 3 images in parallel
 
-      // Call DashScope with the image
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: 256,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
-              },
-              { type: 'text', text: REFINEMENT_PROMPT },
-            ],
-          },
-        ],
-      });
+  // Process images with concurrency
+  for (let startIdx = 0; startIdx < activeImages.length; startIdx += CONCURRENCY) {
+    const chunk = activeImages.slice(startIdx, startIdx + CONCURRENCY);
+    const promises = chunk.map(async (image) => {
+      try {
+        // Download image and convert to base64
+        const localPath = await storageProvider.downloadToTemp(image.file_path);
+        const base64 = await resizeForAnalysis(localPath);
 
-      const responseText = response.choices[0]?.message?.content ?? '';
+        // Call DashScope with the image
+        const response = await client.chat.completions.create({
+          model,
+          max_tokens: 256,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image_url',
+                  image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
+                },
+                { type: 'text', text: REFINEMENT_PROMPT },
+              ],
+            },
+          ],
+        });
 
-      // Parse the adjustment params
-      const params = parseAdjustmentParams(responseText);
+        const responseText = response.choices[0]?.message?.content ?? '';
 
-      if (!params) {
-        // Could not parse valid params — skip this image
-        console.warn(`[pipeline] aiRefinement: failed to parse params for image ${image.id}`);
-        result.skippedCount++;
+        // Parse the adjustment params
+        const params = parseAdjustmentParams(responseText);
+
+        if (!params) {
+          // Could not parse valid params — skip this image
+          console.warn(`[pipeline] aiRefinement: failed to parse params for image ${image.id}`);
+          result.skippedCount++;
+          result.results.push({
+            mediaId: image.id,
+            optimizedPath: null,
+            params: null,
+            skipped: true,
+            error: 'Failed to parse adjustment params from AI response',
+          });
+          return;
+        }
+
+        // Apply adjustments (returns null if all params are 1.0)
+        const optimizedPath = await applyAdjustments(localPath, params, tripId, image.id);
+
+        if (optimizedPath) {
+          // Update the database with the new optimized path
+          updateStmt.run(optimizedPath, image.id);
+          result.optimizedCount++;
+          result.results.push({
+            mediaId: image.id,
+            optimizedPath,
+            params,
+            skipped: false,
+          });
+          console.log(`[pipeline] aiRefinement: optimized image ${image.id}`);
+        } else {
+          // All params were 1.0, no adjustment needed
+          result.skippedCount++;
+          result.results.push({
+            mediaId: image.id,
+            optimizedPath: null,
+            params,
+            skipped: true,
+          });
+          console.log(`[pipeline] aiRefinement: skipped image ${image.id} (no adjustment needed)`);
+        }
+      } catch (err) {
+        // Error isolation: log and continue to next image
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[pipeline] aiRefinement: error processing image ${image.id}: ${msg}`);
+        result.errorCount++;
         result.results.push({
           mediaId: image.id,
           optimizedPath: null,
           params: null,
-          skipped: true,
-          error: 'Failed to parse adjustment params from AI response',
-        });
-        continue;
-      }
-
-      // Apply adjustments (returns null if all params are 1.0)
-      const optimizedPath = await applyAdjustments(localPath, params, tripId, image.id);
-
-      if (optimizedPath) {
-        // Update the database with the new optimized path
-        updateStmt.run(optimizedPath, image.id);
-        result.optimizedCount++;
-        result.results.push({
-          mediaId: image.id,
-          optimizedPath,
-          params,
           skipped: false,
+          error: msg,
         });
-        console.log(`[pipeline] aiRefinement: optimized image ${image.id}`);
-      } else {
-        // All params were 1.0, no adjustment needed
-        result.skippedCount++;
-        result.results.push({
-          mediaId: image.id,
-          optimizedPath: null,
-          params,
-          skipped: true,
-        });
-        console.log(`[pipeline] aiRefinement: skipped image ${image.id} (no adjustment needed)`);
       }
-    } catch (err) {
-      // Error isolation: log and continue to next image
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[pipeline] aiRefinement: error processing image ${image.id}: ${msg}`);
-      result.errorCount++;
-      result.results.push({
-        mediaId: image.id,
-        optimizedPath: null,
-        params: null,
-        skipped: false,
-        error: msg,
-      });
-    }
+    });
+
+    await Promise.all(promises);
   }
 
   return result;

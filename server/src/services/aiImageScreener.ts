@@ -460,73 +460,80 @@ export async function runAiScreening(tripId: string): Promise<AiScreeningResult>
     `UPDATE media_items SET status = 'trashed', trashed_reason = 'ai_screening' WHERE id = ?`
   );
 
-  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-    const batch = batches[batchIdx];
+  const CONCURRENCY = 3; // Process 3 batches in parallel
 
-    try {
-      // Prepare images as base64 thumbnails
-      const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+  // Process batches with concurrency
+  for (let startIdx = 0; startIdx < batches.length; startIdx += CONCURRENCY) {
+    const chunk = batches.slice(startIdx, startIdx + CONCURRENCY);
+    const promises = chunk.map(async (batch, chunkOffset) => {
+      const batchIdx = startIdx + chunkOffset;
+      try {
+        // Prepare images as base64 thumbnails
+        const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
 
-      let prepFailed = false;
-      for (let imgIdx = 0; imgIdx < batch.length; imgIdx++) {
-        const img = batch[imgIdx];
-        try {
-          const localPath = await storageProvider.downloadToTemp(img.file_path);
-          const base64 = await resizeForAnalysis(localPath);
-          content.push({
-            type: 'image_url',
-            image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`[pipeline] aiScreening: failed to prepare image ${img.id}: ${msg}`);
-          prepFailed = true;
-          break;
-        }
-      }
-
-      if (prepFailed || content.length === 0) {
-        console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length} skipped (prep failed)`);
-        continue;
-      }
-
-      content.push({ type: 'text', text: SCREENING_PROMPT });
-
-      // Call qwen-vl-max
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: 1024,
-        messages: [{ role: 'user', content }],
-      });
-
-      const responseText = response.choices[0]?.message?.content ?? '';
-
-      // Parse response
-      const screening = parseScreeningResponse(responseText, batch.length);
-
-      if (screening && screening.remove.length > 0) {
-        // Mark removed images as trashed
-        for (const removeIdx of screening.remove) {
-          if (removeIdx >= 0 && removeIdx < batch.length) {
-            trashStmt.run(batch[removeIdx].id);
+        let prepFailed = false;
+        for (let imgIdx = 0; imgIdx < batch.length; imgIdx++) {
+          const img = batch[imgIdx];
+          try {
+            const localPath = await storageProvider.downloadToTemp(img.file_path);
+            const base64 = await resizeForAnalysis(localPath);
+            content.push({
+              type: 'image_url',
+              image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[pipeline] aiScreening: failed to prepare image ${img.id}: ${msg}`);
+            prepFailed = true;
+            break;
           }
         }
-        const removedCount = screening.remove.filter(i => i >= 0 && i < batch.length).length;
-        result.totalRemoved += removedCount;
-        result.batchResults.push({
-          batch: batchIdx + 1,
-          removed: removedCount,
-          reason: screening.reason,
+
+        if (prepFailed || content.length === 0) {
+          console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length} skipped (prep failed)`);
+          return;
+        }
+
+        content.push({ type: 'text', text: SCREENING_PROMPT });
+
+        // Call qwen-vl-max
+        const response = await client.chat.completions.create({
+          model,
+          max_tokens: 1024,
+          messages: [{ role: 'user', content }],
         });
-        console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length}, removed ${removedCount} images`);
-      } else {
-        console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length}, no removals`);
+
+        const responseText = response.choices[0]?.message?.content ?? '';
+
+        // Parse response
+        const screening = parseScreeningResponse(responseText, batch.length);
+
+        if (screening && screening.remove.length > 0) {
+          // Mark removed images as trashed
+          for (const removeIdx of screening.remove) {
+            if (removeIdx >= 0 && removeIdx < batch.length) {
+              trashStmt.run(batch[removeIdx].id);
+            }
+          }
+          const removedCount = screening.remove.filter(i => i >= 0 && i < batch.length).length;
+          result.totalRemoved += removedCount;
+          result.batchResults.push({
+            batch: batchIdx + 1,
+            removed: removedCount,
+            reason: screening.reason,
+          });
+          console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length}, removed ${removedCount} images`);
+        } else {
+          console.log(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length}, no removals`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length} failed: ${msg}`);
+        // Skip failed batch and continue
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[pipeline] aiScreening: batch ${batchIdx + 1}/${batches.length} failed: ${msg}`);
-      // Skip failed batch and continue
-    }
+    });
+
+    await Promise.all(promises);
   }
 
   return result;
