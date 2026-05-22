@@ -87,6 +87,7 @@ export type PipelineStage =
   | 'write'
   | 'analyze'
   | 'optimize'
+  | 'aiRefinement'
   | 'thumbnail'
   | 'videoAnalysis'
   | 'autoCompile'

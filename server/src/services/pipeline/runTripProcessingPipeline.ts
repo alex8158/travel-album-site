@@ -1,4 +1,5 @@
 import fs from 'fs';
+import Database from 'better-sqlite3';
 import { getDb } from '../../database';
 import { getStorageProvider } from '../../storage/factory';
 import { TempPathCache } from '../../helpers/tempPathCache';
@@ -22,6 +23,7 @@ import { detectBlackFrames, BlackFrameResult } from '../blackFrameDetector';
 import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
+import { runAiRefinement } from '../aiImageOptimizer';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -207,8 +209,9 @@ async function runBlurStage(
         musiqScore: assessment.musiqScore,
         source: assessment.source,
       };
-    } catch {
-      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node', error: msg };
     }
   }
 
@@ -216,6 +219,56 @@ async function runBlurStage(
   const suspect = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
   const clear = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
   console.log(`[blur] dual-condition: ${blurry} blurry, ${suspect} suspect, ${clear} clear`);
+}
+
+// ---------------------------------------------------------------------------
+// applyBlurTrash — persist blur results to DB, trash confirmed blurry images
+// ---------------------------------------------------------------------------
+
+export function applyBlurTrash(
+  contexts: ImageProcessContext[],
+  db: Database.Database,
+): { trashedCount: number } {
+  const trashStmt = db.prepare(
+    `UPDATE media_items 
+     SET status = 'trashed', trashed_reason = 'blur', 
+         blur_status = 'blurry', sharpness_score = ?
+     WHERE id = ?`
+  );
+  const updateStmt = db.prepare(
+    `UPDATE media_items SET blur_status = ?, sharpness_score = ? WHERE id = ?`
+  );
+  const errorStmt = db.prepare(
+    `UPDATE media_items 
+     SET blur_status = 'suspect', status = 'active',
+         processing_error = CASE
+           WHEN processing_error IS NULL THEN ?
+           ELSE processing_error || char(10) || ?
+         END
+     WHERE id = ?`
+  );
+
+  let trashedCount = 0;
+  for (const ctx of contexts) {
+    if (!ctx.blur) continue;
+
+    // Handle error case: blur assessment had an error (source='node' with null sharpnessScore
+    // and blurStatus='suspect' indicates a catch block was hit during assessment)
+    if (ctx.blur.error) {
+      const errorMsg = `[blur] assessment error: ${ctx.blur.error}`;
+      errorStmt.run(errorMsg, errorMsg, ctx.mediaId);
+      continue;
+    }
+
+    if (ctx.blur.blurStatus === 'blurry') {
+      trashStmt.run(ctx.blur.sharpnessScore, ctx.mediaId);
+      trashedCount++;
+    } else {
+      // 'suspect' or 'clear' — just update blur_status and sharpness_score
+      updateStmt.run(ctx.blur.blurStatus, ctx.blur.sharpnessScore, ctx.mediaId);
+    }
+  }
+  return { trashedCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -338,10 +391,12 @@ export async function runTripProcessingPipeline(
     t0 = Date.now();
     try {
       await runBlurStage(contexts, pythonResults);
+      // Apply blur results to DB: trash blurry images, update others
+      const { trashedCount } = applyBlurTrash(contexts, db);
       const blurCount = contexts.filter(c => c.blur !== null).length;
       const blurryCount = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
-      console.log(`[pipeline] blur: ${blurCount} assessed, ${blurryCount} blurry, ${Date.now() - t0}ms`);
-      onProgress('blur', 'complete', `${blurCount} blur-assessed`);
+      console.log(`[pipeline] blur: ${blurCount} assessed, ${blurryCount} blurry, ${trashedCount} trashed, ${Date.now() - t0}ms`);
+      onProgress('blur', 'complete', `${blurCount} blur-assessed, ${trashedCount} trashed`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stageErrors.push({ stage: 'blur', error: msg });
@@ -486,6 +541,23 @@ export async function runTripProcessingPipeline(
     }
     console.log(`[pipeline] optimize: ${optimizedCount} optimized, ${failedCount} failed, ${Date.now() - t0}ms`);
     onProgress('optimize', 'complete', `${optimizedCount} optimized`);
+
+    // ---- Stage: aiRefinement (optional) ----
+    const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
+    const dashScopeConfiguredForRefinement = !!process.env.DASHSCOPE_API_KEY;
+    if (aiRefinementEnabled && dashScopeConfiguredForRefinement) {
+      onProgress('aiRefinement', 'start');
+      t0 = Date.now();
+      try {
+        const refinementResult = await runAiRefinement(tripId);
+        console.log(`[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ${Date.now() - t0}ms`);
+        onProgress('aiRefinement', 'complete', `${refinementResult.optimizedCount} refined`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'aiRefinement', error: msg });
+        onProgress('aiRefinement', 'complete', `failed: ${msg}`);
+      }
+    }
 
     // thumbnail
     onProgress('thumbnail', 'start');

@@ -13,6 +13,23 @@ const env = (key: string, def: number): number => {
   return v !== undefined ? parseFloat(v) : def;
 };
 
+/**
+ * 解析范围受限的环境变量。当值不是有效数字或超出 [min, max] 范围时，
+ * 使用默认值并在 stderr 输出警告日志。
+ */
+const envBounded = (key: string, def: number, min: number, max: number): number => {
+  const v = process.env[key];
+  if (v === undefined) return def;
+  const parsed = parseFloat(v);
+  if (isNaN(parsed) || parsed < min || parsed > max) {
+    console.warn(
+      `[dedupThresholds] Invalid ${key}="${v}" (must be a number in [${min}, ${max}]). Using default ${def}.`
+    );
+    return def;
+  }
+  return parsed;
+};
+
 // ---------------------------------------------------------------------------
 // ProcessThresholds interface
 // ---------------------------------------------------------------------------
@@ -51,7 +68,7 @@ export const PROCESS_THRESHOLDS: Readonly<ProcessThresholds> = Object.freeze({
   clipTopK:               env('CLIP_TOP_K', 50),
   grayLowSeqDistance:     env('GRAY_LOW_SEQ_DISTANCE', 6),
   grayLowHashDistance:    env('GRAY_LOW_HASH_DISTANCE', 8),
-  dinov2DedupThreshold:   env('DINOV2_DEDUP_THRESHOLD', 0.90),
+  dinov2DedupThreshold:   envBounded('DINOV2_DEDUP_THRESHOLD', 0.90, 0, 1),
 });
 
 // ---------------------------------------------------------------------------
