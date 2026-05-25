@@ -14,13 +14,24 @@ import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
 import type { ProcessResult } from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
+import HighlightBadge from '../components/HighlightBadge';
+import SimilarGroupPanel from '../components/SimilarGroupPanel';
 import { useAuth, authFetch } from '../contexts/AuthContext';
-import { updateCategory } from '../api';
+import {
+  updateCategory,
+  triggerHighlightEvaluation,
+  getHighlights,
+  getSimilarGroups,
+  HighlightsApiError,
+} from '../api';
+import type { HighlightPhoto, SimilarGroup, HighlightEvaluation } from '../api';
 import type {
   GalleryData,
   TrashedItem,
   AppendMode,
 } from './GalleryPage';
+
+type FilterMode = 'all' | 'highlights' | 'similar-groups';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
 type VideoTab = 'original' | 'compiled';
@@ -118,6 +129,20 @@ export default function MyGalleryPage() {
   const [batchCategoryPickerOpen, setBatchCategoryPickerOpen] = useState(false);
   const [batchCategoryChanging, setBatchCategoryChanging] = useState(false);
 
+  // --- AI Photo Highlights state ---
+  const [highlights, setHighlights] = useState<HighlightPhoto[]>([]);
+  const [similarGroups, setSimilarGroups] = useState<SimilarGroup[]>([]);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  // Note: the backend trigger endpoint returns a single summary at the end of
+  // the run, so we do not currently receive per-batch progress updates.
+  // We keep this state for forward-compatibility with a future SSE/polling
+  // implementation; for now it stays null while a request is in flight.
+  const [evaluationProgress, setEvaluationProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [evaluationSummary, setEvaluationSummary] = useState<HighlightEvaluation | null>(null);
+  const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [selectedSimilarGroup, setSelectedSimilarGroup] = useState<SimilarGroup | null>(null);
+
   async function fetchGallery() {
     if (!id) return;
     try {
@@ -151,6 +176,46 @@ export default function MyGalleryPage() {
       }
     } catch {
       // silently fail - trash zone is supplementary
+    }
+  }
+
+  async function fetchHighlightData() {
+    if (!id) return;
+    try {
+      const [hl, groups] = await Promise.all([
+        getHighlights(id).catch(() => [] as HighlightPhoto[]),
+        getSimilarGroups(id).catch(() => [] as SimilarGroup[]),
+      ]);
+      setHighlights(hl);
+      setSimilarGroups(groups);
+    } catch {
+      // silently fail - highlight data is supplementary
+    }
+  }
+
+  async function handleTriggerHighlightEvaluation() {
+    if (!id || isEvaluating) return;
+    setIsEvaluating(true);
+    setEvaluationError(null);
+    setEvaluationSummary(null);
+    setEvaluationProgress(null);
+    try {
+      const summary = await triggerHighlightEvaluation(id);
+      setEvaluationSummary(summary);
+      await fetchHighlightData();
+    } catch (err) {
+      if (err instanceof HighlightsApiError) {
+        if (err.status === 409) {
+          setEvaluationError('已有评估正在进行，请稍后再试');
+        } else {
+          setEvaluationError(err.message || 'AI 评估失败，请稍后重试');
+        }
+      } else {
+        setEvaluationError('AI 评估失败，请稍后重试');
+      }
+    } finally {
+      setIsEvaluating(false);
+      setEvaluationProgress(null);
     }
   }
 
@@ -233,6 +298,8 @@ export default function MyGalleryPage() {
     if (id) {
       load();
       loadTrash();
+      // Load AI highlight evaluation results (best-effort, ignored if endpoint unavailable).
+      fetchHighlightData();
     }
     return () => { cancelled = true; };
   }, [id]);
@@ -523,15 +590,68 @@ export default function MyGalleryPage() {
   }, [images]);
 
   const filteredImages = useMemo(() => {
-    if (activeCategory === 'all') return images;
-    return images.filter((img) => {
+    let base = images;
+    if (filterMode === 'highlights') {
+      const highlightIds = new Set(highlights.filter((h) => h.isHighlight).map((h) => h.photoId));
+      base = images.filter((img) => highlightIds.has(img.item.id));
+    } else if (filterMode === 'similar-groups') {
+      const groupedIds = new Set<string>();
+      for (const g of similarGroups) {
+        for (const memberId of g.memberPhotoIds) groupedIds.add(memberId);
+      }
+      base = images.filter((img) => groupedIds.has(img.item.id));
+    }
+    if (activeCategory === 'all') return base;
+    return base.filter((img) => {
       const cat = img.item.category;
       if (activeCategory === 'other') {
         return !cat || cat === 'other';
       }
       return cat === activeCategory;
     });
-  }, [images, activeCategory]);
+  }, [images, activeCategory, filterMode, highlights, similarGroups]);
+
+  // Lookup maps for fast highlight badge / similar group rendering.
+  const highlightByPhotoId = useMemo(() => {
+    const map = new Map<string, HighlightPhoto>();
+    for (const h of highlights) {
+      if (h.isHighlight) map.set(h.photoId, h);
+    }
+    return map;
+  }, [highlights]);
+
+  const similarGroupByPhotoId = useMemo(() => {
+    const map = new Map<string, SimilarGroup>();
+    for (const g of similarGroups) {
+      for (const memberId of g.memberPhotoIds) {
+        // first group wins if a photo somehow appears in multiple
+        if (!map.has(memberId)) map.set(memberId, g);
+      }
+    }
+    return map;
+  }, [similarGroups]);
+
+  const highlightCount = useMemo(
+    () => highlights.filter((h) => h.isHighlight).length,
+    [highlights],
+  );
+
+  const similarGroupedPhotoCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of similarGroups) {
+      for (const memberId of g.memberPhotoIds) ids.add(memberId);
+    }
+    return ids.size;
+  }, [similarGroups]);
+
+  // Photos for the currently-open similar-group modal.
+  const similarGroupPhotos = useMemo(() => {
+    if (!selectedSimilarGroup) return [];
+    const memberIds = new Set(selectedSimilarGroup.memberPhotoIds);
+    return images
+      .filter((img) => memberIds.has(img.item.id))
+      .map((img) => ({ id: img.item.id, thumbnailUrl: img.thumbnailUrl }));
+  }, [selectedSimilarGroup, images]);
 
   // Image-only subset of selected items, preserving the order users picked them in.
   // Slideshow generation only operates on images; videos in the selection are ignored.
@@ -605,6 +725,24 @@ export default function MyGalleryPage() {
               ☑️ 选择
             </button>
           )}
+          {!multiSelectMode && images.length > 0 && (
+            <button
+              onClick={handleTriggerHighlightEvaluation}
+              disabled={isEvaluating}
+              aria-label="AI 精华挑选"
+              data-testid="highlight-trigger-btn"
+              style={{
+                background: isEvaluating ? '#f0f0f0' : '#fff8e1',
+                border: '1px solid #ffc107',
+                borderRadius: '4px',
+                padding: '4px 12px',
+                cursor: isEvaluating ? 'not-allowed' : 'pointer',
+                color: '#b8860b',
+              }}
+            >
+              {isEvaluating ? '⏳ 评估中...' : '✨ AI 精华挑选'}
+            </button>
+          )}
           {multiSelectMode && (
             <button
               onClick={exitMultiSelect}
@@ -646,6 +784,68 @@ export default function MyGalleryPage() {
           </div>
         );
       })()}
+
+      {/* AI Highlight evaluation status banner */}
+      {(isEvaluating || evaluationError || evaluationSummary) && (
+        <div
+          data-testid="highlight-status-banner"
+          role="status"
+          style={{
+            border: evaluationError ? '1px solid #e74c3c' : '1px solid #ffc107',
+            borderRadius: '8px',
+            padding: '12px',
+            marginBottom: '16px',
+            background: evaluationError ? '#fdecea' : '#fff8e1',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: '200px' }}>
+            {isEvaluating && (
+              <p style={{ margin: 0 }} data-testid="highlight-evaluating-msg">
+                {evaluationProgress
+                  ? `正在评估... 第 ${evaluationProgress.processed} / ${evaluationProgress.total} 批`
+                  : '正在评估...'}
+              </p>
+            )}
+            {!isEvaluating && evaluationError && (
+              <p style={{ margin: 0, color: '#c0392b' }} role="alert" data-testid="highlight-error-msg">
+                {evaluationError}
+              </p>
+            )}
+            {!isEvaluating && !evaluationError && evaluationSummary && (
+              <p style={{ margin: 0 }} data-testid="highlight-success-msg">
+                ✨ 评估完成：共选出 {evaluationSummary.highlightCount} 张精华，识别 {evaluationSummary.similarGroupCount} 个相似组
+                {evaluationSummary.batchesFailed > 0
+                  ? `（${evaluationSummary.batchesFailed} 批处理失败）`
+                  : ''}
+              </p>
+            )}
+          </div>
+          {!isEvaluating && (evaluationError || evaluationSummary) && (
+            <button
+              onClick={() => {
+                setEvaluationError(null);
+                setEvaluationSummary(null);
+              }}
+              aria-label="关闭通知"
+              data-testid="highlight-status-dismiss-btn"
+              style={{
+                background: 'none',
+                border: '1px solid #ccc',
+                borderRadius: '4px',
+                padding: '2px 10px',
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Append Media Area */}
       {showAppend && (
@@ -715,6 +915,68 @@ export default function MyGalleryPage() {
       {images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
+          {(highlightCount > 0 || similarGroupedPhotoCount > 0) && (
+            <div
+              data-testid="highlight-filter-tabs"
+              role="radiogroup"
+              aria-label="精华筛选"
+              style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}
+            >
+              <button
+                onClick={() => setFilterMode('all')}
+                role="radio"
+                aria-checked={filterMode === 'all'}
+                data-testid="highlight-filter-all"
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: filterMode === 'all' ? '2px solid #4a90d9' : '1px solid #ccc',
+                  background: filterMode === 'all' ? '#e8f0fe' : '#fff',
+                  fontWeight: filterMode === 'all' ? 'bold' : 'normal',
+                  cursor: 'pointer',
+                }}
+              >
+                全部 ({images.length})
+              </button>
+              <button
+                onClick={() => setFilterMode('highlights')}
+                role="radio"
+                aria-checked={filterMode === 'highlights'}
+                disabled={highlightCount === 0}
+                data-testid="highlight-filter-highlights"
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: filterMode === 'highlights' ? '2px solid #ffc107' : '1px solid #ccc',
+                  background: filterMode === 'highlights' ? '#fff8e1' : '#fff',
+                  fontWeight: filterMode === 'highlights' ? 'bold' : 'normal',
+                  cursor: highlightCount === 0 ? 'not-allowed' : 'pointer',
+                  opacity: highlightCount === 0 ? 0.5 : 1,
+                  color: '#b8860b',
+                }}
+              >
+                ★ 精华 ({highlightCount})
+              </button>
+              <button
+                onClick={() => setFilterMode('similar-groups')}
+                role="radio"
+                aria-checked={filterMode === 'similar-groups'}
+                disabled={similarGroupedPhotoCount === 0}
+                data-testid="highlight-filter-similar-groups"
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: filterMode === 'similar-groups' ? '2px solid #4a90d9' : '1px solid #ccc',
+                  background: filterMode === 'similar-groups' ? '#e8f0fe' : '#fff',
+                  fontWeight: filterMode === 'similar-groups' ? 'bold' : 'normal',
+                  cursor: similarGroupedPhotoCount === 0 ? 'not-allowed' : 'pointer',
+                  opacity: similarGroupedPhotoCount === 0 ? 0.5 : 1,
+                }}
+              >
+                🔗 相似组 ({similarGroupedPhotoCount})
+              </button>
+            </div>
+          )}
           <div data-testid="category-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
             {CATEGORY_TABS.map((tab) => (
               <button
@@ -768,6 +1030,36 @@ export default function MyGalleryPage() {
                     style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
                   />
                 </div>
+                {highlightByPhotoId.has(img.item.id) && (
+                  <HighlightBadge
+                    reason={highlightByPhotoId.get(img.item.id)!.reason}
+                  />
+                )}
+                {similarGroupByPhotoId.has(img.item.id) && !multiSelectMode && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedSimilarGroup(similarGroupByPhotoId.get(img.item.id)!);
+                    }}
+                    data-testid={`similar-group-btn-${img.item.id}`}
+                    aria-label={`查看相似组 ${img.item.originalFilename}`}
+                    title="查看相似组"
+                    style={{
+                      position: 'absolute',
+                      top: '36px',
+                      right: '4px',
+                      background: 'rgba(255,255,255,0.9)',
+                      border: '1px solid #ccc',
+                      borderRadius: '4px',
+                      padding: '2px 8px',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                      zIndex: 2,
+                    }}
+                  >
+                    🔗 {similarGroupByPhotoId.get(img.item.id)!.memberPhotoIds.length}
+                  </button>
+                )}
                 {multiSelectMode && (
                   <div
                     data-testid={`select-checkbox-${img.item.id}`}
@@ -1768,6 +2060,15 @@ export default function MyGalleryPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Similar Group Panel Modal */}
+      {selectedSimilarGroup && (
+        <SimilarGroupPanel
+          group={selectedSimilarGroup}
+          photos={similarGroupPhotos}
+          onClose={() => setSelectedSimilarGroup(null)}
+        />
       )}
 
       {/* Default Image Picker Modal */}

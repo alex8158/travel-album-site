@@ -686,6 +686,62 @@ function initTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_slideshow_jobs_user_id ON slideshow_jobs(user_id);
   `);
 
+  // Migration: create AI photo highlights tables (ai-photo-highlights)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS highlight_results (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      photo_id TEXT NOT NULL,
+      is_highlight INTEGER NOT NULL DEFAULT 0,
+      reason TEXT,
+      batch_index INTEGER NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+      FOREIGN KEY (photo_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_highlight_results_trip ON highlight_results(trip_id);
+    CREATE INDEX IF NOT EXISTS idx_highlight_results_photo ON highlight_results(photo_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_results_trip_photo ON highlight_results(trip_id, photo_id);
+
+    CREATE TABLE IF NOT EXISTS similar_groups (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      best_photo_id TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+      FOREIGN KEY (best_photo_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_similar_groups_trip ON similar_groups(trip_id);
+
+    CREATE TABLE IF NOT EXISTS similar_group_members (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      photo_id TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES similar_groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (photo_id) REFERENCES media_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_similar_group_members_group ON similar_group_members(group_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_similar_group_members_group_photo ON similar_group_members(group_id, photo_id);
+
+    CREATE TABLE IF NOT EXISTS highlight_jobs (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+      total_batches INTEGER NOT NULL DEFAULT 0,
+      processed_batches INTEGER NOT NULL DEFAULT 0,
+      failed_batches INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_jobs_active ON highlight_jobs(trip_id) WHERE status = 'running';
+  `);
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();

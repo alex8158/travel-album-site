@@ -35,6 +35,7 @@ import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJo
 import enhanceRouter, { tripEnhanceRouter } from './routes/enhance';
 import videoEnhanceRouter, { tripVideoEnhanceRouter } from './routes/videoEnhance';
 import slideshowRouter from './routes/slideshow';
+import highlightsRouter from './routes/highlights';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -100,6 +101,7 @@ for (const dir of dirs) {
 
 // Routes
 app.use('/api/auth', authRouter);
+app.use('/api/trips', highlightsRouter);
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', mediaRouter);
 app.use('/api/trips', processRouter);
