@@ -34,6 +34,7 @@ import { seedDefaultAudioTracks } from './services/audioSeed';
 import { tripScopedRouter as processJobsTripRouter, jobScopedRouter as processJobsRouter } from './routes/processJobs';
 import enhanceRouter, { tripEnhanceRouter } from './routes/enhance';
 import videoEnhanceRouter, { tripVideoEnhanceRouter } from './routes/videoEnhance';
+import slideshowRouter from './routes/slideshow';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -128,6 +129,7 @@ app.use('/api/media', mergeRouter);
 app.use('/api/trips', tripVideoEnhanceRouter);
 app.use('/api/audio', audioRouter);
 app.use('/api', applyAudioRouter);
+app.use('/api/slideshow', slideshowRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

@@ -8,6 +8,7 @@ import CompilationPreview from '../components/CompilationPreview';
 import SegmentAdjuster from '../components/SegmentAdjuster';
 import AudioPicker from '../components/AudioPicker';
 import AudioLibraryPanel from '../components/AudioLibraryPanel';
+import SlideshowDialog from '../components/SlideshowDialog';
 import FileUploader from '../components/FileUploader';
 import VideoUploader from '../components/VideoUploader';
 import ProcessTrigger from '../components/ProcessTrigger';
@@ -94,6 +95,10 @@ export default function MyGalleryPage() {
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
+
+  // Slideshow video generation state
+  const [showSlideshowDialog, setShowSlideshowDialog] = useState(false);
+  const [slideshowGenerating, setSlideshowGenerating] = useState(false);
 
   // Category filter state
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
@@ -527,6 +532,13 @@ export default function MyGalleryPage() {
       return cat === activeCategory;
     });
   }, [images, activeCategory]);
+
+  // Image-only subset of selected items, preserving the order users picked them in.
+  // Slideshow generation only operates on images; videos in the selection are ignored.
+  const selectedImageIds = useMemo(() => {
+    const imageIdSet = new Set(images.map((img) => img.item.id));
+    return Array.from(selectedIds).filter((mediaId) => imageIdSet.has(mediaId));
+  }, [selectedIds, images]);
 
   // --- Permission check ---
   if (!isLoggedIn || !user) {
@@ -1555,6 +1567,28 @@ export default function MyGalleryPage() {
         >
           <span style={{ fontSize: '0.95rem' }}>已选 {selectedIds.size} 项</span>
           <div style={{ display: 'flex', gap: '8px', position: 'relative' }}>
+            {selectedImageIds.length >= 2 && (
+              <button
+                onClick={() => {
+                  setShowSlideshowDialog(true);
+                  setSlideshowGenerating(true);
+                }}
+                disabled={slideshowGenerating || batchDeleting || batchCategoryChanging}
+                data-testid="generate-slideshow-btn"
+                aria-label="生成幻灯片视频"
+                style={{
+                  background: '#ff9800',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 20px',
+                  cursor: slideshowGenerating ? 'not-allowed' : 'pointer',
+                  fontSize: '0.95rem',
+                }}
+              >
+                {slideshowGenerating ? '生成中...' : '🎬 生成幻灯片视频'}
+              </button>
+            )}
             <button
               onClick={handleBatchDelete}
               disabled={batchDeleting || batchCategoryChanging}
@@ -1628,6 +1662,25 @@ export default function MyGalleryPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Slideshow Video Generation Dialog */}
+      {showSlideshowDialog && (
+        <SlideshowDialog
+          tripId={id!}
+          photoIds={selectedImageIds}
+          onClose={() => {
+            setShowSlideshowDialog(false);
+            setSlideshowGenerating(false);
+          }}
+          onComplete={() => {
+            // Generation succeeded — clear the busy flag so the toolbar
+            // button is no longer disabled. The dialog stays open so the
+            // user can preview and download the video; closing is handled
+            // by the dialog's own close button.
+            setSlideshowGenerating(false);
+          }}
+        />
       )}
 
       {/* Edit Trip Info Modal */}

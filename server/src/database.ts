@@ -661,6 +661,31 @@ function initTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_merged_sources_source ON merged_video_sources(source_media_id);
   `);
 
+  // Migration: create slideshow_jobs table (photo-slideshow-video)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS slideshow_jobs (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+      photo_ids TEXT NOT NULL,
+      audio_track_id TEXT,
+      output_path TEXT,
+      total_duration REAL,
+      skipped_photos TEXT,
+      error_message TEXT,
+      percent INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (audio_track_id) REFERENCES audio_tracks(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_slideshow_jobs_trip_id ON slideshow_jobs(trip_id);
+    CREATE INDEX IF NOT EXISTS idx_slideshow_jobs_user_id ON slideshow_jobs(user_id);
+  `);
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();
