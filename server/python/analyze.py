@@ -337,11 +337,11 @@ def classify_image(image_path, model, processor):
     animal_score = category_scores.get("animal", 0)
     landscape_score = category_scores.get("landscape", 0)
 
-    if people_score >= 0.30 and people_score >= animal_score - 0.03:
+    if people_score >= 0.35 and people_score > landscape_score and people_score >= animal_score - 0.03:
         category = "people"
     elif animal_score >= 0.38 and animal_score - people_score >= 0.05:
         category = "animal"
-    elif landscape_score >= 0.35:
+    elif landscape_score >= 0.30:
         category = "landscape"
     else:
         # Fallback to argmax
