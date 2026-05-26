@@ -115,6 +115,40 @@ def softmax(scores):
 # ---------------------------------------------------------------------------
 
 
+def detect_overexposure(image_path, overexposure_threshold=0.40):
+    """Detect overexposure using histogram analysis.
+
+    Computes the fraction of pixels in the high-brightness zone (value > 240)
+    across all channels. If this fraction exceeds the threshold, the image is
+    classified as overexposed.
+
+    Returns (overexposure_status, overexposure_ratio):
+      - 'overexposed' if ratio >= threshold
+      - 'normal' otherwise
+      - On OpenCV failure returns ('unknown', None)
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return "unknown", None
+        # Convert to grayscale for a single-channel brightness check
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        total_pixels = gray.shape[0] * gray.shape[1]
+        # Count pixels with brightness > 240 (near-white)
+        overexposed_pixels = int(np.sum(gray > 240))
+        ratio = overexposed_pixels / total_pixels if total_pixels > 0 else 0.0
+
+        if ratio >= overexposure_threshold:
+            status = "overexposed"
+        else:
+            status = "normal"
+        return status, round(float(ratio), 4)
+    except Exception as exc:
+        print(f"OpenCV overexposure detection failed for {image_path}: {exc}",
+              file=sys.stderr)
+        return "unknown", None
+
+
 def detect_blur(image_path, blur_threshold=15, clear_threshold=50):
     """Detect blur using dual Laplacian variance (with and without CLAHE).
 
@@ -499,10 +533,13 @@ def cmd_analyze(args):
             "file": image_path,
             "classify_error": None,
             "blur_error": None,
+            "overexposure_error": None,
             "category": None,
             "category_scores": None,
             "blur_status": "unknown",
             "blur_score": None,
+            "overexposure_status": "unknown",
+            "overexposure_ratio": None,
         }
 
         # CLIP classification (independent of blur detection)
@@ -530,6 +567,19 @@ def cmd_analyze(args):
             print(f"Blur detection failed for {image_path}: {exc}",
                   file=sys.stderr)
             result["blur_error"] = str(exc)
+
+        # Overexposure detection (independent of blur and classification)
+        try:
+            overexposure_status, overexposure_ratio = detect_overexposure(
+                image_path,
+                overexposure_threshold=args.overexposure_threshold,
+            )
+            result["overexposure_status"] = overexposure_status
+            result["overexposure_ratio"] = overexposure_ratio
+        except Exception as exc:
+            print(f"Overexposure detection failed for {image_path}: {exc}",
+                  file=sys.stderr)
+            result["overexposure_error"] = str(exc)
 
         results.append(result)
 
@@ -790,6 +840,10 @@ def build_parser():
     analyze_parser.add_argument(
         "--clear-threshold", type=float, default=50.0,
         help="Blur detection upper threshold (default: 50)"
+    )
+    analyze_parser.add_argument(
+        "--overexposure-threshold", type=float, default=0.40,
+        help="Overexposure threshold: fraction of pixels > 240 (default: 0.40)"
     )
 
     # --- dedup subcommand ---

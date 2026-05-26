@@ -50,6 +50,7 @@ const TRASHED_REASON_MAP: Record<string, string> = {
   blur: '模糊',
   duplicate: '重复',
   manual: '手动',
+  overexposure: '曝光过度',
 };
 
 interface GroupMemberImage {

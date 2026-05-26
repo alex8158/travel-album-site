@@ -29,6 +29,8 @@ export interface PythonAnalyzeResult {
   classifyError: string | null;
   /** Per-capability error: non-null string if OpenCV blur detection failed */
   blurError: string | null;
+  /** Per-capability error: non-null string if overexposure detection failed */
+  overexposureError: string | null;
   /**
    * Derived for backward compatibility: true if either classifyError or blurError is set.
    * Consumers should check classifyError/blurError specifically — even when error=true,
@@ -41,6 +43,8 @@ export interface PythonAnalyzeResult {
   categoryScores: Record<string, number> | null;
   blurStatus: 'clear' | 'suspect' | 'blurry' | 'unknown';
   blurScore: number | null;
+  overexposureStatus: 'overexposed' | 'normal' | 'unknown';
+  overexposureRatio: number | null;
 }
 
 export interface PythonDedupGroup {
@@ -293,16 +297,20 @@ async function runAnalyzeBatch(
 function mapAnalyzeResult(raw: any): PythonAnalyzeResult {
   const classifyError: string | null = raw.classify_error ?? null;
   const blurError: string | null = raw.blur_error ?? null;
+  const overexposureError: string | null = raw.overexposure_error ?? null;
   return {
     file: raw.file,
     classifyError,
     blurError,
+    overexposureError,
     error: !!(classifyError || blurError),
     errorMessage: classifyError || blurError || undefined,
     category: raw.category as ImageCategory | null,
     categoryScores: raw.category_scores,
     blurStatus: raw.blur_status ?? 'unknown',
     blurScore: raw.blur_score ?? null,
+    overexposureStatus: raw.overexposure_status ?? 'unknown',
+    overexposureRatio: raw.overexposure_ratio ?? null,
   };
 }
 

@@ -45,6 +45,12 @@ export interface DedupAssessment {
   }>;
 }
 
+export interface OverexposureAssessment {
+  overexposureStatus: 'overexposed' | 'normal' | 'unknown';
+  overexposureRatio: number | null;
+  error?: string;
+}
+
 // --- Processing Context ---
 
 export interface ImageProcessContext {
@@ -58,6 +64,7 @@ export interface ImageProcessContext {
   index: number;            // position in the image list
   classification: ClassificationAssessment | null;
   blur: BlurAssessment | null;
+  overexposure: OverexposureAssessment | null;
 }
 
 // --- Final Decision ---

@@ -91,6 +91,7 @@ async function collectInputs(
       index: i,
       classification: null,
       blur: null,
+      overexposure: null,
     };
 
     try {
@@ -219,6 +220,89 @@ async function runBlurStage(
   const suspect = contexts.filter(c => c.blur?.blurStatus === 'suspect').length;
   const clear = contexts.filter(c => c.blur?.blurStatus === 'clear').length;
   console.log(`[blur] dual-condition: ${blurry} blurry, ${suspect} suspect, ${clear} clear`);
+}
+
+// ---------------------------------------------------------------------------
+// runOverexposureStage — detect overexposed images using Python results
+// ---------------------------------------------------------------------------
+
+async function runOverexposureStage(
+  contexts: ImageProcessContext[],
+  pythonResults: PythonResultsMap,
+): Promise<void> {
+  for (const ctx of contexts) {
+    if (!ctx.downloadOk || !ctx.localPath) continue;
+
+    // Use Python result if available
+    const pyResult = pythonResults.get(ctx.mediaId);
+    if (pyResult && !pyResult.overexposureError && pyResult.overexposureStatus !== 'unknown') {
+      ctx.overexposure = {
+        overexposureStatus: pyResult.overexposureStatus,
+        overexposureRatio: pyResult.overexposureRatio,
+      };
+      continue;
+    }
+
+    // Python unavailable or failed — do a quick Node.js fallback using sharp
+    try {
+      const sharp = (await import('sharp')).default;
+      const { data, info } = await sharp(ctx.localPath)
+        .grayscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const totalPixels = info.width * info.height;
+      let overexposedPixels = 0;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] > 240) overexposedPixels++;
+      }
+      const ratio = totalPixels > 0 ? overexposedPixels / totalPixels : 0;
+      const THRESHOLD = 0.40;
+
+      ctx.overexposure = {
+        overexposureStatus: ratio >= THRESHOLD ? 'overexposed' : 'normal',
+        overexposureRatio: Math.round(ratio * 10000) / 10000,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.overexposure = { overexposureStatus: 'unknown', overexposureRatio: null, error: msg };
+    }
+  }
+
+  const overexposed = contexts.filter(c => c.overexposure?.overexposureStatus === 'overexposed').length;
+  const normal = contexts.filter(c => c.overexposure?.overexposureStatus === 'normal').length;
+  console.log(`[overexposure] ${overexposed} overexposed, ${normal} normal`);
+}
+
+// ---------------------------------------------------------------------------
+// applyOverexposureTrash — persist overexposure results, trash overexposed images
+// ---------------------------------------------------------------------------
+
+export function applyOverexposureTrash(
+  contexts: ImageProcessContext[],
+  db: Database.Database,
+): { trashedCount: number } {
+  const trashStmt = db.prepare(
+    `UPDATE media_items 
+     SET status = 'trashed', trashed_reason = CASE
+       WHEN trashed_reason IS NULL THEN 'overexposure'
+       ELSE trashed_reason || ',overexposure'
+     END
+     WHERE id = ?`
+  );
+
+  let trashedCount = 0;
+  for (const ctx of contexts) {
+    if (!ctx.overexposure) continue;
+    if (ctx.overexposure.overexposureStatus === 'overexposed') {
+      // Only trash if not already trashed by blur
+      if (ctx.blur?.blurStatus !== 'blurry') {
+        trashStmt.run(ctx.mediaId);
+        trashedCount++;
+      }
+    }
+  }
+  return { trashedCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +486,19 @@ export async function runTripProcessingPipeline(
       stageErrors.push({ stage: 'blur', error: msg });
       console.error(`[pipeline] blur FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('blur', 'complete', `failed: ${msg}`);
+    }
+
+    // ---- Stage: overexposure ----
+    t0 = Date.now();
+    try {
+      await runOverexposureStage(contexts, pythonResults);
+      const { trashedCount: overexposureTrashedCount } = applyOverexposureTrash(contexts, db);
+      const overexposedCount = contexts.filter(c => c.overexposure?.overexposureStatus === 'overexposed').length;
+      console.log(`[pipeline] overexposure: ${overexposedCount} overexposed, ${overexposureTrashedCount} trashed, ${Date.now() - t0}ms`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'blur', error: `overexposure: ${msg}` });
+      console.error(`[pipeline] overexposure FAILED: ${msg} (${Date.now() - t0}ms)`);
     }
 
     // ---- Stage: dedup ----
