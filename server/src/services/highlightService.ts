@@ -1117,8 +1117,28 @@ export async function runHighlightEvaluation(
       };
     }
 
-    // 6) Split into batches and persist `total_batches`.
-    const batches = createBatches(usablePhotos);
+    // 6) Smart batching: use DINOv2 embeddings to group similar photos together
+    //    so the AI can see them side-by-side and identify similar groups.
+    let batches: BatchablePhoto[][];
+    try {
+      const { groupBySimilarity, buildSmartBatches } = await import('./aiImageScreener');
+      const imagesForGrouping = usablePhotos.map(p => ({ id: p.id, file_path: p.filePath }));
+      const groups = await groupBySimilarity(imagesForGrouping, 0.75);
+      const smartBatches = buildSmartBatches(imagesForGrouping, groups, 6);
+      // Map back to BatchablePhoto format
+      const photoMap = new Map(usablePhotos.map(p => [p.id, p]));
+      batches = smartBatches.map(batch =>
+        batch.map(img => photoMap.get(img.id)!).filter(Boolean)
+      ).filter(b => b.length > 0);
+      console.log(
+        `[highlightService] Smart batching: ${groups.length} similarity groups → ${batches.length} batches`,
+      );
+    } catch (err) {
+      // Fallback to simple sequential batching if embedding extraction fails
+      console.warn(`[highlightService] Smart batching failed, falling back to sequential: ${err}`);
+      batches = createBatches(usablePhotos);
+    }
+
     const totalBatches = batches.length;
     db.prepare('UPDATE highlight_jobs SET total_batches = ? WHERE id = ?').run(
       totalBatches,
