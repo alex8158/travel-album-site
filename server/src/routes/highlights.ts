@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import {
@@ -7,6 +9,8 @@ import {
   getSimilarGroupsForTrip,
   HighlightServiceError,
 } from '../services/highlightService';
+import { generateSlideshow } from '../services/slideshowGenerator';
+import { getStorageProvider } from '../storage/factory';
 
 const router = Router();
 
@@ -49,9 +53,18 @@ router.post('/:id/highlights', authMiddleware, requireAuth, async (req: Request,
   if (!trip) return;
 
   const tripId = trip.id;
+  const userId = req.user!.userId;
 
   try {
     const evaluation = await runHighlightEvaluation(tripId);
+
+    // Auto-generate slideshow video from highlighted photos (fire-and-forget)
+    if (evaluation.highlightCount >= 2) {
+      autoGenerateHighlightSlideshow(tripId, userId).catch((err) => {
+        console.error(`[highlights] Auto-slideshow generation failed for trip ${tripId}: ${err}`);
+      });
+    }
+
     return res.json(evaluation);
   } catch (err) {
     if (err instanceof HighlightServiceError) {
@@ -104,5 +117,111 @@ router.get('/:id/similar-groups', authMiddleware, requireAuth, (req: Request, re
   const groups = getSimilarGroupsForTrip(trip.id);
   return res.json({ groups });
 });
+
+// ---------------------------------------------------------------------------
+// Auto-generate slideshow video from highlighted photos
+// ---------------------------------------------------------------------------
+
+/**
+ * After AI highlight evaluation, automatically generate a slideshow video
+ * using the highlighted photos. Runs in the background (fire-and-forget).
+ *
+ * - Queries highlight photos for the trip (is_highlight = 1)
+ * - Downloads each photo to a temp path (prefers optimized_path)
+ * - Calls generateSlideshow to produce an MP4
+ * - Records the job in slideshow_jobs table
+ */
+async function autoGenerateHighlightSlideshow(tripId: string, userId: string): Promise<void> {
+  const db = getDb();
+  const storageProvider = getStorageProvider();
+
+  // Check if there's already a running slideshow job for this trip
+  const activeJob = db.prepare(
+    `SELECT id FROM slideshow_jobs WHERE trip_id = ? AND status IN ('queued', 'running')`
+  ).get(tripId) as { id: string } | undefined;
+  if (activeJob) {
+    console.log(`[highlights] Skipping auto-slideshow: job already running for trip ${tripId}`);
+    return;
+  }
+
+  // Get highlighted photo IDs (ordered by the original photo sequence)
+  const highlightPhotos = db.prepare(
+    `SELECT mi.id, mi.file_path, mi.optimized_path
+     FROM highlight_results hr
+     INNER JOIN media_items mi ON mi.id = hr.photo_id
+     WHERE hr.trip_id = ? AND hr.is_highlight = 1
+     ORDER BY mi.created_at ASC, mi.id ASC`
+  ).all(tripId) as Array<{ id: string; file_path: string; optimized_path: string | null }>;
+
+  if (highlightPhotos.length < 2) {
+    console.log(`[highlights] Skipping auto-slideshow: only ${highlightPhotos.length} highlight(s) for trip ${tripId}`);
+    return;
+  }
+
+  // Create slideshow job record
+  const jobId = uuidv4();
+  const now = new Date().toISOString();
+  const photoIds = highlightPhotos.map(p => p.id);
+
+  db.prepare(
+    `INSERT INTO slideshow_jobs (id, trip_id, user_id, status, photo_ids, audio_track_id, created_at)
+     VALUES (?, ?, ?, 'running', ?, NULL, ?)`
+  ).run(jobId, tripId, userId, JSON.stringify(photoIds), now);
+
+  // Download photos to temp (prefer optimized_path)
+  const photoPaths: string[] = [];
+  for (const photo of highlightPhotos) {
+    try {
+      const storagePath = photo.optimized_path || photo.file_path;
+      const localPath = await storageProvider.downloadToTemp(storagePath);
+      photoPaths.push(localPath);
+    } catch (err) {
+      console.warn(`[highlights] Auto-slideshow: skipping photo ${photo.id}: ${err}`);
+    }
+  }
+
+  if (photoPaths.length < 2) {
+    db.prepare(
+      `UPDATE slideshow_jobs SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ?`
+    ).run('可用照片不足 2 张', new Date().toISOString(), jobId);
+    return;
+  }
+
+  // Generate slideshow
+  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
+  const outputDir = path.join(uploadsBase, tripId, 'slideshow');
+
+  try {
+    const result = await generateSlideshow({
+      photoPaths,
+      audioPath: null,
+      outputDir,
+      photoDuration: 2,
+    });
+
+    if (result.success && result.outputPath) {
+      const outputFilename = path.basename(result.outputPath);
+      const relativeOutputPath = path.join(tripId, 'slideshow', outputFilename);
+
+      db.prepare(
+        `UPDATE slideshow_jobs SET status = 'completed', output_path = ?, total_duration = ?, percent = 100, completed_at = ? WHERE id = ?`
+      ).run(relativeOutputPath, result.totalDuration, new Date().toISOString(), jobId);
+
+      console.log(`[highlights] Auto-slideshow generated for trip ${tripId}: ${relativeOutputPath} (${result.totalDuration}s)`);
+    } else {
+      const errorMessage = result.error || '视频生成失败';
+      db.prepare(
+        `UPDATE slideshow_jobs SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ?`
+      ).run(errorMessage, new Date().toISOString(), jobId);
+      console.error(`[highlights] Auto-slideshow failed for trip ${tripId}: ${errorMessage}`);
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    db.prepare(
+      `UPDATE slideshow_jobs SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ?`
+    ).run(errorMessage, new Date().toISOString(), jobId);
+    console.error(`[highlights] Auto-slideshow error for trip ${tripId}: ${errorMessage}`);
+  }
+}
 
 export default router;
