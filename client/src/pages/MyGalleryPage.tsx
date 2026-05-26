@@ -143,6 +143,7 @@ export default function MyGalleryPage() {
   const [evaluationSummary, setEvaluationSummary] = useState<HighlightEvaluation | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [selectedSimilarGroup, setSelectedSimilarGroup] = useState<SimilarGroup | null>(null);
+  const [latestSlideshowJobId, setLatestSlideshowJobId] = useState<string | null>(null);
 
   async function fetchGallery() {
     if (!id) return;
@@ -204,6 +205,20 @@ export default function MyGalleryPage() {
       const summary = await triggerHighlightEvaluation(id);
       setEvaluationSummary(summary);
       await fetchHighlightData();
+      await fetchGallery(); // Refresh gallery to reflect trashed photos
+      // Wait a moment for the auto-slideshow to generate (it's fire-and-forget on the server)
+      // Then check for the latest slideshow job
+      setTimeout(async () => {
+        try {
+          const res = await authFetch(`/api/slideshow/latest?tripId=${id}`);
+          if (res.ok) {
+            const job = await res.json() as { id: string; status: string; outputPath?: string };
+            if (job.status === 'completed' && job.id) {
+              setLatestSlideshowJobId(job.id);
+            }
+          }
+        } catch { /* ignore */ }
+      }, 25000); // Wait 25s for slideshow generation to complete
     } catch (err) {
       if (err instanceof HighlightsApiError) {
         if (err.status === 409) {
@@ -823,6 +838,16 @@ export default function MyGalleryPage() {
                 {evaluationSummary.batchesFailed > 0
                   ? `（${evaluationSummary.batchesFailed} 批处理失败）`
                   : ''}
+                {latestSlideshowJobId && (
+                  <a
+                    href={`/api/slideshow/${latestSlideshowJobId}/download`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ marginLeft: '12px', color: '#4a90d9', textDecoration: 'underline' }}
+                  >
+                    🎬 下载精华视频
+                  </a>
+                )}
               </p>
             )}
           </div>

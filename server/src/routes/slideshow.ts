@@ -50,6 +50,39 @@ interface SlideshowJobRow {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/slideshow/latest — 获取指定旅行的最新幻灯片视频 job
+// ---------------------------------------------------------------------------
+
+router.get('/latest', authMiddleware, requireAuth, (req: Request, res: Response) => {
+  const tripId = req.query.tripId as string;
+  if (!tripId) {
+    return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: '缺少 tripId 参数' } });
+  }
+
+  const db = getDb();
+  const job = db.prepare(
+    `SELECT id, trip_id, status, output_path, total_duration, created_at
+     FROM slideshow_jobs
+     WHERE trip_id = ? AND user_id = ?
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).get(tripId, req.user!.userId) as { id: string; trip_id: string; status: string; output_path: string | null; total_duration: number | null; created_at: string } | undefined;
+
+  if (!job) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '暂无幻灯片视频' } });
+  }
+
+  return res.json({
+    id: job.id,
+    tripId: job.trip_id,
+    status: job.status,
+    outputPath: job.output_path,
+    totalDuration: job.total_duration,
+    createdAt: job.created_at,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/slideshow/generate — 生成幻灯片视频（SSE 流式进度）
 // Requirements: 1.3, 2.1, 2.2, 2.3, 2.4, 6.1, 6.2, 6.3, 7.4
 // ---------------------------------------------------------------------------

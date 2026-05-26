@@ -56,6 +56,7 @@ export interface SimilarGroup {
 export interface BatchResult {
   highlights: Array<{ photoId: string; reason: string }>;
   similarGroups: Array<{ memberIds: string[]; bestId: string }>;
+  overexposedIds: string[];
 }
 
 /**
@@ -154,6 +155,8 @@ Your tasks:
 
 2. IDENTIFY SIMILAR GROUPS: Find photos that are visually similar (same scene, same angle, burst shots, minor variations). For each group, recommend the single best photo.
 
+3. IDENTIFY OVEREXPOSED PHOTOS: Mark photos where the MAIN SUBJECT has blown highlights or overexposure (washed out details, white/bright areas on the subject that should have detail). Background overexposure (e.g. bright sky) is acceptable if the subject is well-exposed.
+
 Return ONLY a JSON object in this exact format:
 {
   "highlights": [
@@ -162,7 +165,8 @@ Return ONLY a JSON object in this exact format:
   ],
   "similar_groups": [
     {"indices": [1, 3, 4], "best_index": 3}
-  ]
+  ],
+  "overexposed": [5, 6]
 }
 
 Rules:
@@ -170,6 +174,8 @@ Rules:
 - "reason" must be concise (max 100 characters) explaining why the photo is a highlight
 - A photo can be both a highlight AND part of a similar group
 - If no similar groups exist, return an empty array for "similar_groups"
+- "overexposed" is an array of indices where the main subject has blown highlights. Empty array if none.
+- Do NOT select overexposed photos as highlights
 - Select approximately 30-40% of photos as highlights`;
 
 /**
@@ -178,6 +184,7 @@ Rules:
 interface RawBatchResponse {
   highlights?: Array<{ index: number; reason?: string }>;
   similar_groups?: Array<{ indices: number[]; best_index: number }>;
+  overexposed?: number[];
 }
 
 /**
@@ -291,7 +298,17 @@ function mapRawToBatchResult(
     similarGroups.push({ memberIds, bestId });
   }
 
-  return { highlights, similarGroups };
+  // Extract overexposed photo IDs
+  const overexposedIds: string[] = [];
+  if (Array.isArray(raw.overexposed)) {
+    for (const idx of raw.overexposed) {
+      if (typeof idx === 'number' && idx >= 0 && idx < photos.length) {
+        overexposedIds.push(photos[idx].id);
+      }
+    }
+  }
+
+  return { highlights, similarGroups, overexposedIds };
 }
 
 /**
@@ -352,7 +369,7 @@ export async function evaluateBatch(
   providerChain: ProviderConfig[],
 ): Promise<BatchResult | null> {
   if (!Array.isArray(photos) || photos.length === 0) {
-    return { highlights: [], similarGroups: [] };
+    return { highlights: [], similarGroups: [], overexposedIds: [] };
   }
   if (!Array.isArray(providerChain) || providerChain.length === 0) {
     console.error('[highlightService] evaluateBatch called with empty provider chain');
@@ -1150,6 +1167,7 @@ export async function runHighlightEvaluation(
     const allEvaluatedPhotos: EvaluatedPhotoInput[] = [];
     const allHighlights: HighlightInput[] = [];
     const allSimilarGroups: SimilarGroupInput[] = [];
+    const allOverexposedIds: string[] = [];
 
     let batchesProcessed = 0;
     let batchesFailed = 0;
@@ -1200,6 +1218,9 @@ export async function runHighlightEvaluation(
             memberIds: sg.memberIds,
             bestId: sg.bestId,
           });
+        }
+        for (const id of result.overexposedIds) {
+          allOverexposedIds.push(id);
         }
       }
 
@@ -1261,7 +1282,30 @@ export async function runHighlightEvaluation(
       }
     }
 
-    // 11) Log a warning if the highlight ratio drifted out of [30%, 40%].
+    // 11) Auto-trash overexposed photos identified by AI.
+    let overexposedTrashedCount = 0;
+    if (allOverexposedIds.length > 0) {
+      const trashOverexposedStmt = db.prepare(
+        `UPDATE media_items
+         SET status = 'trashed',
+             trashed_reason = CASE
+               WHEN trashed_reason IS NULL THEN 'overexposure'
+               ELSE trashed_reason || ',overexposure'
+             END
+         WHERE id = ? AND status = 'active'`
+      );
+      for (const photoId of allOverexposedIds) {
+        const info = trashOverexposedStmt.run(photoId);
+        if (info.changes > 0) overexposedTrashedCount++;
+      }
+      if (overexposedTrashedCount > 0) {
+        console.log(
+          `[highlightService] Auto-trashed ${overexposedTrashedCount} overexposed photos for trip ${tripId}`,
+        );
+      }
+    }
+
+    // 12) Log a warning if the highlight ratio drifted out of [30%, 40%].
     const ratio = computeHighlightRatio(highlightCount, totalPhotos);
     logRatioWarningIfOutOfRange(ratio);
 
