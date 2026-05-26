@@ -16,6 +16,8 @@ export interface AdjustmentParams {
   contrast: number;    // 0~2, 1.0 = 不调整
   saturation: number;  // 0~2, 1.0 = 不调整
   sharpness: number;   // 0~2, 1.0 = 不调整
+  clarity: number;     // 0~2, 1.0 = 不调整 (局部对比度增强)
+  temperature: number; // -1~1, 0 = 不调整 (负值偏冷/蓝，正值偏暖/黄)
 }
 
 export interface AiOptimizeResult {
@@ -38,18 +40,19 @@ export interface AiOptimizeBatchResult {
 // Constants
 // ---------------------------------------------------------------------------
 
-export const REFINEMENT_PROMPT = `你是一位专业的水下摄影后期处理专家。请分析这张水下照片，给出精确的调整建议。
+export const REFINEMENT_PROMPT = `你是一位专业的旅行摄影后期处理专家。请分析这张照片，给出精确的调整建议。
 
 请返回 JSON 格式：
-{"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "sharpness": 1.0}
+{"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "sharpness": 1.0, "clarity": 1.0, "temperature": 0}
 
 规则：
-- 每个值范围 0~2，1.0 表示不调整
-- brightness: 水下照片通常偏暗，适当提亮（1.1~1.4）
-- contrast: 水下散射降低对比度，适当增强（1.1~1.3）
-- saturation: 水下色彩衰减，适当增强（1.1~1.5）
-- sharpness: 轻微锐化改善清晰度（1.0~1.3）
-- 如果照片已经很好，返回全 1.0
+- brightness: 范围 0~2，1.0 表示不调整。偏暗照片适当提亮（1.1~1.4）
+- contrast: 范围 0~2，1.0 表示不调整。低对比度照片适当增强（1.1~1.3）
+- saturation: 范围 0~2，1.0 表示不调整。色彩暗淡时适当增强（1.1~1.5）
+- sharpness: 范围 0~2，1.0 表示不调整。轻微锐化改善清晰度（1.0~1.3）
+- clarity: 范围 0~2，1.0 表示不调整。增强局部对比度让细节更突出（1.1~1.4）
+- temperature: 范围 -1~1，0 表示不调整。负值偏冷（蓝调），正值偏暖（黄调）。水下照片通常偏蓝需要加暖（0.1~0.3），日落照片可能需要微调
+- 如果照片已经很好，返回全部默认值
 - 不要过度调整，宁可保守`;
 
 // ---------------------------------------------------------------------------
@@ -70,21 +73,29 @@ export function createRefinementClient(): OpenAI {
 // ---------------------------------------------------------------------------
 
 const ADJUSTMENT_FIELDS: (keyof AdjustmentParams)[] = [
-  'brightness', 'contrast', 'saturation', 'sharpness',
+  'brightness', 'contrast', 'saturation', 'sharpness', 'clarity', 'temperature',
 ];
 
 /**
  * Validate and clamp a raw object into a valid AdjustmentParams.
- * - Missing, non-numeric, or NaN fields default to 1.0
- * - Values outside [0, 2] are clamped to the boundary
+ * - Missing, non-numeric, or NaN fields default to their neutral value
+ * - brightness/contrast/saturation/sharpness/clarity: clamped to [0, 2], default 1.0
+ * - temperature: clamped to [-1, 1], default 0
  */
 export function validateAndClamp(raw: Record<string, unknown>): AdjustmentParams {
-  const result: AdjustmentParams = { brightness: 1.0, contrast: 1.0, saturation: 1.0, sharpness: 1.0 };
+  const result: AdjustmentParams = {
+    brightness: 1.0, contrast: 1.0, saturation: 1.0,
+    sharpness: 1.0, clarity: 1.0, temperature: 0,
+  };
 
   for (const field of ADJUSTMENT_FIELDS) {
     const value = raw[field];
     if (typeof value !== 'number' || Number.isNaN(value)) {
-      result[field] = 1.0;
+      // keep default
+      continue;
+    }
+    if (field === 'temperature') {
+      result[field] = Math.min(1, Math.max(-1, value));
     } else {
       result[field] = Math.min(2, Math.max(0, value));
     }
@@ -168,9 +179,11 @@ export function parseAdjustmentParams(responseText: string): AdjustmentParams | 
  * - contrast  → linear(contrast, -(128 * (contrast - 1)))
  * - saturation → modulate({ saturation })
  * - sharpness → sharpen({ sigma: (sharpness - 1) * 2 }) only when > 1.0
+ * - clarity   → sharpen with larger sigma for local contrast (sigma: 3, flat: clarity-1)
+ * - temperature → tint adjustment via raw color channel manipulation
  *
- * If ALL four params equal 1.0, returns null (no processing needed).
- * Only applies operations for fields that differ from 1.0.
+ * If ALL params are at their neutral values, returns null (no processing needed).
+ * Only applies operations for fields that differ from neutral.
  * brightness and saturation are combined in a single modulate() call when both differ from 1.0.
  */
 export async function applyAdjustments(
@@ -179,12 +192,14 @@ export async function applyAdjustments(
   tripId: string,
   mediaId: string
 ): Promise<string | null> {
-  // If all params are 1.0, skip processing entirely
+  // If all params are neutral, skip processing entirely
   if (
     params.brightness === 1.0 &&
     params.contrast === 1.0 &&
     params.saturation === 1.0 &&
-    params.sharpness === 1.0
+    params.sharpness === 1.0 &&
+    params.clarity === 1.0 &&
+    params.temperature === 0
   ) {
     return null;
   }
@@ -213,9 +228,33 @@ export async function applyAdjustments(
       pipeline = pipeline.linear(params.contrast, -(128 * (params.contrast - 1)));
     }
 
-    // Sharpness: only apply when > 1.0
+    // Clarity: local contrast enhancement using unsharp mask with larger radius
+    // This is different from sharpness — clarity affects mid-tone contrast
+    if (params.clarity > 1.0) {
+      pipeline = pipeline.sharpen({
+        sigma: 3,
+        m1: (params.clarity - 1) * 2,  // flat areas enhancement
+        m2: (params.clarity - 1),       // jagged areas (less aggressive)
+      });
+    }
+
+    // Sharpness: fine detail sharpening with smaller radius
     if (params.sharpness > 1.0) {
       pipeline = pipeline.sharpen({ sigma: (params.sharpness - 1) * 2 });
+    }
+
+    // Temperature: shift color balance by adjusting red/blue channels
+    // Positive = warmer (more red/yellow), Negative = cooler (more blue)
+    if (params.temperature !== 0) {
+      const t = params.temperature;
+      // Use linear per-channel: warm adds red & reduces blue, cool does opposite
+      // We apply a subtle tint via recomb matrix
+      const warmShift = t * 0.15; // max 15% shift at temperature=1
+      pipeline = pipeline.recomb([
+        [1 + warmShift, 0, 0],           // Red channel boost for warm
+        [0, 1, 0],                        // Green unchanged
+        [0, 0, 1 - warmShift],           // Blue channel reduction for warm
+      ]);
     }
 
     // Preserve EXIF metadata
