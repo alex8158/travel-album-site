@@ -643,6 +643,21 @@ export async function runTripProcessingPipeline(
     const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
     const dashScopeConfiguredForRefinement = !!process.env.DASHSCOPE_API_KEY;
     if (aiRefinementEnabled && dashScopeConfiguredForRefinement) {
+      // Second AI dedup pass: catch duplicates that survived the first screening
+      // (e.g. photos that were in different batches during the first pass)
+      t0 = Date.now();
+      try {
+        const secondPassResult = await runAiScreening(tripId);
+        if (secondPassResult.totalRemoved > 0) {
+          console.log(`[pipeline] aiScreening-2nd: ${secondPassResult.totalRemoved} removed from ${secondPassResult.totalProcessed} images, ${Date.now() - t0}ms`);
+        } else {
+          console.log(`[pipeline] aiScreening-2nd: no additional duplicates found, ${Date.now() - t0}ms`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[pipeline] aiScreening-2nd failed (non-fatal): ${msg}`);
+      }
+
       onProgress('aiRefinement', 'start');
       t0 = Date.now();
       try {
