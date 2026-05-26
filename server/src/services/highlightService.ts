@@ -1213,7 +1213,35 @@ export async function runHighlightEvaluation(
       evaluatedAt,
     );
 
-    // 10) Log a warning if the highlight ratio drifted out of [30%, 40%].
+    // 10) Auto-trash similar group non-best photos.
+    //     For each similar group, keep only the bestId; trash the rest.
+    let similarGroupTrashedCount = 0;
+    if (allSimilarGroups.length > 0) {
+      const trashStmt = db.prepare(
+        `UPDATE media_items
+         SET status = 'trashed',
+             trashed_reason = CASE
+               WHEN trashed_reason IS NULL THEN 'duplicate'
+               ELSE trashed_reason || ',duplicate'
+             END
+         WHERE id = ? AND status = 'active'`
+      );
+      for (const sg of allSimilarGroups) {
+        for (const memberId of sg.memberIds) {
+          if (memberId !== sg.bestId) {
+            const info = trashStmt.run(memberId);
+            if (info.changes > 0) similarGroupTrashedCount++;
+          }
+        }
+      }
+      if (similarGroupTrashedCount > 0) {
+        console.log(
+          `[highlightService] Auto-trashed ${similarGroupTrashedCount} similar-group non-best photos for trip ${tripId}`,
+        );
+      }
+    }
+
+    // 11) Log a warning if the highlight ratio drifted out of [30%, 40%].
     const ratio = computeHighlightRatio(highlightCount, totalPhotos);
     logRatioWarningIfOutOfRange(ratio);
 
