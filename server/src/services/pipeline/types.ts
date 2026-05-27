@@ -90,6 +90,7 @@ export type PipelineStage =
   | 'blur'
   | 'dedup'
   | 'aiScreening'
+  | 'smartCuration'
   | 'reduce'
   | 'write'
   | 'analyze'

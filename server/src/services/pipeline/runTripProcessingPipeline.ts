@@ -24,6 +24,7 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
 import { runAiRefinement } from '../aiImageOptimizer';
+import { runSmartCuration } from '../smartCuration';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -561,24 +562,31 @@ export async function runTripProcessingPipeline(
       onProgress('write', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: aiScreening (optional) ----
-    // Runs AFTER write so that dedup trashed images are already committed to DB
-    // Only runs when AI_REVIEW_ENABLED=true and DASHSCOPE_API_KEY is configured
-    const aiReviewEnabled = process.env.AI_REVIEW_ENABLED === 'true';
-    const dashScopeConfigured = !!process.env.DASHSCOPE_API_KEY;
-    if (aiReviewEnabled && dashScopeConfigured) {
-      onProgress('aiScreening', 'start');
-      t0 = Date.now();
-      try {
-        const screeningResult = await runAiScreening(tripId);
-        console.log(`[pipeline] aiScreening: ${screeningResult.totalRemoved} removed from ${screeningResult.totalProcessed} images, ${Date.now() - t0}ms`);
-        onProgress('aiScreening', 'complete', `${screeningResult.totalRemoved} removed`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        stageErrors.push({ stage: 'aiScreening', error: msg });
-        console.error(`[pipeline] aiScreening FAILED: ${msg} (${Date.now() - t0}ms)`);
-        onProgress('aiScreening', 'complete', `failed: ${msg}`);
-      }
+    // ---- Stage: smartCuration ----
+    // Runs AFTER write so that dedup-trashed images are already committed to DB.
+    // Always runs — falls back to technical quality scoring when DASHSCOPE_API_KEY
+    // is not configured or the VLM is unreachable. Replaces the legacy aiScreening
+    // stage which was gated on AI_REVIEW_ENABLED.
+    onProgress('smartCuration', 'start');
+    t0 = Date.now();
+    try {
+      const curationResult = await runSmartCuration(tripId, {
+        onProgress: (_stage, status, detail) => {
+          // Forward inner progress events under the smartCuration pipeline stage.
+          onProgress('smartCuration', status as 'start' | 'complete' | 'progress', detail);
+        },
+      });
+      console.log(
+        `[pipeline] smartCuration: ${curationResult.totalTrashed} trashed from ` +
+        `${curationResult.totalProcessed} images, ${curationResult.vlmCallsMade} VLM calls, ` +
+        `${Date.now() - t0}ms`
+      );
+      onProgress('smartCuration', 'complete', `${curationResult.totalTrashed} trashed`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'smartCuration', error: msg });
+      console.error(`[pipeline] smartCuration FAILED: ${msg} (${Date.now() - t0}ms)`);
+      onProgress('smartCuration', 'complete', `failed: ${msg}`);
     }
 
     // ---- Compute stats from decisions ----
