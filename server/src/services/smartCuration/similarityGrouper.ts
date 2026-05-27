@@ -4,9 +4,16 @@
  * Phase 1 of the Smart Curation engine. Groups CurationCandidates by visual
  * similarity using DINOv2 embeddings with tiered cosine-similarity thresholds:
  *
- *   - similarity >= EXACT_DUPLICATE_THRESHOLD (0.94)   → `exact_duplicate`
- *   - similarity >= NEAR_DUPLICATE_THRESHOLD (0.86) and < 0.94 → `near_duplicate_candidate`
- *   - similarity < 0.86                                → not grouped
+ *   - similarity >= EXACT_DUPLICATE_THRESHOLD (default 0.94)  → `exact_duplicate`
+ *   - similarity >= NEAR_DUPLICATE_THRESHOLD  (default 0.80)
+ *     and < EXACT_DUPLICATE_THRESHOLD                          → `near_duplicate_candidate`
+ *   - similarity below NEAR_DUPLICATE_THRESHOLD               → not grouped
+ *
+ * Both thresholds can be overridden at runtime via env vars
+ * `SMART_CURATION_EXACT_THRESHOLD` and `SMART_CURATION_NEAR_THRESHOLD`. This is
+ * useful because DINOv2-small produces lower cosine similarities for
+ * underwater / low-contrast scenes than for typical land photography, so the
+ * near threshold often needs to be relaxed for diving trips.
  *
  * The grouping uses a Union-Find (disjoint-set) structure so transitive chains
  * (A~B, B~C ⇒ A,B,C in same group) are merged correctly. The group's type is
@@ -30,8 +37,8 @@
  *
  *   syntheticSimilarity = 1 - minHamming / 64
  *
- * The same tiered thresholds (0.94 / 0.86) are applied against the synthetic
- * similarity so the rest of the pipeline behaves identically. The returned
+ * The same tiered thresholds are applied against the synthetic similarity so
+ * the rest of the pipeline behaves identically. The returned
  * `similaritySource` is `phash` or `dhash` to flag the degraded mode.
  */
 
@@ -56,11 +63,55 @@ import type {
 // Public thresholds
 // ---------------------------------------------------------------------------
 
-/** Pairs at or above this cosine similarity are treated as exact duplicates. */
-export const EXACT_DUPLICATE_THRESHOLD = 0.94;
+/**
+ * Parse a numeric env var into a finite number in [0, 1]. Returns the
+ * supplied default when the env var is missing, blank, non-numeric, or out
+ * of range. Out-of-range / invalid values are logged once at module load.
+ */
+function readThresholdEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    console.warn(
+      `[similarityGrouper] ${name}="${raw}" is not a valid similarity in [0,1]; ` +
+      `using default ${defaultValue}`
+    );
+    return defaultValue;
+  }
+  return parsed;
+}
 
-/** Pairs at or above this similarity (but below the exact tier) are near-duplicates. */
-export const NEAR_DUPLICATE_THRESHOLD = 0.86;
+/**
+ * Pairs at or above this cosine similarity are treated as exact duplicates.
+ * Override via SMART_CURATION_EXACT_THRESHOLD (default 0.94).
+ */
+export const EXACT_DUPLICATE_THRESHOLD = readThresholdEnv(
+  'SMART_CURATION_EXACT_THRESHOLD',
+  0.94
+);
+
+/**
+ * Pairs at or above this similarity (but below the exact tier) are
+ * near-duplicates. Override via SMART_CURATION_NEAR_THRESHOLD (default 0.80).
+ *
+ * The default was lowered from 0.86 → 0.80 after observing that DINOv2-small
+ * underrates near-duplicates in low-contrast underwater / diving photos.
+ */
+export const NEAR_DUPLICATE_THRESHOLD = readThresholdEnv(
+  'SMART_CURATION_NEAR_THRESHOLD',
+  0.80
+);
+
+// Sanity check: near must be <= exact, otherwise the tiered logic collapses
+// (every grouped pair would qualify as exact_duplicate, skipping the VLM).
+if (NEAR_DUPLICATE_THRESHOLD > EXACT_DUPLICATE_THRESHOLD) {
+  console.warn(
+    `[similarityGrouper] SMART_CURATION_NEAR_THRESHOLD (${NEAR_DUPLICATE_THRESHOLD}) ` +
+    `is greater than SMART_CURATION_EXACT_THRESHOLD (${EXACT_DUPLICATE_THRESHOLD}); ` +
+    `near-duplicate tier will be empty. Lower NEAR or raise EXACT.`
+  );
+}
 
 /** Synthetic similarity assigned when hashes confirm an exact duplicate. */
 const HASH_CONFIRMED_SIMILARITY = 0.95;
