@@ -18,3 +18,4 @@ server/data/*
 !server/data/default-audio/*.mp3
 server/data/.jwt-secret
 .claude/
+*.tsbuildinfo
