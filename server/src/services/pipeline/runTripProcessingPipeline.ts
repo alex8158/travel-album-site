@@ -645,9 +645,10 @@ export async function runTripProcessingPipeline(
     if (aiRefinementEnabled && dashScopeConfiguredForRefinement) {
       // Second AI dedup pass: catch duplicates that survived the first screening
       // (e.g. photos that were in different batches during the first pass)
+      // Skip grouping so AI sees ALL remaining photos together without DINOv2 pre-filtering
       t0 = Date.now();
       try {
-        const secondPassResult = await runAiScreening(tripId);
+        const secondPassResult = await runAiScreening(tripId, { skipGrouping: true });
         if (secondPassResult.totalRemoved > 0) {
           console.log(`[pipeline] aiScreening-2nd: ${secondPassResult.totalRemoved} removed from ${secondPassResult.totalProcessed} images, ${Date.now() - t0}ms`);
         } else {

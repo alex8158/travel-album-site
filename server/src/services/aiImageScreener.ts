@@ -390,9 +390,10 @@ export function buildSmartBatches(
 // Main screening function
 // ---------------------------------------------------------------------------
 
-export async function runAiScreening(tripId: string): Promise<AiScreeningResult> {
+export async function runAiScreening(tripId: string, options?: { skipGrouping?: boolean }): Promise<AiScreeningResult> {
   const db = getDb();
   const storageProvider = getStorageProvider();
+  const skipGrouping = options?.skipGrouping ?? false;
 
   // Get all active, non-blurry images for this trip (after dedup has already removed duplicates)
   const activeImages = db.prepare(
@@ -413,6 +414,21 @@ export async function runAiScreening(tripId: string): Promise<AiScreeningResult>
   let batches: Array<Array<{ id: string; file_path: string }>>;
   let usedSmartBatching = false;
 
+  if (skipGrouping) {
+    // Skip grouping: put ALL images in a single batch (or split into max-size batches)
+    // This is used for the second pass where we want AI to see all remaining photos together
+    console.log(`[pipeline] aiScreening: skipGrouping=true, sending all ${activeImages.length} images without grouping`);
+    if (activeImages.length <= BATCH_SIZE) {
+      batches = [activeImages];
+    } else {
+      // For larger sets, use sequential batches but with larger batch size (up to 15)
+      const largeBatchSize = Math.min(15, activeImages.length);
+      batches = [];
+      for (let i = 0; i < activeImages.length; i += largeBatchSize) {
+        batches.push(activeImages.slice(i, i + largeBatchSize));
+      }
+    }
+  } else {
   try {
     const groups = await groupBySimilarity(activeImages, GROUPING_THRESHOLD);
 
@@ -449,6 +465,7 @@ export async function runAiScreening(tripId: string): Promise<AiScreeningResult>
       batches.push(activeImages.slice(i, i + BATCH_SIZE));
     }
   }
+  } // end of else (skipGrouping === false)
 
   const result: AiScreeningResult = {
     totalProcessed: activeImages.length,
