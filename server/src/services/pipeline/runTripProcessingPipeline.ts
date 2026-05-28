@@ -573,7 +573,7 @@ export async function runTripProcessingPipeline(
       const curationResult = await runSmartCuration(tripId, {
         onProgress: (_stage, status, detail) => {
           // Forward inner progress events under the smartCuration pipeline stage.
-          onProgress('smartCuration', status as 'start' | 'complete' | 'progress', detail);
+          onProgress('smartCuration', status, detail);
         },
       });
       console.log(

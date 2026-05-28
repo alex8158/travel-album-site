@@ -100,7 +100,11 @@ export interface SmartCurationResult {
 
 /** Options for the smart curation engine. */
 export interface SmartCurationOptions {
-  onProgress?: (stage: string, status: string, detail?: string) => void;
+  onProgress?: (
+    stage: string,
+    status: 'start' | 'progress' | 'complete',
+    detail?: string
+  ) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +171,32 @@ function loadActiveCandidates(tripId: string): CurationCandidate[] {
 }
 
 /**
+ * Build a `CurationDecision` for a candidate that belongs to a similarity
+ * group. The group fields (groupId, groupType, similaritySource,
+ * similarityScore) are pulled from the supplied group so all decisions for the
+ * same group are consistent.
+ *
+ * Pure helper used by every group-resolution path to avoid the field-by-field
+ * repetition that would otherwise creep into each branch.
+ */
+function buildGroupDecision(
+  group: CurationGroup,
+  candidate: CurationCandidate,
+  decision: 'keep' | 'trash',
+  reason: TrashReason | null
+): CurationDecision {
+  return {
+    mediaId: candidate.mediaId,
+    decision,
+    reason,
+    groupId: group.groupId,
+    groupType: group.groupType,
+    similaritySource: group.similaritySource,
+    similarityScore: group.maxSimilarity,
+  };
+}
+
+/**
  * Apply trash decisions to the database in a single transaction.
  *
  * Only `status` and `trashed_reason` are mutated — `file_path` is intentionally
@@ -215,40 +245,48 @@ async function resolveExactDuplicateGroup(
   group: CurationGroup
 ): Promise<GroupResolution> {
   const bestIdx = await selectBestByQuality(group.candidates);
-  const decisions: CurationDecision[] = group.candidates.map((c, idx) => ({
-    mediaId: c.mediaId,
-    decision: idx === bestIdx ? 'keep' : 'trash',
-    reason: idx === bestIdx ? null : 'exact_duplicate',
-    groupId: group.groupId,
-    groupType: group.groupType,
-    similaritySource: group.similaritySource,
-    similarityScore: group.maxSimilarity,
-  }));
+  const decisions = group.candidates.map((c, idx) =>
+    buildGroupDecision(
+      group,
+      c,
+      idx === bestIdx ? 'keep' : 'trash',
+      idx === bestIdx ? null : 'exact_duplicate'
+    )
+  );
   return { decisions, vlmCallMade: false, fallbackUsed: false };
 }
 
 /**
  * Build per-candidate decisions for a near-duplicate group when the VLM is
- * unavailable or has failed. Keeps a single best candidate (by quality) from
- * the supplied `candidatesForFallback` array and trashes everyone else in the
- * original group with reason `near_duplicate_worse`.
+ * unavailable or has failed. Keeps the top-`keepCount` candidates (by
+ * technical quality) from `candidatesForFallback` and trashes everyone else
+ * in the original group with reason `near_duplicate_worse`.
+ *
+ * `keepCount` defaults to 1 (single-best fallback) but the orchestrator passes
+ * `keepQuota.min` for near-duplicate groups so a 9+ photo group still keeps 2
+ * survivors rather than collapsing to one.
  */
 async function fallbackResolveNearDuplicate(
   group: CurationGroup,
-  candidatesForFallback: CurationCandidate[]
+  candidatesForFallback: CurationCandidate[],
+  keepCount = 1
 ): Promise<CurationDecision[]> {
-  const bestLocalIdx = await selectBestByQuality(candidatesForFallback);
-  const bestMediaId = candidatesForFallback[bestLocalIdx].mediaId;
+  // Pick the top `keepCount` candidates by quality. Reuse preselectTopCandidates
+  // so tie-breaking and ordering match the rest of the pipeline.
+  const { selected } = await preselectTopCandidates(
+    candidatesForFallback,
+    Math.max(1, Math.min(keepCount, candidatesForFallback.length))
+  );
+  const keepIds = new Set(selected.map((c) => c.mediaId));
 
-  return group.candidates.map((c) => ({
-    mediaId: c.mediaId,
-    decision: c.mediaId === bestMediaId ? 'keep' : 'trash',
-    reason: c.mediaId === bestMediaId ? null : 'near_duplicate_worse',
-    groupId: group.groupId,
-    groupType: group.groupType,
-    similaritySource: group.similaritySource,
-    similarityScore: group.maxSimilarity,
-  }));
+  return group.candidates.map((c) =>
+    buildGroupDecision(
+      group,
+      c,
+      keepIds.has(c.mediaId) ? 'keep' : 'trash',
+      keepIds.has(c.mediaId) ? null : 'near_duplicate_worse'
+    )
+  );
 }
 
 /**
@@ -272,17 +310,8 @@ async function resolveNearDuplicateGroupWithVLM(
   // Photos dropped during pre-selection are auto-trashed.
   const selectedSet = new Set(originalIndices);
   const dropDecisions: CurationDecision[] = group.candidates
-    .map((c, idx) => ({ c, idx }))
-    .filter(({ idx }) => !selectedSet.has(idx))
-    .map(({ c }) => ({
-      mediaId: c.mediaId,
-      decision: 'trash' as const,
-      reason: 'near_duplicate_worse' as TrashReason,
-      groupId: group.groupId,
-      groupType: group.groupType,
-      similaritySource: group.similaritySource,
-      similarityScore: group.maxSimilarity,
-    }));
+    .filter((_, idx) => !selectedSet.has(idx))
+    .map((c) => buildGroupDecision(group, c, 'trash', 'near_duplicate_worse'));
 
   // 2. Ask the VLM about the surviving candidates.
   const keepQuota = getKeepQuota(group.candidates.length);
@@ -302,26 +331,10 @@ async function resolveNearDuplicateGroupWithVLM(
 
     vlmDecisions = selected.map((c, localIdx) => {
       if (keepLocal.has(localIdx)) {
-        return {
-          mediaId: c.mediaId,
-          decision: 'keep' as const,
-          reason: null,
-          groupId: group.groupId,
-          groupType: group.groupType,
-          similaritySource: group.similaritySource,
-          similarityScore: group.maxSimilarity,
-        };
+        return buildGroupDecision(group, c, 'keep', null);
       }
       const reason = trashReasonByLocalIdx.get(localIdx) ?? 'near_duplicate_worse';
-      return {
-        mediaId: c.mediaId,
-        decision: 'trash' as const,
-        reason,
-        groupId: group.groupId,
-        groupType: group.groupType,
-        similaritySource: group.similaritySource,
-        similarityScore: group.maxSimilarity,
-      };
+      return buildGroupDecision(group, c, 'trash', reason);
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -332,18 +345,14 @@ async function resolveNearDuplicateGroupWithVLM(
     fallbackUsed = true;
 
     // Fallback only operates on the pre-selected survivors; the dropped
-    // candidates are already trashed via dropDecisions.
-    const fallbackBestLocal = await selectBestByQuality(selected);
-    const bestMediaId = selected[fallbackBestLocal].mediaId;
-    vlmDecisions = selected.map((c) => ({
-      mediaId: c.mediaId,
-      decision: c.mediaId === bestMediaId ? 'keep' : 'trash',
-      reason: c.mediaId === bestMediaId ? null : 'near_duplicate_worse',
-      groupId: group.groupId,
-      groupType: group.groupType,
-      similaritySource: group.similaritySource,
-      similarityScore: group.maxSimilarity,
-    }));
+    // candidates are already trashed via dropDecisions. Honour keepQuota.min
+    // so 9+ photo groups still keep 2 survivors rather than collapsing to 1.
+    const fallbackDecisions = await fallbackResolveNearDuplicate(
+      { ...group, candidates: selected },
+      selected,
+      keepQuota.min
+    );
+    vlmDecisions = fallbackDecisions;
   }
 
   return {
@@ -454,7 +463,12 @@ export async function runSmartCuration(
   // batch VLM calls at VLM_CONCURRENCY.
   if (!vlmEnabled) {
     for (const g of nearGroups) {
-      const fallbackDecisions = await fallbackResolveNearDuplicate(g, g.candidates);
+      const quota = getKeepQuota(g.candidates.length);
+      const fallbackDecisions = await fallbackResolveNearDuplicate(
+        g,
+        g.candidates,
+        quota.min
+      );
       decisions.push(...fallbackDecisions);
       processedGroups++;
       onProgress('smartCuration', 'progress', `${processedGroups}/${totalGroups} groups`);
@@ -473,13 +487,15 @@ export async function runSmartCuration(
         if (result.value.fallbackUsed) fallbacksUsed++;
       } else {
         // Whole-group resolution rejected (e.g. download failed for all candidates).
-        // Final fallback: quality scoring across the full group.
+        // Final fallback: quality scoring across the full group, honouring the
+        // tier's keep quota.
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
         console.warn(
           `[smartCuration] Group ${g.groupId} resolution rejected, applying quality fallback: ${reason}`
         );
         try {
-          const fb = await fallbackResolveNearDuplicate(g, g.candidates);
+          const quota = getKeepQuota(g.candidates.length);
+          const fb = await fallbackResolveNearDuplicate(g, g.candidates, quota.min);
           decisions.push(...fb);
           fallbacksUsed++;
         } catch (innerErr) {
@@ -489,15 +505,7 @@ export async function runSmartCuration(
             `[smartCuration] Group ${g.groupId} quality fallback also failed; keeping all candidates: ${innerErr}`
           );
           for (const c of g.candidates) {
-            decisions.push({
-              mediaId: c.mediaId,
-              decision: 'keep',
-              reason: null,
-              groupId: g.groupId,
-              groupType: g.groupType,
-              similaritySource: g.similaritySource,
-              similarityScore: g.maxSimilarity,
-            });
+            decisions.push(buildGroupDecision(g, c, 'keep', null));
           }
         }
       }

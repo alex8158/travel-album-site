@@ -256,13 +256,84 @@ export function parseVLMResponse(
 // DashScope client (qwen-vl-max via OpenAI-compatible endpoint)
 // ---------------------------------------------------------------------------
 
-function createCurationClient(): OpenAI {
+/**
+ * Default request timeout. Overridable via `SMART_CURATION_VLM_TIMEOUT_MS`.
+ * 60s tolerates the occasional slow multi-image inference seen on busy
+ * DashScope endpoints — earlier 30s default produced sporadic timeouts on
+ * groups of 3-5 images.
+ */
+const DEFAULT_VLM_TIMEOUT_MS = 60_000;
+
+/**
+ * Maximum number of in-flight image download/resize operations within a
+ * single VLM call. Each VLM call sees at most VLM_MAX_CANDIDATES (5), so a
+ * concurrency of 5 fully parallelizes the per-call I/O.
+ */
+const PER_CALL_IMAGE_CONCURRENCY = 5;
+
+let cachedClient: OpenAI | null = null;
+
+function readVlmTimeoutMs(): number {
+  const raw = process.env.SMART_CURATION_VLM_TIMEOUT_MS;
+  if (!raw) return DEFAULT_VLM_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[vlmSelector] SMART_CURATION_VLM_TIMEOUT_MS="${raw}" is invalid; ` +
+      `using default ${DEFAULT_VLM_TIMEOUT_MS}ms`
+    );
+    return DEFAULT_VLM_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+/**
+ * Lazily create and cache a single OpenAI-compatible client for DashScope.
+ * Reusing one client across VLM calls avoids the per-call setup cost (TLS
+ * handshake reuse via the underlying agent) and keeps construction off the
+ * hot path.
+ */
+function getCurationClient(): OpenAI {
+  if (cachedClient) return cachedClient;
+
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY environment variable is required');
 
   const baseURL = process.env.DASHSCOPE_BASE_URL ||
     'https://dashscope.aliyuncs.com/compatible-mode/v1';
-  return new OpenAI({ apiKey, baseURL, timeout: 30000 });
+
+  cachedClient = new OpenAI({
+    apiKey,
+    baseURL,
+    timeout: readVlmTimeoutMs(),
+  });
+  return cachedClient;
+}
+
+/**
+ * Run an async mapper over `items` with at most `concurrency` in-flight calls.
+ * Order is preserved: `results[i]` corresponds to `items[i]`. Used to
+ * parallelize the per-candidate download+resize within a single VLM call.
+ */
+async function mapInParallel<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,24 +368,30 @@ export async function selectBestByVLM(
   }
 
   const storageProvider = getStorageProvider();
-  const client = createCurationClient();
+  const client = getCurationClient();
   const model = process.env.DASHSCOPE_MODEL || 'qwen-vl-max';
 
-  // 1 + 2: download & resize each candidate
-  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    const localPath = await storageProvider.downloadToTemp(c.filePath);
-    const base64 = await resizeForAnalysis(localPath);
-    content.push({
-      type: 'image_url',
-      image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
-    });
-  }
+  // 1 + 2: download & resize each candidate in parallel (capped concurrency).
+  const imageParts = await mapInParallel(
+    candidates,
+    PER_CALL_IMAGE_CONCURRENCY,
+    async (c) => {
+      const localPath = await storageProvider.downloadToTemp(c.filePath);
+      const base64 = await resizeForAnalysis(localPath);
+      const part: OpenAI.Chat.Completions.ChatCompletionContentPart = {
+        type: 'image_url',
+        image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
+      };
+      return part;
+    }
+  );
 
-  // 3: append the prompt
+  // 3: append the prompt so candidate ordering matches the prompt's index space.
   const prompt = buildCurationPrompt(candidates.length, keepQuota);
-  content.push({ type: 'text', text: prompt });
+  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+    ...imageParts,
+    { type: 'text', text: prompt },
+  ];
 
   // 4: call the VLM
   const response = await client.chat.completions.create({

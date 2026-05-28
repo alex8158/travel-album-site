@@ -137,9 +137,46 @@ interface DownloadedCandidate {
   localPath: string | null;
 }
 
+/** Maximum number of concurrent storage downloads / hash computations. */
+const IO_CONCURRENCY = 8;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Run an async mapper over `items` with at most `concurrency` in-flight calls.
+ * Order is preserved: `results[i]` is the value (or rejection) produced for
+ * `items[i]`. Errors are returned as rejected `PromiseSettledResult`s rather
+ * than thrown, keeping the helper compatible with best-effort batches.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  let next = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      try {
+        const value = await fn(items[idx], idx);
+        results[idx] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[idx] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  for (let i = 0; i < workerCount; i++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
 
 /**
  * Generate a stable, run-local group id. Group ids are not persisted so a
@@ -162,7 +199,8 @@ function hammingToSimilarity(hamming: number): number {
 /**
  * Download every candidate's file to a local temp path, returning a parallel
  * array. Failures are tolerated — the corresponding entry's `localPath` is
- * `null` and the candidate effectively becomes ungrouped.
+ * `null` and the candidate effectively becomes ungrouped. Downloads run with
+ * a bounded concurrency to avoid hammering the storage backend.
  *
  * The caller is responsible for cleaning up the returned temp paths via
  * `cleanupDownloads`.
@@ -171,22 +209,23 @@ async function downloadCandidates(
   candidates: CurationCandidate[]
 ): Promise<DownloadedCandidate[]> {
   const provider = getStorageProvider();
-  const results: DownloadedCandidate[] = [];
 
-  for (let i = 0; i < candidates.length; i++) {
-    const candidate = candidates[i];
-    try {
-      const localPath = await provider.downloadToTemp(candidate.filePath);
-      results.push({ index: i, candidate, localPath });
-    } catch (err) {
-      console.warn(
-        `[similarityGrouper] download failed for ${candidate.mediaId}: ${err}`
-      );
-      results.push({ index: i, candidate, localPath: null });
+  const settled = await mapWithConcurrency(
+    candidates,
+    IO_CONCURRENCY,
+    (candidate) => provider.downloadToTemp(candidate.filePath)
+  );
+
+  return candidates.map((candidate, i) => {
+    const result = settled[i];
+    if (result.status === 'fulfilled') {
+      return { index: i, candidate, localPath: result.value };
     }
-  }
-
-  return results;
+    console.warn(
+      `[similarityGrouper] download failed for ${candidate.mediaId}: ${result.reason}`
+    );
+    return { index: i, candidate, localPath: null };
+  });
 }
 
 /**
@@ -213,6 +252,9 @@ function cleanupDownloads(
  * Compute pHash and dHash for every candidate that successfully downloaded.
  * Returns parallel arrays aligned with the original `candidates` ordering;
  * entries that could not be hashed (or could not be downloaded) are `null`.
+ *
+ * Hash computations run with bounded concurrency for I/O parallelism without
+ * overwhelming the system on large trips.
  */
 async function computeHashes(
   downloads: DownloadedCandidate[]
@@ -221,12 +263,15 @@ async function computeHashes(
   const pHashes: (string | null)[] = new Array(n).fill(null);
   const dHashes: (string | null)[] = new Array(n).fill(null);
 
-  for (const d of downloads) {
-    if (!d.localPath) continue;
+  // Only hash the entries that actually downloaded successfully. Indices in
+  // the result arrays still match the original `downloads`/candidate ordering.
+  const hashable = downloads.filter((d) => d.localPath !== null);
+
+  await mapWithConcurrency(hashable, IO_CONCURRENCY, async (d) => {
     try {
       const [p, dh] = await Promise.all([
-        computePHash(d.localPath),
-        computeHash(d.localPath),
+        computePHash(d.localPath as string),
+        computeHash(d.localPath as string),
       ]);
       pHashes[d.index] = p;
       dHashes[d.index] = dh;
@@ -235,7 +280,7 @@ async function computeHashes(
         `[similarityGrouper] hash compute failed for ${d.candidate.mediaId}: ${err}`
       );
     }
-  }
+  });
 
   return { pHashes, dHashes };
 }
