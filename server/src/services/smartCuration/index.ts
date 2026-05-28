@@ -25,3 +25,9 @@ export {
   type DebugReportGroupSummary,
   type DebugReportGroupInput,
 } from './debugReportWriter';
+
+export {
+  runAIReview,
+  type AIReviewResult,
+  type AIReviewOptions,
+} from './aiReview';

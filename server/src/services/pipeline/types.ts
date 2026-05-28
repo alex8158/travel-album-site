@@ -91,6 +91,7 @@ export type PipelineStage =
   | 'dedup'
   | 'aiScreening'
   | 'smartCuration'
+  | 'aiReview'
   | 'reduce'
   | 'write'
   | 'analyze'

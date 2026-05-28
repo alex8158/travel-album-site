@@ -2,15 +2,22 @@
 
 ## Introduction
 
-Smart Curation replaces the existing `aiScreening` pipeline stage with an intelligent photo selection engine. Rather than simply detecting duplicates, the system groups similar photos using embedding-based similarity and then uses a Vision Language Model (VLM) to select the best photo(s) from each group — optimized for travel slideshow video output. The system targets underwater/diving photography where blue-tinted, low-contrast images are common.
+Smart Curation replaces the existing `aiScreening` pipeline stage with an intelligent photo selection engine. It runs in **two phases**:
+
+- **Phase 1 — Similarity-grouped curation** (`smartCuration` stage): groups visually similar photos with embedding/hash signals, then keeps the best representative(s) per group using technical quality scoring (exact duplicates) or VLM evaluation (near-duplicates).
+- **Phase 2 — AI final review** (`aiReview` stage): asks the VLM to make an independent keep/trash judgement on **every still-active photo** after Phase 1, catching blurry / cut-off / low-value shots that survived because they were ungrouped or won their group on technical scoring alone.
+
+The system targets underwater/diving photography where blue-tinted, low-contrast images are common.
 
 ## Glossary
 
-- **Smart_Curation_Engine**: The server-side service that orchestrates similarity grouping and VLM-based photo selection within the trip processing pipeline
+- **Smart_Curation_Engine**: The Phase 1 service (`runSmartCuration`) that orchestrates similarity grouping and VLM-based selection within similarity groups.
+- **AI_Review_Engine**: The Phase 2 service (`runAIReview`) that runs a per-photo VLM judgement over every still-active photo after Phase 1.
 - **Similarity_Grouper**: The component that computes DINOv2/CLIP embeddings and groups photos by cosine similarity using tiered thresholds
-- **VLM_Selector**: The component that calls the Vision Language Model (DashScope qwen-vl-max) to evaluate grouped candidates and select the best photo(s) to keep
-- **Curation_Group**: A set of photos determined to be visually similar, classified as either `exact_duplicate` (similarity >= 0.94) or `near_duplicate_candidate` (0.86 <= similarity < 0.94)
-- **Curation_Decision**: The keep/trash verdict for each photo in a group, including the specific trash reason
+- **VLM_Selector**: The Phase 1 component that calls the Vision Language Model (DashScope qwen-vl-max) to evaluate grouped candidates and select the best photo(s) to keep
+- **AI_Reviewer**: The Phase 2 component that calls the same VLM to evaluate individual photos in fixed-size batches and make per-photo keep/trash decisions
+- **Curation_Group**: A set of photos determined to be visually similar, classified as either `exact_duplicate` (similarity >= EXACT threshold) or `near_duplicate_candidate` (NEAR threshold ≤ similarity < EXACT threshold)
+- **Curation_Decision**: The keep/trash verdict for each photo, including the specific trash reason
 - **Trash_Reason**: A machine-readable enum value explaining why a photo was trashed (e.g., `exact_duplicate`, `near_duplicate_worse`, `scene_redundant`, `blurry`, `low_subject_quality`, `low_aesthetic_quality`, `low_video_value`)
 - **Debug_Report**: A JSON file containing per-photo curation metadata for inspection and debugging
 - **Pipeline**: The `runTripProcessingPipeline` orchestrator that executes all processing stages in sequence
@@ -123,3 +130,34 @@ Smart Curation replaces the existing `aiScreening` pipeline stage with an intell
 1. THE VLM_Selector prompt SHALL explicitly mention that photos may be underwater/diving images with blue tint and low contrast, and that these characteristics are normal and not defects
 2. THE VLM_Selector SHALL evaluate underwater photos based on subject visibility and composition rather than penalizing color cast or reduced contrast
 3. WHEN comparing burst shots of the same marine subject from different angles, THE VLM_Selector SHALL select the photo where the subject is most complete and clearly visible
+
+
+### Requirement 10: AI Final Review (Phase 2)
+
+**User Story:** As a content creator, I want the VLM to look at every photo that survives Phase 1 and remove the ones that are obviously bad (blurry, cut-off, boring), so that the final album never contains a defective photo just because it had no similar peer to compete with.
+
+#### Acceptance Criteria
+
+1. WHEN the AI_Review_Engine runs after Phase 1 completes, THE AI_Review_Engine SHALL load every photo with `status = 'active'` for the trip and split them into fixed-size batches.
+2. THE AI_Review_Engine SHALL evaluate each batch independently with a single VLM call that judges each photo on its own merits (no group context, no cross-photo "best of" ranking).
+3. WHEN the AI_Reviewer determines a photo is severely blurry or out of focus, THE AI_Review_Engine SHALL trash it with reason `blurry`.
+4. WHEN the AI_Reviewer determines a photo's main subject is severely cut off, occluded, or has unrecoverable exposure, THE AI_Review_Engine SHALL trash it with reason `low_subject_quality`.
+5. WHEN the AI_Reviewer determines a photo's composition is broken or has no discernible subject, THE AI_Review_Engine SHALL trash it with reason `low_aesthetic_quality`.
+6. WHEN the AI_Reviewer determines a photo is technically acceptable but unsuitable filler for a slideshow, THE AI_Review_Engine SHALL trash it with reason `low_video_value`.
+7. WHEN none of the trash conditions apply, THE AI_Review_Engine SHALL keep the photo.
+8. THE AI_Review_Engine SHALL preserve the underwater-photo handling instruction in its prompt so blue-tinted dive shots are not penalized for color cast.
+9. IF a single batch's VLM call fails, throws, or returns an unparseable response, THEN THE AI_Review_Engine SHALL keep every photo in that failed batch (conservative fallback) and increment a `vlmCallsFailed` counter.
+10. IF `DASHSCOPE_API_KEY` is not configured, THEN THE AI_Review_Engine SHALL skip the entire Phase 2 stage without trashing any photos.
+11. THE AI_Review_Engine SHALL persist trash decisions by setting `media_items.status = 'trashed'` and `trashed_reason` only; the `file_path` value SHALL remain unchanged (Soft_Delete invariant).
+12. THE AI_Review_Engine SHALL write its own debug JSON report to `data/debug/ai-review-{tripId}-{timestamp}.json` with one entry per processed photo.
+13. THE AI_Review_Engine SHALL run VLM batches with a bounded concurrency limit (default 3) so processing remains parallel without exhausting the DashScope rate limit.
+14. THE Pipeline SHALL execute the AI_Review_Engine as a separate `aiReview` stage immediately after `smartCuration` and before `analyze`, with its own progress callbacks and stage-level error isolation.
+
+### Requirement 11: Similarity Threshold Calibration for Burst Shots
+
+**User Story:** As a system operator processing photos that include human subjects, I want burst shots of people (same scene, different pose / expression / closed eyes) to be evaluated by the VLM rather than collapsed by sharpness scoring, so that the kept photos reflect actual content quality and not just lens-resolved detail.
+
+#### Acceptance Criteria
+
+1. THE Similarity_Grouper SHALL use an `EXACT_DUPLICATE_THRESHOLD` default of 0.98 (raised from the original 0.94) so that DINOv2-similar burst shots in the 0.94–0.98 range are routed to the near-duplicate tier and evaluated by the VLM.
+2. THE Similarity_Grouper SHALL allow operators to override the threshold via the `SMART_CURATION_EXACT_THRESHOLD` environment variable for trips where a stricter or looser policy is desired.

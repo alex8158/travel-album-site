@@ -148,8 +148,9 @@ export function buildDebugReport(
  * path of the file that was written.
  *
  * - Creates `<server-root>/data/debug/` if it does not yet exist.
- * - Filename pattern: `smart-curation-{tripId}-{timestamp}.json` where
- *   timestamp is the current time in a filename-safe ISO form.
+ * - Filename pattern: `{prefix}-{tripId}-{timestamp}.json` where prefix
+ *   defaults to `smart-curation` (Phase 1). Phase 2 (`aiReview`) passes
+ *   `'ai-review'` so the two reports don't collide and are easy to tell apart.
  *
  * @param tripId - The trip the curation run was for.
  * @param decisions - One CurationDecision per processed photo.
@@ -157,13 +158,16 @@ export function buildDebugReport(
  *   `keptCount` for each group is derived internally from `decisions`.
  * @param filenameByMediaId - Optional map providing the original filename for
  *   each mediaId. When omitted (or for missing keys) the mediaId is used.
+ * @param filenamePrefix - Optional report-filename prefix; defaults to
+ *   `'smart-curation'`.
  * @returns The absolute filesystem path of the written report.
  */
 export async function writeDebugReport(
   tripId: string,
   decisions: CurationDecision[],
   groups: DebugReportGroupInput[],
-  filenameByMediaId?: Map<string, string>
+  filenameByMediaId?: Map<string, string>,
+  filenamePrefix = 'smart-curation'
 ): Promise<string> {
   const now = new Date();
   const report = buildDebugReport(tripId, decisions, groups, filenameByMediaId, now);
@@ -171,7 +175,7 @@ export async function writeDebugReport(
   const debugDir = getDebugDir();
   await fs.mkdir(debugDir, { recursive: true });
 
-  const filename = `smart-curation-${tripId}-${timestampForFilename(now)}.json`;
+  const filename = `${filenamePrefix}-${tripId}-${timestampForFilename(now)}.json`;
   const filePath = path.join(debugDir, filename);
 
   await fs.writeFile(filePath, JSON.stringify(report, null, 2), 'utf8');

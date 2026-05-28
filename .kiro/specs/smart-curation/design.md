@@ -581,3 +581,161 @@ Each property test is tagged with:
 - End-to-end pipeline run with test images verifying curation decisions are persisted to DB
 - VLM call concurrency never exceeds 3 (instrumented mock)
 - Progress callback receives smartCuration stage events
+
+
+---
+
+## Phase 2: AI Final Review (`aiReview` stage)
+
+The original Phase 1 design only invokes the VLM for similarity groups, which leaves two gaps:
+
+1. **Ungrouped photos bypass the VLM entirely.** A blurry shot with no similar peer in the trip survives Phase 1 unconditionally because the engine never sends it for visual evaluation.
+2. **Exact-duplicate groups bypass the VLM.** Burst shots of human subjects routinely sit at 0.94–0.97 cosine similarity, classifying them as `exact_duplicate` under the original 0.94 threshold. Phase 1 then collapses them to a single survivor by sharpness alone — closing eyes, awkward poses, and bad expressions can all "win" if they happen to be in focus.
+
+Phase 2 closes both gaps by adding a separate pipeline stage that runs **after** Phase 1 and asks the VLM for an independent per-photo verdict on every still-active photo.
+
+### Design Decisions
+
+1. **Separate stage, not a flag on Phase 1.** Keeping `aiReview` as its own pipeline stage gives the operator independent progress reporting, isolated error handling, and a separate debug report. It also lets us tune the prompt independently — Phase 1 picks the best of N similar photos; Phase 2 judges each photo on its own merits.
+2. **Conservative fallback by default.** Per explicit user requirement: a failed batch keeps every photo. The cost of leaving one uncurated photo in the album is much smaller than the cost of deleting a good photo we never actually looked at.
+3. **Same VLM, different prompt.** We reuse DashScope qwen-vl-max via the existing OpenAI-compatible client. The prompt is rewritten to emphasise **independent per-photo judgement** rather than within-batch ranking.
+4. **Phase 1 threshold raised 0.94 → 0.98.** Burst shots of humans now correctly land in the near-duplicate tier and get VLM evaluation. The previous 0.94 default is wrong for any trip that contains people.
+
+### Architecture
+
+```mermaid
+flowchart TD
+  subgraph Pipeline["runTripProcessingPipeline"]
+    G[write] --> H[smartCuration]
+    H --> R[aiReview]
+    R --> I[analyze]
+    I --> J[optimize]
+    J --> K[thumbnail]
+  end
+
+  subgraph AIReview["AI Review Engine (Phase 2)"]
+    R --> R1[Load active photos]
+    R1 --> R2[Partition into N-photo batches]
+    R2 --> R3[VLM call per batch concurrency 3]
+    R3 --> R4{Parseable response?}
+    R4 -->|yes| R5[Apply per-photo decisions]
+    R4 -->|no / error| R6[Keep ALL photos in batch]
+    R5 --> R7[Persist trash decisions]
+    R6 --> R7
+    R7 --> R8[Write ai-review debug report]
+  end
+```
+
+### Components and Interfaces
+
+```typescript
+// server/src/services/smartCuration/aiReview.ts
+
+export interface AIReviewResult {
+  totalProcessed: number;
+  totalKept: number;
+  totalTrashed: number;
+  vlmCallsMade: number;     // batches with a parseable response
+  vlmCallsFailed: number;   // batches that fell back to "keep all"
+  debugReportPath: string;
+}
+
+export interface AIReviewOptions {
+  onProgress?: (
+    stage: string,
+    status: 'start' | 'progress' | 'complete',
+    detail?: string
+  ) => void;
+}
+
+/** Evaluates every active photo with the VLM and applies trash decisions. */
+export async function runAIReview(
+  tripId: string,
+  options?: AIReviewOptions
+): Promise<AIReviewResult>;
+
+/** Builds the per-photo independent-judgement prompt. */
+export function buildReviewPrompt(batchSize: number): string;
+
+/** Parses the structured per-photo response. Returns null on any failure. */
+export function parseReviewResponse(
+  responseText: string,
+  batchSize: number
+): Array<{ candidateIndex: number; decision: 'keep' | 'trash'; reason: TrashReason | null }> | null;
+```
+
+### Phase 2 Prompt Design
+
+The Phase 2 prompt is materially different from Phase 1's. Phase 1 says *"pick the best M of these N similar photos"*. Phase 2 says *"judge each photo independently — does it deserve a place in a slideshow?"*
+
+```text
+You are a professional travel photo curator preparing a slideshow video.
+
+You are shown N photos. **Judge each photo INDEPENDENTLY** — these are not a series, and they do NOT have to be ranked against each other. For each photo, decide whether it deserves a place in a polished travel slideshow.
+
+These may include underwater/diving photos with blue tint and low contrast — this is NORMAL for underwater photography and is NOT a defect. Do not trash a photo just for blue cast.
+
+TRASH the photo if any of these are clearly true:
+- The main subject is severely blurry / out of focus (camera shake or missed focus)
+- The main subject is severely over- or under-exposed so detail is lost
+- The composition is broken: subject heavily cut off, dominant occlusion, or no discernible subject
+- The image is uninteresting filler (empty water/sand/sky with nothing of note)
+
+KEEP the photo otherwise. When in doubt, KEEP. It is much worse to delete a good photo than to keep a mediocre one.
+
+Trash reasons (pick exactly one per trashed photo):
+- "blurry"               — out of focus / camera shake on the main subject
+- "low_subject_quality"  — subject heavily cut off, occluded, exposure ruined
+- "low_aesthetic_quality"— composition broken / distracting clutter / no clear subject
+- "low_video_value"      — technically OK but boring filler unsuitable for a slideshow
+
+RESPOND IN THIS EXACT JSON FORMAT:
+{
+  "results": [
+    {"index": 0, "decision": "keep"},
+    {"index": 1, "decision": "trash", "reason": "blurry"},
+    ...
+  ]
+}
+```
+
+### Phase 2 Configuration
+
+| Knob | Default | Env override |
+|---|---|---|
+| Batch size (photos per VLM call) | 5 | hard-coded |
+| Concurrent batches | 3 | hard-coded |
+| Per-call image download/resize concurrency | 5 | hard-coded |
+| VLM request timeout | 60 000 ms | `SMART_CURATION_VLM_TIMEOUT_MS` |
+| DashScope endpoint | `compatible-mode/v1` | `DASHSCOPE_BASE_URL` |
+| DashScope model | `qwen-vl-max` | `DASHSCOPE_MODEL` |
+
+### Phase 2 Error Handling (Conservative)
+
+| Scenario | Behaviour |
+|---|---|
+| `DASHSCOPE_API_KEY` missing | Skip Phase 2 entirely; every photo kept. Log warning. |
+| Single batch VLM call throws (timeout, 5xx, etc.) | Keep every photo in that batch. Increment `vlmCallsFailed`. |
+| Single batch returns unparseable / malformed JSON | Keep every photo in that batch. Increment `vlmCallsFailed`. |
+| Image download fails for one candidate | The whole batch fails (because the VLM call cannot include all images) → keep all. |
+| Whole-stage exception (e.g. DB unreachable) | Stage emits an error to `stageErrors`; pipeline continues with subsequent stages (analyze, optimize, etc.). |
+
+### Phase 2 Correctness Properties
+
+#### Property 11: Phase 2 Conservative Fallback
+
+*For any* batch whose VLM call throws, returns an unparseable response, or has any image fail to download, the AI_Review_Engine SHALL emit a `keep` decision for **every** photo in that batch and SHALL NOT emit any `trash` decision attributable to that batch.
+
+**Validates: Requirement 10.9**
+
+#### Property 12: Phase 2 Trash Reason Whitelist
+
+*For any* trash decision emitted by Phase 2, the `reason` field SHALL be one of: `blurry`, `low_subject_quality`, `low_aesthetic_quality`, `low_video_value`. Values outside this set SHALL cause the entire batch's response to be treated as unparseable (and trigger Property 11).
+
+**Validates: Requirements 10.3 – 10.7**
+
+#### Property 13: Phase 2 Soft Delete Invariant
+
+*For any* photo trashed by Phase 2, the system SHALL only modify `status` to `trashed` and set `trashed_reason`; `file_path` SHALL remain unchanged.
+
+**Validates: Requirement 10.11**

@@ -24,7 +24,7 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
 import { runAiRefinement } from '../aiImageOptimizer';
-import { runSmartCuration } from '../smartCuration';
+import { runSmartCuration, runAIReview } from '../smartCuration';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -587,6 +587,32 @@ export async function runTripProcessingPipeline(
       stageErrors.push({ stage: 'smartCuration', error: msg });
       console.error(`[pipeline] smartCuration FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('smartCuration', 'complete', `failed: ${msg}`);
+    }
+
+    // ---- Stage: aiReview (smart-curation Phase 2) ----
+    // Runs AFTER smartCuration. Per-photo VLM judgement on every still-active
+    // photo: catches blurry / cut-off / boring shots that survived Phase 1
+    // because they were ungrouped or won their group on sharpness alone.
+    // Conservative fallback: any failed batch keeps all its photos.
+    onProgress('aiReview', 'start');
+    t0 = Date.now();
+    try {
+      const reviewResult = await runAIReview(tripId, {
+        onProgress: (_stage, status, detail) => {
+          onProgress('aiReview', status, detail);
+        },
+      });
+      console.log(
+        `[pipeline] aiReview: ${reviewResult.totalTrashed} trashed from ` +
+        `${reviewResult.totalProcessed} images, ${reviewResult.vlmCallsMade} VLM calls, ` +
+        `${reviewResult.vlmCallsFailed} batch failures, ${Date.now() - t0}ms`
+      );
+      onProgress('aiReview', 'complete', `${reviewResult.totalTrashed} trashed`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'aiReview', error: msg });
+      console.error(`[pipeline] aiReview FAILED: ${msg} (${Date.now() - t0}ms)`);
+      onProgress('aiReview', 'complete', `failed: ${msg}`);
     }
 
     // ---- Compute stats from decisions ----

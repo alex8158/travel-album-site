@@ -4,7 +4,7 @@
  * Phase 1 of the Smart Curation engine. Groups CurationCandidates by visual
  * similarity using DINOv2 embeddings with tiered cosine-similarity thresholds:
  *
- *   - similarity >= EXACT_DUPLICATE_THRESHOLD (default 0.94)  → `exact_duplicate`
+ *   - similarity >= EXACT_DUPLICATE_THRESHOLD (default 0.98)  → `exact_duplicate`
  *   - similarity >= NEAR_DUPLICATE_THRESHOLD  (default 0.80)
  *     and < EXACT_DUPLICATE_THRESHOLD                          → `near_duplicate_candidate`
  *   - similarity below NEAR_DUPLICATE_THRESHOLD               → not grouped
@@ -84,11 +84,18 @@ function readThresholdEnv(name: string, defaultValue: number): number {
 
 /**
  * Pairs at or above this cosine similarity are treated as exact duplicates.
- * Override via SMART_CURATION_EXACT_THRESHOLD (default 0.94).
+ * Override via SMART_CURATION_EXACT_THRESHOLD (default 0.98).
+ *
+ * The default was raised from 0.94 → 0.98 after observing that DINOv2-small
+ * gives 0.94-0.97 for human burst shots that differ in pose/expression. At
+ * 0.94 those groups bypassed the VLM and lost most of their photos to
+ * sharpness-only ranking; at 0.98 only true pixel-near-identical duplicates
+ * skip the VLM, while burst shots correctly fall into the near-duplicate
+ * tier and get evaluated by the VLM.
  */
 export const EXACT_DUPLICATE_THRESHOLD = readThresholdEnv(
   'SMART_CURATION_EXACT_THRESHOLD',
-  0.94
+  0.98
 );
 
 /**
