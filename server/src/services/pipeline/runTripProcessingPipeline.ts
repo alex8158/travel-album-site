@@ -24,7 +24,7 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
 import { runAiRefinement } from '../aiImageOptimizer';
-import { runSmartCuration, runAIReview } from '../smartCuration';
+import { runSmartCuration, runAIReview, runAIFinalDedup } from '../smartCuration';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -613,6 +613,34 @@ export async function runTripProcessingPipeline(
       stageErrors.push({ stage: 'aiReview', error: msg });
       console.error(`[pipeline] aiReview FAILED: ${msg} (${Date.now() - t0}ms)`);
       onProgress('aiReview', 'complete', `failed: ${msg}`);
+    }
+
+    // ---- Stage: aiFinalDedup (smart-curation Phase 3) ----
+    // Runs AFTER aiReview. Cross-photo redundancy pass: VLM looks at batches
+    // of N already-good photos and trashes near-duplicates that Phase 1's
+    // similarity grouping missed (e.g. burst shots of the same subject that
+    // landed in different DINOv2 groups). Conservative fallback: any failed
+    // batch keeps all its photos. Only emits `scene_redundant` /
+    // `near_duplicate_worse`.
+    onProgress('aiFinalDedup', 'start');
+    t0 = Date.now();
+    try {
+      const dedupResult = await runAIFinalDedup(tripId, {
+        onProgress: (_stage, status, detail) => {
+          onProgress('aiFinalDedup', status, detail);
+        },
+      });
+      console.log(
+        `[pipeline] aiFinalDedup: ${dedupResult.totalTrashed} trashed from ` +
+        `${dedupResult.totalProcessed} images, ${dedupResult.vlmCallsMade} VLM calls, ` +
+        `${dedupResult.vlmCallsFailed} batch failures, ${Date.now() - t0}ms`
+      );
+      onProgress('aiFinalDedup', 'complete', `${dedupResult.totalTrashed} trashed`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'aiFinalDedup', error: msg });
+      console.error(`[pipeline] aiFinalDedup FAILED: ${msg} (${Date.now() - t0}ms)`);
+      onProgress('aiFinalDedup', 'complete', `failed: ${msg}`);
     }
 
     // ---- Compute stats from decisions ----

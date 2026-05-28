@@ -739,3 +739,106 @@ RESPOND IN THIS EXACT JSON FORMAT:
 *For any* photo trashed by Phase 2, the system SHALL only modify `status` to `trashed` and set `trashed_reason`; `file_path` SHALL remain unchanged.
 
 **Validates: Requirement 10.11**
+
+
+---
+
+## Phase 3: AI Cross-Photo Dedup (`aiFinalDedup` stage)
+
+Phase 2 evaluates each photo independently and is blind to relationships between photos. After Phase 2 the trip can still contain near-duplicate pairs (same subject, same framing) that DINOv2 rated at 0.75–0.82 — below our 0.80 grouping threshold or just below depending on calibration — and so were never compared by either Phase 1 or Phase 2. Phase 3 closes this gap.
+
+### Design Decisions
+
+1. **Reuse Phase 2's architecture.** The stage shape (load active candidates → batch → concurrent VLM calls → conservative fallback per batch → debug report) is identical to Phase 2. Only the prompt, the trash-reason whitelist, and the batch size differ.
+2. **Order by `created_at`.** Burst shots are temporally adjacent in camera output, so ordering by `created_at` (≈ filename) puts the photos most likely to be redundant in the same batch.
+3. **Larger batch (default 8).** Phase 2 needs only individual judgement, so 5 photos is enough. Phase 3 needs cross-photo comparison; 8 photos balances coverage against token usage and VLM attention drift.
+4. **Conservative prompt.** "When in doubt, KEEP" is repeated explicitly. Phase 1 and Phase 2 already trimmed aggressively, so Phase 3's job is to catch the last few obvious dupes, not to be aggressive.
+5. **Restricted reason whitelist.** Only `scene_redundant` (and `near_duplicate_worse` as a tolerated synonym) are accepted. Quality-based reasons (`blurry`, `low_*`) belong to Phase 2 and would be a sign the prompt was misunderstood.
+6. **Cross-batch redundancy is an accepted limitation.** Full pairwise comparison would cost O(N²) VLM calls. The temporal-adjacency batching captures the dominant case at O(N/batchSize) cost.
+
+### Architecture
+
+```mermaid
+flowchart TD
+  subgraph Pipeline["runTripProcessingPipeline"]
+    R[aiReview] --> D[aiFinalDedup]
+    D --> I[analyze]
+    I --> J[optimize]
+  end
+
+  subgraph FinalDedup["AI Final Dedup (Phase 3)"]
+    D --> D1[Load active photos ordered by created_at]
+    D1 --> D2[Partition into 8-photo batches]
+    D2 --> D3[VLM call per batch concurrency 3]
+    D3 --> D4{Parseable response?}
+    D4 -->|yes| D5[Apply per-photo decisions<br/>only scene_redundant accepted]
+    D4 -->|no / error| D6[Keep ALL photos in batch]
+    D5 --> D7[Persist trash decisions]
+    D6 --> D7
+    D7 --> D8[Write ai-final-dedup debug report]
+  end
+```
+
+### Components and Interfaces
+
+```typescript
+// server/src/services/smartCuration/aiFinalDedup.ts
+
+export interface AIFinalDedupResult {
+  totalProcessed: number;
+  totalKept: number;
+  totalTrashed: number;
+  vlmCallsMade: number;     // batches with 2+ photos that returned a parseable response
+  vlmCallsFailed: number;   // batches that fell back to "keep all"
+  debugReportPath: string;
+}
+
+export interface AIFinalDedupOptions {
+  onProgress?: (
+    stage: string,
+    status: 'start' | 'progress' | 'complete',
+    detail?: string
+  ) => void;
+}
+
+export async function runAIFinalDedup(
+  tripId: string,
+  options?: AIFinalDedupOptions
+): Promise<AIFinalDedupResult>;
+
+export function buildDedupPrompt(batchSize: number): string;
+
+export function parseDedupResponse(
+  responseText: string,
+  batchSize: number
+): Array<{ candidateIndex: number; decision: 'keep' | 'trash'; reason: TrashReason | null }> | null;
+```
+
+### Phase 3 Configuration
+
+| Knob | Default | Env override |
+|---|---|---|
+| Photos per VLM call | 8 | `SMART_CURATION_DEDUP_BATCH_SIZE` (range 2..12) |
+| Concurrent batches | 3 | hard-coded |
+| Per-call image download/resize concurrency | 5 | hard-coded |
+| VLM request timeout | 60 000 ms | `SMART_CURATION_VLM_TIMEOUT_MS` (shared with Phase 2) |
+
+### Phase 3 Correctness Properties
+
+#### Property 14: Phase 3 Conservative Fallback
+
+*For any* batch whose VLM call throws, returns an unparseable response, or has any image fail to download, the AI Final Dedup stage SHALL emit a `keep` decision for **every** photo in that batch and SHALL NOT emit any `trash` decision attributable to that batch.
+
+**Validates: Requirement 12.9**
+
+#### Property 15: Phase 3 Trash Reason Whitelist
+
+*For any* trash decision emitted by Phase 3, the `reason` field SHALL be `scene_redundant` or `near_duplicate_worse`. Any other reason value in the VLM response SHALL cause the entire batch's response to be treated as unparseable.
+
+**Validates: Requirement 12.3**
+
+#### Property 16: Phase 3 Singleton Bypass
+
+*For any* trip with exactly one active photo at Phase 3 entry, the stage SHALL NOT make a VLM call and SHALL keep that photo, returning `vlmCallsMade: 0`.
+
+**Validates: Requirement 12.8**

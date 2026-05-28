@@ -31,3 +31,9 @@ export {
   type AIReviewResult,
   type AIReviewOptions,
 } from './aiReview';
+
+export {
+  runAIFinalDedup,
+  type AIFinalDedupResult,
+  type AIFinalDedupOptions,
+} from './aiFinalDedup';

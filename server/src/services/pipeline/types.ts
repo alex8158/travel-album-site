@@ -92,6 +92,7 @@ export type PipelineStage =
   | 'aiScreening'
   | 'smartCuration'
   | 'aiReview'
+  | 'aiFinalDedup'
   | 'reduce'
   | 'write'
   | 'analyze'

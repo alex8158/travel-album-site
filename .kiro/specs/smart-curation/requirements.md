@@ -2,10 +2,11 @@
 
 ## Introduction
 
-Smart Curation replaces the existing `aiScreening` pipeline stage with an intelligent photo selection engine. It runs in **two phases**:
+Smart Curation replaces the existing `aiScreening` pipeline stage with an intelligent photo selection engine. It runs in **three phases**:
 
 - **Phase 1 — Similarity-grouped curation** (`smartCuration` stage): groups visually similar photos with embedding/hash signals, then keeps the best representative(s) per group using technical quality scoring (exact duplicates) or VLM evaluation (near-duplicates).
-- **Phase 2 — AI final review** (`aiReview` stage): asks the VLM to make an independent keep/trash judgement on **every still-active photo** after Phase 1, catching blurry / cut-off / low-value shots that survived because they were ungrouped or won their group on technical scoring alone.
+- **Phase 2 — AI per-photo review** (`aiReview` stage): asks the VLM to make an independent keep/trash judgement on **every still-active photo** after Phase 1, catching blurry / cut-off / low-value shots that survived because they were ungrouped or won their group on technical scoring alone.
+- **Phase 3 — AI cross-photo dedup** (`aiFinalDedup` stage): asks the VLM to compare batches of N already-good photos and remove redundant ones (same subject, same framing) that DINOv2 missed because their cosine similarity fell below the grouping threshold.
 
 The system targets underwater/diving photography where blue-tinted, low-contrast images are common.
 
@@ -161,3 +162,30 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 
 1. THE Similarity_Grouper SHALL use an `EXACT_DUPLICATE_THRESHOLD` default of 0.98 (raised from the original 0.94) so that DINOv2-similar burst shots in the 0.94–0.98 range are routed to the near-duplicate tier and evaluated by the VLM.
 2. THE Similarity_Grouper SHALL allow operators to override the threshold via the `SMART_CURATION_EXACT_THRESHOLD` environment variable for trips where a stricter or looser policy is desired.
+
+
+### Requirement 12: AI Cross-Photo Dedup (Phase 3)
+
+**User Story:** As a content creator, I want the VLM to spot near-duplicate photos that the cosine-similarity grouper missed (subject and framing nearly identical but DINOv2 rated them just below the grouping threshold), so that the final album does not contain two photos of the same shot.
+
+#### Acceptance Criteria
+
+1. WHEN the AI Cross-Photo Dedup stage runs after Phase 2, THE stage SHALL load every photo with `status = 'active'` for the trip and split them into fixed-size batches ordered by `created_at` ascending so temporally adjacent photos are evaluated together.
+2. THE stage SHALL evaluate each batch with one VLM call that decides, for every photo in that batch, whether it is redundant with another photo in the same batch.
+3. THE stage SHALL emit `scene_redundant` (or `near_duplicate_worse` if the VLM uses that synonym) as the only acceptable trash reason; any other reason value SHALL cause the batch's response to be treated as unparseable.
+4. WHEN the VLM determines two or more photos in a batch are redundant, THE stage SHALL keep one (the model's pick) and trash the rest with reason `scene_redundant`.
+5. WHEN the VLM determines no photos in a batch are redundant, THE stage SHALL keep all photos in the batch.
+6. THE stage prompt SHALL explicitly instruct the model to be conservative ("when in doubt, keep") because Phase 1 and Phase 2 already filtered aggressively.
+7. THE stage prompt SHALL preserve the underwater-photo handling instruction so blue-tinted dive shots are not penalized for color cast.
+8. IF a batch contains fewer than 2 photos, THE stage SHALL skip the VLM call and keep that single photo without consuming a VLM quota slot.
+9. IF a batch's VLM call fails, throws, or returns an unparseable response, THEN THE stage SHALL keep every photo in that batch (conservative fallback) and increment a `vlmCallsFailed` counter.
+10. IF `DASHSCOPE_API_KEY` is not configured, THEN THE stage SHALL skip Phase 3 entirely without trashing any photos.
+11. THE stage SHALL persist trash decisions by setting `media_items.status = 'trashed'` and `trashed_reason` only; the `file_path` value SHALL remain unchanged (Soft_Delete invariant).
+12. THE stage SHALL write its own debug JSON report to `data/debug/ai-final-dedup-{tripId}-{timestamp}.json`.
+13. THE stage SHALL run VLM batches with a bounded concurrency limit (default 3).
+14. THE Pipeline SHALL execute Phase 3 as a separate `aiFinalDedup` stage immediately after `aiReview` and before `analyze`, with its own progress callbacks and stage-level error isolation.
+15. THE batch size SHALL default to 8 photos per VLM call and be configurable via the `SMART_CURATION_DEDUP_BATCH_SIZE` environment variable, accepting integers in the range [2, 12].
+
+#### Acknowledged Limitation
+
+Photos in different batches are never compared against each other in Phase 3. Two near-duplicates that happen to fall on either side of a batch boundary will both survive. This is an explicit cost-vs-coverage trade-off: full pairwise comparison would scale O(N²) in VLM calls. Batching by `created_at` order captures the dominant case (temporally adjacent burst shots).
