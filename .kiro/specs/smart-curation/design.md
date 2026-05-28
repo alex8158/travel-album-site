@@ -818,7 +818,7 @@ export function parseDedupResponse(
 
 | Knob | Default | Env override |
 |---|---|---|
-| Photos per VLM call | 8 | `SMART_CURATION_DEDUP_BATCH_SIZE` (range 2..12) |
+| Photos per VLM call | 12 | `SMART_CURATION_DEDUP_BATCH_SIZE` (range 2..12) |
 | Concurrent batches | 3 | hard-coded |
 | Per-call image download/resize concurrency | 5 | hard-coded |
 | VLM request timeout | 60 000 ms | `SMART_CURATION_VLM_TIMEOUT_MS` (shared with Phase 2) |

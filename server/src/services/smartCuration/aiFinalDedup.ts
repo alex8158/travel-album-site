@@ -87,7 +87,7 @@ const VALID_DEDUP_TRASH_REASONS: ReadonlySet<TrashReason> = new Set<TrashReason>
 // ---------------------------------------------------------------------------
 
 /** Photos per VLM call. Larger = more cross-photo coverage, more tokens. */
-const DEFAULT_BATCH_SIZE = 8;
+const DEFAULT_BATCH_SIZE = 12;
 
 /** Concurrent VLM calls. */
 const VLM_CONCURRENCY = 3;

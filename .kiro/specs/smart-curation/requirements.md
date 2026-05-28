@@ -184,7 +184,7 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 12. THE stage SHALL write its own debug JSON report to `data/debug/ai-final-dedup-{tripId}-{timestamp}.json`.
 13. THE stage SHALL run VLM batches with a bounded concurrency limit (default 3).
 14. THE Pipeline SHALL execute Phase 3 as a separate `aiFinalDedup` stage immediately after `aiReview` and before `analyze`, with its own progress callbacks and stage-level error isolation.
-15. THE batch size SHALL default to 8 photos per VLM call and be configurable via the `SMART_CURATION_DEDUP_BATCH_SIZE` environment variable, accepting integers in the range [2, 12].
+15. THE batch size SHALL default to 12 photos per VLM call and be configurable via the `SMART_CURATION_DEDUP_BATCH_SIZE` environment variable, accepting integers in the range [2, 12].
 
 #### Acknowledged Limitation
 
