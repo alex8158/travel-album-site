@@ -214,19 +214,15 @@ You are shown ${batchSize} photos. **Judge each photo INDEPENDENTLY** — these 
 
 These may include underwater/diving photos with blue tint and low contrast — this is NORMAL for underwater photography and is NOT a defect. Do not trash a photo just for blue cast.
 
-TRASH the photo if any of these are clearly true:
-- The main subject is severely blurry / out of focus (camera shake or missed focus)
-- The main subject is severely over- or under-exposed so detail is lost
-- The composition is broken: subject heavily cut off, dominant occlusion, or no discernible subject
-- The image is uninteresting filler (empty water/sand/sky with nothing of note)
+A slideshow video plays each photo on a large screen for 2-4 seconds. Viewers see every defect. Be honest about technical quality.
 
-KEEP the photo otherwise. When in doubt, KEEP. It is much worse to delete a good photo than to keep a mediocre one.
+TRASH the photo if ANY of these are true (you do not need certainty — visible problems on a TV-sized screen are enough):
+- "blurry": The main subject is NOT sharply in focus. Even partial softness on the subject is enough to trash. If you cannot clearly see the subject's edges, fine details (eyes, scales, texture), it is blurry. Do not be lenient — slideshows magnify softness.
+- "low_subject_quality": Subject is heavily cut off, blocked by other objects, awkwardly back-turned, or has unrecoverable exposure (blown highlights or crushed shadows on the subject).
+- "low_aesthetic_quality": Composition is broken: no clear subject, distracting clutter, very poor framing, dominant negative space without purpose.
+- "low_video_value": Technically OK but uninteresting filler (empty water/sand/sky/coral with no subject of note, generic environment shot).
 
-Trash reasons (pick exactly one per trashed photo):
-- "blurry"               — out of focus / camera shake on the main subject
-- "low_subject_quality"  — subject heavily cut off, occluded, exposure ruined
-- "low_aesthetic_quality"— composition broken / distracting clutter / no clear subject
-- "low_video_value"      — technically OK but boring filler unsuitable for a slideshow
+KEEP only photos that have a clear, sharply focused subject worth showing on a large screen. A photo where you find yourself thinking "the subject is recognizable but soft" is a TRASH, not a KEEP.
 
 RESPOND IN THIS EXACT JSON FORMAT (one entry per photo, ordered to match the input):
 {

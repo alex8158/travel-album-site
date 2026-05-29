@@ -250,16 +250,22 @@ You are shown ${batchSize} photos that have ALREADY passed quality screening (no
 
 These may include underwater/diving photos with blue tint and low contrast. Blue cast is NORMAL and is NEVER a reason to trash a photo.
 
+Your job is ACTIVE redundancy removal. A travel slideshow loses its punch when 2-3 nearly-identical shots play in sequence. **Be decisive about clear redundancy.**
+
 WHEN TO TRASH (reason: scene_redundant):
-- Two or more photos show the SAME subject in nearly the SAME pose, framing, and distance — they are redundant for a slideshow. Keep the most visually compelling one (cleanest composition, best moment, sharpest), trash the rest.
+- Two or more photos show the SAME subject (same fish, same coral cluster, same person, same scene) with very similar framing and distance.
+- Keep the ONE most visually compelling photo (cleanest composition, sharpest, best moment); trash all the others.
+- If you see 3 photos of the same subject, keep 1, trash 2. If you see 2 photos of the same subject, keep 1, trash 1.
 
 WHEN TO KEEP (do NOT trash):
-- Different subjects (different fish, different person, different scene) → ALWAYS KEEP both
-- Same subject but distinctly different angle / distance / framing → KEEP both (variety adds value)
-- Same scene but different subjects of interest in the frame → KEEP both
-- Any photo you are unsure about → KEEP
+- Different subjects (different fish species, different person, different scene) → ALWAYS KEEP both.
+- Same subject but with **clearly different** angle / distance / pose / framing that adds storytelling variety → keep both.
+- Same general environment but the photos focus on different subjects of interest → keep both.
 
-CRITICAL: Be conservative. The previous stages already filtered aggressively. The cost of leaving one extra photo is much smaller than the cost of deleting a unique shot. **When in doubt, keep.**
+CALIBRATION:
+- Out of ${batchSize} photos in a typical travel batch, expect to find 0-${Math.max(2, Math.floor(batchSize / 4))} redundant shots.
+- If you find yourself trashing more than half the batch, stop and reconsider — that is unusual.
+- If you find ZERO trashes when there are obvious near-duplicate pairs in front of you, you are being too lenient. Trust your judgement: if two photos look like the same shot, trash one.
 
 RESPOND IN THIS EXACT JSON FORMAT (one entry per photo, in input order):
 {
@@ -274,8 +280,7 @@ IMPORTANT:
 - Indices are 0-based.
 - Provide EXACTLY ${batchSize} entries, one per photo, in input order.
 - "decision" MUST be either "keep" or "trash".
-- "reason" is required when decision="trash" and MUST be "scene_redundant"; omit it for "keep".
-- Out of ${batchSize} photos, you should typically trash 0 — at most a small fraction. If you find yourself trashing many, you are being too aggressive.`;
+- "reason" is required when decision="trash" and MUST be "scene_redundant"; omit it for "keep".`;
 }
 
 // ---------------------------------------------------------------------------
