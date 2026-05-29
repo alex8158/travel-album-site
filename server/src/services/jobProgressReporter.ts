@@ -1,7 +1,10 @@
 import { getDb } from '../database';
 import type { PipelineStage, PipelineProgressCallback } from './pipeline/types';
 
-// Map PipelineStage to human-readable Chinese step names
+// Map PipelineStage to human-readable Chinese step names.
+// Every stage that the pipeline actually emits via onProgress() must appear
+// here — TOTAL_STEPS is derived from this map's size, so a missing entry
+// causes the front-end progress bar to overshoot 100% (e.g. step 15/12).
 const STEP_LABELS: Partial<Record<PipelineStage, string>> = {
   collectInputs: '收集图片',
   classify: '分类',
@@ -9,11 +12,17 @@ const STEP_LABELS: Partial<Record<PipelineStage, string>> = {
   dedup: '去重',
   reduce: '汇总决策',
   write: '写入数据库',
+  smartCuration: '相似筛选',
+  aiReview: 'AI 质量审查',
+  aiFinalDedup: 'AI 终筛去重',
   analyze: '分析',
   optimize: '优化',
+  aiRefinement: 'AI 精修',
   thumbnail: '生成缩略图',
   videoAnalysis: '视频分析',
+  autoCompile: '视频合并',
   videoEdit: '视频编辑',
+  videoEnhance: '视频增强',
   cover: '选择封面',
 };
 

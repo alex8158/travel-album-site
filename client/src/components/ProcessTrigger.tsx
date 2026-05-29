@@ -33,7 +33,10 @@ export default function ProcessTrigger({ tripId, autoStart, onProcessed }: Proce
   const [status, setStatus] = useState<ProgressStatus>('idle');
   const [currentStep, setCurrentStep] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
-  const [totalSteps] = useState(12);
+  // Total pipeline stages — kept in sync with server/src/services/jobProgressReporter.ts
+  // STEP_LABELS. Mismatch only affects display (server controls real percent),
+  // but a too-small value here causes the "step N/M" label to overshoot.
+  const [totalSteps] = useState(18);
   const [percent, setPercent] = useState(0);
   const [processed, setProcessed] = useState<number | null>(null);
   const [total, setTotal] = useState<number | null>(null);

@@ -36,12 +36,13 @@
 
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { createBedrockClient } from '../bedrockClient';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export type VLMProvider = 'anthropic' | 'dashscope';
+export type VLMProvider = 'anthropic' | 'dashscope' | 'bedrock';
 
 export interface VLMImage {
   /** Base-64 encoded image bytes (no data: prefix). */
@@ -80,6 +81,7 @@ const DEFAULT_MAX_TOKENS = 2048;
 
 const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-7';
 const DEFAULT_DASHSCOPE_MODEL = 'qwen-vl-max';
+const DEFAULT_BEDROCK_MODEL = 'anthropic.claude-sonnet-4-20250514';
 
 function readTimeoutMs(): number {
   const raw = process.env.SMART_CURATION_VLM_TIMEOUT_MS;
@@ -96,11 +98,11 @@ function readTimeoutMs(): number {
  */
 export function getActiveProvider(): VLMProvider {
   const raw = (process.env.SMART_CURATION_VLM_PROVIDER || '').trim().toLowerCase();
-  if (raw === 'anthropic' || raw === 'dashscope') return raw;
+  if (raw === 'anthropic' || raw === 'dashscope' || raw === 'bedrock') return raw;
   if (raw !== '') {
     console.warn(
       `[vlmClient] SMART_CURATION_VLM_PROVIDER="${raw}" is not recognised; ` +
-      `using 'dashscope'. Valid values: 'anthropic' | 'dashscope'.`
+      `using 'dashscope'. Valid values: 'anthropic' | 'dashscope' | 'bedrock'.`
     );
   }
   return 'dashscope';
@@ -119,6 +121,14 @@ export function isVLMAvailable(): boolean {
       return !!process.env.ANTHROPIC_API_KEY;
     case 'dashscope':
       return !!process.env.DASHSCOPE_API_KEY;
+    case 'bedrock':
+      // Bedrock accepts either a bearer token (AWS_BEARER_TOKEN_BEDROCK) or
+      // standard AWS access-key credentials. The SDK resolves these itself,
+      // so treat the provider as available if any of them is present.
+      return (
+        !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
+        !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+      );
   }
 }
 
@@ -136,6 +146,12 @@ export function getActiveModel(): string {
         process.env.SMART_CURATION_DASHSCOPE_MODEL ||
         process.env.DASHSCOPE_MODEL ||
         DEFAULT_DASHSCOPE_MODEL
+      );
+    case 'bedrock':
+      return (
+        process.env.SMART_CURATION_BEDROCK_MODEL ||
+        process.env.BEDROCK_MODEL_ID ||
+        DEFAULT_BEDROCK_MODEL
       );
   }
 }
@@ -267,6 +283,49 @@ async function callDashscope(req: VLMRequest): Promise<VLMResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// Bedrock (Claude / Nova via AWS Bedrock) — reuses the project's bedrockClient
+// ---------------------------------------------------------------------------
+
+// The bedrockClient picks its model from BEDROCK_MODEL_ID. To let smart-curation
+// use its own model independent of the rest of the app, we set BEDROCK_MODEL_ID
+// from SMART_CURATION_BEDROCK_MODEL (if provided) before constructing the client.
+let bedrockClientCache: ReturnType<typeof createBedrockClient> | null = null;
+
+function getBedrockClient(): ReturnType<typeof createBedrockClient> {
+  if (bedrockClientCache) return bedrockClientCache;
+
+  // If smart-curation specifies its own model, surface it to createBedrockClient
+  // via the env var it reads. We only override when explicitly set so we don't
+  // clobber a globally-configured BEDROCK_MODEL_ID unintentionally.
+  const scModel = process.env.SMART_CURATION_BEDROCK_MODEL;
+  if (scModel && !process.env.BEDROCK_MODEL_ID) {
+    process.env.BEDROCK_MODEL_ID = scModel;
+  }
+
+  bedrockClientCache = createBedrockClient();
+  return bedrockClientCache;
+}
+
+async function callBedrock(req: VLMRequest): Promise<VLMResponse> {
+  const client = getBedrockClient();
+  const text = await client.invokeModel({
+    images: req.images.map((img) => ({
+      base64: img.base64,
+      mediaType: img.mediaType || 'image/jpeg',
+    })),
+    prompt: req.prompt,
+    maxTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+  });
+
+  return {
+    text,
+    provider: 'bedrock',
+    model: getActiveModel(),
+    // The project's bedrockClient does not surface token usage; omit it.
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -286,6 +345,8 @@ export async function callVLM(req: VLMRequest): Promise<VLMResponse> {
       return callAnthropic(req);
     case 'dashscope':
       return callDashscope(req);
+    case 'bedrock':
+      return callBedrock(req);
   }
 }
 
@@ -296,4 +357,5 @@ export async function callVLM(req: VLMRequest): Promise<VLMResponse> {
 export function _resetVLMClientCacheForTests(): void {
   anthropicClient = null;
   dashscopeClient = null;
+  bedrockClientCache = null;
 }
