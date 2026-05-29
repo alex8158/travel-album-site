@@ -1,21 +1,19 @@
 /**
  * VLM Selector
  *
- * Calls DashScope qwen-vl-max (OpenAI-compatible) to select the best photo(s)
- * from a near-duplicate Curation_Group.
- *
- * Pattern mirrors `aiImageOptimizer.ts` and `aiImageScreener.ts`:
- *  - Resizes images to 768px via `resizeForAnalysis` from bedrockClient
- *  - Sends base64 thumbnails plus a structured prompt to qwen-vl-max
- *  - Parses the JSON response and validates structure / quotas / indices
+ * Calls the configured Vision Language Model (Anthropic Claude or DashScope
+ * qwen-vl-max) to select the best photo(s) from a near-duplicate
+ * Curation_Group. The provider is chosen at runtime by the unified
+ * `vlmClient` module — this file only owns the prompt, response parsing,
+ * and per-call image preparation.
  *
  * The caller (smartCurationEngine) is responsible for handling fallback when
  * `selectBestByVLM` throws or `parseVLMResponse` returns null.
  */
 
-import OpenAI from 'openai';
 import { getStorageProvider } from '../../storage/factory';
 import { resizeForAnalysis } from '../bedrockClient';
+import { callVLM, isVLMAvailable } from './vlmClient';
 import type { CurationCandidate, TrashReason } from './smartCurationEngine';
 
 // ---------------------------------------------------------------------------
@@ -253,16 +251,8 @@ export function parseVLMResponse(
 }
 
 // ---------------------------------------------------------------------------
-// DashScope client (qwen-vl-max via OpenAI-compatible endpoint)
+// Per-call helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Default request timeout. Overridable via `SMART_CURATION_VLM_TIMEOUT_MS`.
- * 60s tolerates the occasional slow multi-image inference seen on busy
- * DashScope endpoints — earlier 30s default produced sporadic timeouts on
- * groups of 3-5 images.
- */
-const DEFAULT_VLM_TIMEOUT_MS = 60_000;
 
 /**
  * Maximum number of in-flight image download/resize operations within a
@@ -270,45 +260,6 @@ const DEFAULT_VLM_TIMEOUT_MS = 60_000;
  * concurrency of 5 fully parallelizes the per-call I/O.
  */
 const PER_CALL_IMAGE_CONCURRENCY = 5;
-
-let cachedClient: OpenAI | null = null;
-
-function readVlmTimeoutMs(): number {
-  const raw = process.env.SMART_CURATION_VLM_TIMEOUT_MS;
-  if (!raw) return DEFAULT_VLM_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    console.warn(
-      `[vlmSelector] SMART_CURATION_VLM_TIMEOUT_MS="${raw}" is invalid; ` +
-      `using default ${DEFAULT_VLM_TIMEOUT_MS}ms`
-    );
-    return DEFAULT_VLM_TIMEOUT_MS;
-  }
-  return parsed;
-}
-
-/**
- * Lazily create and cache a single OpenAI-compatible client for DashScope.
- * Reusing one client across VLM calls avoids the per-call setup cost (TLS
- * handshake reuse via the underlying agent) and keeps construction off the
- * hot path.
- */
-function getCurationClient(): OpenAI {
-  if (cachedClient) return cachedClient;
-
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY environment variable is required');
-
-  const baseURL = process.env.DASHSCOPE_BASE_URL ||
-    'https://dashscope.aliyuncs.com/compatible-mode/v1';
-
-  cachedClient = new OpenAI({
-    apiKey,
-    baseURL,
-    timeout: readVlmTimeoutMs(),
-  });
-  return cachedClient;
-}
 
 /**
  * Run an async mapper over `items` with at most `concurrency` in-flight calls.
@@ -366,48 +317,32 @@ export async function selectBestByVLM(
   if (candidates.length === 0) {
     throw new Error('selectBestByVLM: no candidates provided');
   }
+  if (!isVLMAvailable()) {
+    throw new Error('selectBestByVLM: no VLM provider configured');
+  }
 
   const storageProvider = getStorageProvider();
-  const client = getCurationClient();
-  const model = process.env.DASHSCOPE_MODEL || 'qwen-vl-max';
 
-  // 1 + 2: download & resize each candidate in parallel (capped concurrency).
-  const imageParts = await mapInParallel(
+  // Download + resize each candidate in parallel.
+  const images = await mapInParallel(
     candidates,
     PER_CALL_IMAGE_CONCURRENCY,
     async (c) => {
       const localPath = await storageProvider.downloadToTemp(c.filePath);
       const base64 = await resizeForAnalysis(localPath);
-      const part: OpenAI.Chat.Completions.ChatCompletionContentPart = {
-        type: 'image_url',
-        image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
-      };
-      return part;
+      return { base64, mediaType: 'image/jpeg' as const };
     }
   );
 
-  // 3: append the prompt so candidate ordering matches the prompt's index space.
   const prompt = buildCurationPrompt(candidates.length, keepQuota);
-  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-    ...imageParts,
-    { type: 'text', text: prompt },
-  ];
 
-  // 4: call the VLM
-  const response = await client.chat.completions.create({
-    model,
-    max_tokens: 1024,
-    messages: [{ role: 'user', content }],
-  });
+  const response = await callVLM({ images, prompt, maxTokens: 1024 });
 
-  const responseText = response.choices[0]?.message?.content ?? '';
-
-  // 5: parse & validate
-  const parsed = parseVLMResponse(responseText, candidates.length, keepQuota);
+  const parsed = parseVLMResponse(response.text, candidates.length, keepQuota);
   if (!parsed) {
     throw new Error(
-      `selectBestByVLM: failed to parse VLM response (candidateCount=${candidates.length}, ` +
-      `keepQuota=${keepQuota.min}-${keepQuota.max}): ${responseText.slice(0, 200)}`
+      `selectBestByVLM: failed to parse VLM response (provider=${response.provider} model=${response.model} ` +
+      `candidateCount=${candidates.length} keepQuota=${keepQuota.min}-${keepQuota.max}): ${response.text.slice(0, 200)}`
     );
   }
 

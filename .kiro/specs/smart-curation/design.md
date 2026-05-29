@@ -842,3 +842,59 @@ export function parseDedupResponse(
 *For any* trip with exactly one active photo at Phase 3 entry, the stage SHALL NOT make a VLM call and SHALL keep that photo, returning `vlmCallsMade: 0`.
 
 **Validates: Requirement 12.8**
+
+
+---
+
+## VLM Provider Abstraction
+
+After the three-phase pipeline stabilised, the three stages were calling DashScope directly via the OpenAI-compatible client, with the Anthropic / OpenAI / DashScope choice baked into each file. We refactored to a single client (`vlmClient.ts`) so:
+
+- The three stages own only their **prompt** and **response parsing**.
+- The provider/model choice is **runtime env** (`SMART_CURATION_VLM_PROVIDER`).
+- Adding a new provider is a single switch arm rather than three duplicated SDK setups.
+
+### Provider Configuration
+
+| Provider | Default model | Key env vars |
+|---|---|---|
+| `dashscope` | `qwen-vl-max` | `DASHSCOPE_API_KEY`, `SMART_CURATION_DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL` |
+| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY`, `SMART_CURATION_ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` |
+
+Selection: `SMART_CURATION_VLM_PROVIDER=dashscope|anthropic` (default `dashscope`).
+
+### Why single provider, no auto-fallback
+
+Mixing providers within one trip would mean different curation decisions came from different models — same `trashed_reason` enum but different judgement tendencies. Single-provider-per-deployment keeps curation decisions consistent and reproducible. Mainland China deployments use `dashscope`; overseas deployments can switch to `anthropic` for stronger vision quality on edge cases.
+
+### vlmClient Interface
+
+```typescript
+export type VLMProvider = 'anthropic' | 'dashscope';
+
+export interface VLMRequest {
+  images: Array<{ base64: string; mediaType?: string }>;
+  prompt: string;
+  maxTokens?: number;
+}
+
+export interface VLMResponse {
+  text: string;
+  provider: VLMProvider;
+  model: string;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export function getActiveProvider(): VLMProvider;
+export function getActiveModel(): string;
+export function isVLMAvailable(): boolean;
+export async function callVLM(req: VLMRequest): Promise<VLMResponse>;
+```
+
+Every stage that needs a VLM call now uses just `callVLM(...)`. The cached SDK clients live inside `vlmClient.ts` and are reused across all three stages — both for connection reuse and to avoid the previous duplication of `cachedClient`/`getXxxClient()` in each stage file.
+
+### Future Extension Points (not yet implemented)
+
+- **Budget gate**: a `vlmBudget.ts` module that tracks monthly cost from `usage` fields, returns `false` from `isVLMAvailable()` once the budget is exhausted.
+- **Per-stage provider override**: env variables like `SMART_CURATION_VLM_PROVIDER_PHASE2` to use a stronger model for the AI passes only.
+- **OpenAI provider**: trivial to add (already OpenAI-compatible client) once we have an `OPENAI_API_KEY` use case.

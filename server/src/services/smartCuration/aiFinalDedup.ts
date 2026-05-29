@@ -38,13 +38,19 @@
  * dominant case without the cost of comparing every photo to every other.
  * Photos in different batches are never compared against each other; that
  * is an accepted limitation.
+ *
+ * Provider
+ * --------
+ * Uses the unified `vlmClient` module — the active VLM provider (Anthropic
+ * Claude or DashScope qwen-vl-max) is selected via env at runtime and is
+ * transparent to this stage.
  */
 
-import OpenAI from 'openai';
 import { getDb } from '../../database';
 import { getStorageProvider } from '../../storage/factory';
 import { resizeForAnalysis } from '../bedrockClient';
 import { writeDebugReport, type DebugReportGroupInput } from './debugReportWriter';
+import { callVLM, isVLMAvailable } from './vlmClient';
 import type {
   CurationCandidate,
   CurationDecision,
@@ -94,9 +100,6 @@ const VLM_CONCURRENCY = 3;
 
 /** Image download/resize parallelism within a single batch. */
 const PER_BATCH_IMAGE_CONCURRENCY = 5;
-
-/** Default request timeout (overridable via SMART_CURATION_VLM_TIMEOUT_MS). */
-const DEFAULT_VLM_TIMEOUT_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -208,18 +211,8 @@ async function processInBatches<T, R>(
 }
 
 // ---------------------------------------------------------------------------
-// VLM client (cached)
+// Configuration
 // ---------------------------------------------------------------------------
-
-let cachedClient: OpenAI | null = null;
-
-function readVlmTimeoutMs(): number {
-  const raw = process.env.SMART_CURATION_VLM_TIMEOUT_MS;
-  if (!raw) return DEFAULT_VLM_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_VLM_TIMEOUT_MS;
-  return parsed;
-}
 
 function readBatchSize(): number {
   const raw = process.env.SMART_CURATION_DEDUP_BATCH_SIZE;
@@ -232,24 +225,6 @@ function readBatchSize(): number {
     return DEFAULT_BATCH_SIZE;
   }
   return parsed;
-}
-
-function getDedupClient(): OpenAI {
-  if (cachedClient) return cachedClient;
-
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY environment variable is required');
-
-  const baseURL =
-    process.env.DASHSCOPE_BASE_URL ||
-    'https://dashscope.aliyuncs.com/compatible-mode/v1';
-
-  cachedClient = new OpenAI({
-    apiKey,
-    baseURL,
-    timeout: readVlmTimeoutMs(),
-  });
-  return cachedClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,40 +368,28 @@ export function parseDedupResponse(
 
 async function evaluateBatch(batch: CurationCandidate[]): Promise<BatchDecision[]> {
   const storageProvider = getStorageProvider();
-  const client = getDedupClient();
-  const model = process.env.DASHSCOPE_MODEL || 'qwen-vl-max';
 
-  const imageParts = await mapInParallel(
+  const images = await mapInParallel(
     batch,
     PER_BATCH_IMAGE_CONCURRENCY,
     async (c) => {
       const localPath = await storageProvider.downloadToTemp(c.filePath);
       const base64 = await resizeForAnalysis(localPath);
-      const part: OpenAI.Chat.Completions.ChatCompletionContentPart = {
-        type: 'image_url',
-        image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' },
-      };
-      return part;
+      return { base64, mediaType: 'image/jpeg' as const };
     }
   );
 
-  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-    ...imageParts,
-    { type: 'text', text: buildDedupPrompt(batch.length) },
-  ];
-
-  const response = await client.chat.completions.create({
-    model,
-    max_tokens: 2048,
-    messages: [{ role: 'user', content }],
+  const response = await callVLM({
+    images,
+    prompt: buildDedupPrompt(batch.length),
+    maxTokens: 2048,
   });
 
-  const responseText = response.choices[0]?.message?.content ?? '';
-  const parsed = parseDedupResponse(responseText, batch.length);
+  const parsed = parseDedupResponse(response.text, batch.length);
   if (!parsed) {
     throw new Error(
-      `aiFinalDedup: failed to parse VLM response (batchSize=${batch.length}): ` +
-        responseText.slice(0, 200)
+      `aiFinalDedup: failed to parse VLM response (provider=${response.provider} ` +
+        `model=${response.model} batchSize=${batch.length}): ${response.text.slice(0, 200)}`
     );
   }
   return parsed;
@@ -463,10 +426,10 @@ export async function runAIFinalDedup(
     };
   }
 
-  // Skip when VLM unavailable — same conservative posture as Phase 2.
-  if (!process.env.DASHSCOPE_API_KEY) {
-    console.warn('[aiFinalDedup] DASHSCOPE_API_KEY not set — skipping final dedup');
-    onProgress('aiFinalDedup', 'complete', 'skipped: no API key');
+  // Skip when no VLM provider available — same conservative posture as Phase 2.
+  if (!isVLMAvailable()) {
+    console.warn('[aiFinalDedup] No VLM provider configured — skipping final dedup');
+    onProgress('aiFinalDedup', 'complete', 'skipped: no VLM provider');
     return {
       totalProcessed: candidates.length,
       totalKept: candidates.length,

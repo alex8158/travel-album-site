@@ -39,6 +39,7 @@ import {
 } from './technicalQualitySelector';
 import { selectBestByVLM, getKeepQuota } from './vlmSelector';
 import { writeDebugReport, type DebugReportGroupInput } from './debugReportWriter';
+import { isVLMAvailable, getActiveProvider, getActiveModel } from './vlmClient';
 
 /** Trash reasons as a union type. Stored in `media_items.trashed_reason`. */
 export type TrashReason =
@@ -426,13 +427,17 @@ export async function runSmartCuration(
     decisions.push(buildUngroupedKeepDecision(c));
   }
 
-  // Determine whether the VLM is even reachable. When DASHSCOPE_API_KEY is
-  // missing we degrade gracefully and resolve every group (including
-  // near-duplicates) with technical quality scoring.
-  const vlmEnabled = !!process.env.DASHSCOPE_API_KEY;
+  // Determine whether a VLM provider is configured. When none is, fall back to
+  // technical quality scoring for every group (no VLM calls). Provider/model
+  // are resolved by the unified vlmClient module.
+  const vlmEnabled = isVLMAvailable();
   if (!vlmEnabled) {
     console.warn(
-      '[smartCuration] DASHSCOPE_API_KEY not set — skipping VLM, using quality scoring only'
+      '[smartCuration] No VLM provider configured — skipping VLM, using quality scoring only'
+    );
+  } else {
+    console.log(
+      `[smartCuration] VLM provider=${getActiveProvider()} model=${getActiveModel()}`
     );
   }
 
