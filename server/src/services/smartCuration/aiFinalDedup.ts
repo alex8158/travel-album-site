@@ -244,28 +244,66 @@ function readBatchSize(): number {
  *      is also accepted by the parser for robustness, but not advertised.)
  */
 export function buildDedupPrompt(batchSize: number): string {
-  return `You are a travel photo curator finalizing a slideshow video.
+  return `You are an editor finalizing a travel slideshow video. Your job: identify near-duplicate photo CLUSTERS and trim each cluster down to one survivor.
 
-You are shown ${batchSize} photos that have ALREADY passed quality screening (none are blurry, none are obviously bad). Your job now is to remove **redundant** photos — sets that show essentially the same subject from essentially the same angle.
+You are shown ${batchSize} photos that have already passed quality screening. They are NOT pre-grouped — you must group them yourself.
 
-These may include underwater/diving photos with blue tint and low contrast. Blue cast is NORMAL and is NEVER a reason to trash a photo.
+CONTEXT FOR UNDERWATER/DIVING PHOTOS: Blue/green color cast on water is normal — never trash for that.
 
-Your job is ACTIVE redundancy removal. A travel slideshow loses its punch when 2-3 nearly-identical shots play in sequence. **Be decisive about clear redundancy.**
+═══════════════════════════════════════════════════════════════
+TWO-STEP PROCESS
+═══════════════════════════════════════════════════════════════
 
-WHEN TO TRASH (reason: scene_redundant):
-- Two or more photos show the SAME subject (same fish, same coral cluster, same person, same scene) with very similar framing and distance.
-- Keep the ONE most visually compelling photo (cleanest composition, sharpest, best moment); trash all the others.
-- If you see 3 photos of the same subject, keep 1, trash 2. If you see 2 photos of the same subject, keep 1, trash 1.
+STEP 1 — Mentally cluster the photos.
+A "cluster" is 2 or more photos that show:
+  • the SAME specific subject (same individual fish, same coral cluster, same person)
+  • from VERY SIMILAR angle, distance, and framing
+  • such that putting them back-to-back in a slideshow would be repetitive
 
-WHEN TO KEEP (do NOT trash):
-- Different subjects (different fish species, different person, different scene) → ALWAYS KEEP both.
-- Same subject but with **clearly different** angle / distance / pose / framing that adds storytelling variety → keep both.
-- Same general environment but the photos focus on different subjects of interest → keep both.
+Photos in a cluster of size 1 (no peer in this batch) are KEPT automatically.
 
-CALIBRATION:
-- Out of ${batchSize} photos in a typical travel batch, expect to find 0-${Math.max(2, Math.floor(batchSize / 4))} redundant shots.
-- If you find yourself trashing more than half the batch, stop and reconsider — that is unusual.
-- If you find ZERO trashes when there are obvious near-duplicate pairs in front of you, you are being too lenient. Trust your judgement: if two photos look like the same shot, trash one.
+STEP 2 — Within each cluster of size ≥ 2:
+Pick the ONE strongest photo (sharpest, best composition, best moment).
+Trash ALL the others with reason "scene_redundant".
+
+═══════════════════════════════════════════════════════════════
+CLUSTERING RULES
+═══════════════════════════════════════════════════════════════
+
+DO cluster (these ARE near-duplicates):
+  ✓ 3 photos of the same scorpionfish on the same coral, similar angles
+  ✓ 2 photos of the same lionfish, slight distance change, same scene
+  ✓ 4 burst-shot photos of the same nudibranch crawling on the same sponge
+  ✓ 2 wide shots of the same diver group near the same coral wall
+  ✓ Same anemone/coral with the same clownfish in nearly the same position
+
+DO NOT cluster (these are different photos, KEEP both):
+  ✗ Two different fish species, even photographed in similar coral
+  ✗ Same general dive site but the focal subjects are different creatures
+  ✗ Same subject but with TRULY DIFFERENT framing (close-up portrait vs full
+     environmental shot; head-on vs profile)
+  ✗ Two photos with different storytelling moments (eating vs resting)
+
+═══════════════════════════════════════════════════════════════
+EXPECTATION
+═══════════════════════════════════════════════════════════════
+
+Travel and dive photographers OFTEN take 2-4 nearly identical shots of the
+same subject "to be safe". A typical batch of ${batchSize} photos contains
+several such clusters. **Do not be afraid to trash freely** — that is the
+whole point of this stage.
+
+Anti-leniency check: When you see TWO photos clearly showing the same
+specific subject from similar angles, trash one. Do not rationalize keeping
+both with "the lighting is slightly different" — slideshow viewers cannot
+tell, and the redundancy is what hurts.
+
+Do NOT use this stage to remove blurry/low-quality photos — that was the
+previous stage's job. Only emit "scene_redundant".
+
+═══════════════════════════════════════════════════════════════
+OUTPUT
+═══════════════════════════════════════════════════════════════
 
 RESPOND IN THIS EXACT JSON FORMAT (one entry per photo, in input order):
 {

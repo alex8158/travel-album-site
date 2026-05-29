@@ -208,21 +208,47 @@ async function processInBatches<T, R>(
  * so blue-tinted dive shots aren't penalised for color cast.
  */
 export function buildReviewPrompt(batchSize: number): string {
-  return `You are a professional travel photo curator preparing a slideshow video.
+  return `You are a strict photo editor preparing a travel slideshow video. Your reputation depends on rejecting any photo that would embarrass the slideshow on a large TV.
 
-You are shown ${batchSize} photos. **Judge each photo INDEPENDENTLY** — these are not a series, and they do NOT have to be ranked against each other. For each photo, decide whether it deserves a place in a polished travel slideshow.
+You are shown ${batchSize} photos. **Judge each photo INDEPENDENTLY**. For each photo, ask: "Would I be proud to show this on a 65-inch TV for 3 seconds?"
 
-These may include underwater/diving photos with blue tint and low contrast — this is NORMAL for underwater photography and is NOT a defect. Do not trash a photo just for blue cast.
+CONTEXT FOR UNDERWATER/DIVING PHOTOS: Blue/green color cast on the BACKGROUND water is normal — that alone is NOT a reason to trash. But the **subject itself** still must be clearly visible.
 
-A slideshow video plays each photo on a large screen for 2-4 seconds. Viewers see every defect. Be honest about technical quality.
+═══════════════════════════════════════════════════════════════
+HARD-DELETE TESTS — apply each test independently. Any single failure → TRASH.
+═══════════════════════════════════════════════════════════════
 
-TRASH the photo if ANY of these are true (you do not need certainty — visible problems on a TV-sized screen are enough):
-- "blurry": The main subject is NOT sharply in focus. Even partial softness on the subject is enough to trash. If you cannot clearly see the subject's edges, fine details (eyes, scales, texture), it is blurry. Do not be lenient — slideshows magnify softness.
-- "low_subject_quality": Subject is heavily cut off, blocked by other objects, awkwardly back-turned, or has unrecoverable exposure (blown highlights or crushed shadows on the subject).
-- "low_aesthetic_quality": Composition is broken: no clear subject, distracting clutter, very poor framing, dominant negative space without purpose.
-- "low_video_value": Technically OK but uninteresting filler (empty water/sand/sky/coral with no subject of note, generic environment shot).
+TEST 1 — SHARPNESS ("blurry"):
+  Look at the main subject. Can you trace its edges crisply? Can you see fine
+  details — eyes, scales, fins, texture? If the subject looks SOFT, MUSHY, or
+  SMEARED — even slightly — TRASH it. There is no "borderline keep" for sharpness.
+  A subject you can identify but not see clearly = TRASH.
 
-KEEP only photos that have a clear, sharply focused subject worth showing on a large screen. A photo where you find yourself thinking "the subject is recognizable but soft" is a TRASH, not a KEEP.
+TEST 2 — SUBJECT EXPOSURE ("low_subject_quality"):
+  Look at ONLY the subject (ignore the background/water).
+  - Is the subject a dark silhouette where you cannot see its details/colors? → TRASH
+  - Are highlights on the subject blown to pure white with no texture? → TRASH
+  - Is the subject heavily cut off at frame edge or buried behind occlusion? → TRASH
+
+TEST 3 — COMPOSITION ("low_aesthetic_quality"):
+  - Can you identify ONE clear subject? If the photo is a chaotic mess of coral
+    with no focal point, TRASH.
+  - Is the framing badly off (subject crammed into a corner, wasted negative
+    space, tilted horizon)? TRASH.
+
+TEST 4 — VIDEO VALUE ("low_video_value"):
+  - Empty water, generic sand, plain coral with no creature, distant scenery
+    with no point of interest → TRASH. These are filler that bore the viewer.
+  - "It's a nice scene" is NOT enough. Slideshow photos must EARN their 3 seconds.
+
+═══════════════════════════════════════════════════════════════
+ANTI-LENIENCY GUARD
+═══════════════════════════════════════════════════════════════
+- Default bias: TRASH. Only keep photos that pass ALL four tests cleanly.
+- "It's recognizable" is NOT a pass. The subject must be CLEARLY visible.
+- "It's a memorable moment" is NOT a pass. Memory ≠ slideshow quality.
+- If you find yourself trashing 0 photos in a batch of ${batchSize}, you are
+  almost certainly being too lenient. Re-examine each one with the four tests.
 
 RESPOND IN THIS EXACT JSON FORMAT (one entry per photo, ordered to match the input):
 {
@@ -237,7 +263,7 @@ IMPORTANT:
 - Indices are 0-based.
 - Provide EXACTLY ${batchSize} entries, one per photo, in input order.
 - "decision" MUST be either "keep" or "trash".
-- "reason" is required when decision="trash" and must be one of the four values above; omit it for "keep".`;
+- "reason" is required when decision="trash" and must be one of: blurry, low_subject_quality, low_aesthetic_quality, low_video_value. Omit it for "keep".`;
 }
 
 // ---------------------------------------------------------------------------
