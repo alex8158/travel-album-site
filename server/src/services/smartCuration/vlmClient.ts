@@ -158,6 +158,12 @@ export function getActiveModel(): string {
 
 // ---------------------------------------------------------------------------
 // Anthropic provider
+//
+// Supports both the standard Anthropic API (api.anthropic.com with sk-ant-...)
+// and AWS Claude Platform (Anthropic on AWS — requires base URL override and
+// an `anthropic-workspace-id` header). The latter is detected by
+// ANTHROPIC_WORKSPACE_ID being set; when it is, every request gets the
+// header injected.
 // ---------------------------------------------------------------------------
 
 let anthropicClient: Anthropic | null = null;
@@ -168,10 +174,20 @@ function getAnthropicClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is required');
 
+  // AWS Claude Platform requires a workspace-id header on every request.
+  // The Anthropic Node SDK lets us pass defaultHeaders that get merged with
+  // every request, so set it once at construction time.
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
+  const defaultHeaders: Record<string, string> = {};
+  if (workspaceId) {
+    defaultHeaders['anthropic-workspace-id'] = workspaceId;
+  }
+
   anthropicClient = new Anthropic({
     apiKey,
     baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
     timeout: readTimeoutMs(),
+    ...(Object.keys(defaultHeaders).length > 0 ? { defaultHeaders } : {}),
   });
   return anthropicClient;
 }
