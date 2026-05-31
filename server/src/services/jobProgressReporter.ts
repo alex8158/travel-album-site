@@ -15,6 +15,7 @@ const STEP_LABELS: Partial<Record<PipelineStage, string>> = {
   smartCuration: '相似筛选',
   aiReview: 'AI 质量审查',
   aiFinalDedup: 'AI 终筛去重',
+  sceneDedup: 'AI 场景去重',
   analyze: '分析',
   optimize: '优化',
   aiRefinement: 'AI 精修',

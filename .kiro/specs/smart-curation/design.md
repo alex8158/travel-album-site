@@ -898,3 +898,73 @@ Every stage that needs a VLM call now uses just `callVLM(...)`. The cached SDK c
 - **Budget gate**: a `vlmBudget.ts` module that tracks monthly cost from `usage` fields, returns `false` from `isVLMAvailable()` once the budget is exhausted.
 - **Per-stage provider override**: env variables like `SMART_CURATION_VLM_PROVIDER_PHASE2` to use a stronger model for the AI passes only.
 - **OpenAI provider**: trivial to add (already OpenAI-compatible client) once we have an `OPENAI_API_KEY` use case.
+
+
+---
+
+## Architecture Refresh: removing the DINOv2-grouped Phase 1, replacing fixed-batch Phase 3
+
+After several rounds of testing, two pieces of the original architecture stopped earning their keep:
+
+1. **Phase 1 — `smartCuration` (DINOv2 cluster + VLM "best-of-group")**: in practice the rule-based `dedup` stage already removes pixel-level duplicates, and asking the VLM to pick the best of N near-identical photos turned out to be exactly the wrong job for it. Either the VLM saw the cluster too late (cluster split across batches) or the photos were so similar that "best" was largely arbitrary, and we paid for a VLM call to learn that.
+2. **Phase 3 — `aiFinalDedup` (fixed N-photo batches)**: with batch_size=12 a near-duplicate pair would routinely fall on either side of a batch boundary, leaving the VLM no chance to compare them. Bumping the batch_size to 12 and then to 25 only changed which pairs hit the boundary, never eliminated the failure mode.
+
+The new architecture deletes the smartCuration call from the pipeline (the code is preserved for rollback) and replaces aiFinalDedup with `sceneDedup`.
+
+### `sceneDedup` — smart batching for cross-photo redundancy
+
+`sceneDedup` is the only AI-side dedup stage now. It works in three steps:
+
+1. **Load** every active photo, sorted by `created_at`. Cameras write timestamps in shooting order, so visually similar burst shots tend to be neighbours in this list.
+2. **Compute embeddings** for every candidate via the existing DINOv2 service. When the ML service is unavailable, the stage degrades to fixed-size batches and emits a warning (no merging, but the rest still runs).
+3. **Build batches with boundary merging**:
+   - Target batch size is 25 (configurable).
+   - At each candidate batch boundary the cosine similarity between the *last* photo of the current batch and the *next 1–2* photos is checked.
+   - If either similarity is at or above the boundary threshold (default 0.75), the next photo is **absorbed** into the current batch and the boundary is re-tested. This continues until either the similarity drops below the threshold or the batch reaches `MAX_BATCH` (default 30) photos.
+   - Result: a tight burst sequence at a batch edge can never be split. Each batch the VLM sees is internally complete from a "scene continuity" standpoint.
+4. **Sequential VLM calls** over the batches (no parallelism — one shot per batch keeps the per-minute token budget under control).
+5. **Conservative fallback**: any batch whose VLM call fails or returns unparseable JSON keeps every photo in that batch.
+
+### Boundary merging in pseudocode
+
+```
+i = 0
+while i < N:
+    end = min(i + BATCH_SIZE, N)
+    while end < N and (end - i) < MAX_BATCH:
+        last = embeddings[end - 1]
+        next1 = embeddings[end]
+        next2 = embeddings[end + 1]   # may be undefined
+        if cos(last, next1) >= θ or cos(last, next2) >= θ:
+            end += 1                  # absorb next photo
+        else:
+            break
+    batches.append(slice(i, end))
+    i = end
+```
+
+### Configuration
+
+| Knob | Default | Env override |
+|---|---|---|
+| Target batch size | 25 | `SMART_CURATION_SCENE_DEDUP_BATCH_SIZE` (range 2..50) |
+| Max batch after merging | 30 | `SMART_CURATION_SCENE_DEDUP_MAX_BATCH` (range BATCH_SIZE..60) |
+| Boundary similarity threshold | 0.75 | `SMART_CURATION_SCENE_DEDUP_BOUNDARY_THRESHOLD` (range 0..1) |
+| VLM request timeout | 60 000 ms | `SMART_CURATION_VLM_TIMEOUT_MS` (shared with aiReview) |
+
+### Pipeline order after the refresh
+
+```
+collectInputs → classify → blur → overexposure → dedup → reduce → write
+              → aiReview      (per-photo quality)
+              → sceneDedup    (cross-photo redundancy with smart batching)
+              → analyze → optimize → ...
+```
+
+The legacy stage modules (`smartCurationEngine.ts`, `aiFinalDedup.ts`, `vlmSelector.ts`, `technicalQualitySelector.ts`, `similarityGrouper.ts`) are kept as-is so we can revert to the old three-phase architecture by re-adding two `await runX(...)` calls. The DINOv2-related env vars (`SMART_CURATION_EXACT_THRESHOLD`, `SMART_CURATION_NEAR_THRESHOLD`, `SMART_CURATION_DEDUP_BATCH_SIZE`) remain readable but no longer affect the pipeline.
+
+### Why this should work where the previous attempts did not
+
+- **No fixed-batch boundary problem** — same-scene neighbours move together into the same VLM call, by construction.
+- **The VLM only does what it is good at**: subjective per-photo judgement (aiReview) and within-batch redundancy detection on a small enough set that attention does not get diluted.
+- **Pixel-level dedup goes back to the rule layer** where it is already accurate and basically free.

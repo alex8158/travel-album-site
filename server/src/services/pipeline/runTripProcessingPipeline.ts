@@ -24,7 +24,7 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
 import { runAiRefinement } from '../aiImageOptimizer';
-import { runSmartCuration, runAIReview, runAIFinalDedup } from '../smartCuration';
+import { runSmartCuration, runAIReview, runAIFinalDedup, runSceneDedup } from '../smartCuration';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -562,37 +562,21 @@ export async function runTripProcessingPipeline(
       onProgress('write', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: smartCuration ----
-    // Runs AFTER write so that dedup-trashed images are already committed to DB.
-    // Always runs — falls back to technical quality scoring when DASHSCOPE_API_KEY
-    // is not configured or the VLM is unreachable. Replaces the legacy aiScreening
-    // stage which was gated on AI_REVIEW_ENABLED.
-    onProgress('smartCuration', 'start');
-    t0 = Date.now();
-    try {
-      const curationResult = await runSmartCuration(tripId, {
-        onProgress: (_stage, status, detail) => {
-          // Forward inner progress events under the smartCuration pipeline stage.
-          onProgress('smartCuration', status, detail);
-        },
-      });
-      console.log(
-        `[pipeline] smartCuration: ${curationResult.totalTrashed} trashed from ` +
-        `${curationResult.totalProcessed} images, ${curationResult.vlmCallsMade} VLM calls, ` +
-        `${Date.now() - t0}ms`
-      );
-      onProgress('smartCuration', 'complete', `${curationResult.totalTrashed} trashed`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      stageErrors.push({ stage: 'smartCuration', error: msg });
-      console.error(`[pipeline] smartCuration FAILED: ${msg} (${Date.now() - t0}ms)`);
-      onProgress('smartCuration', 'complete', `failed: ${msg}`);
-    }
+    // ---- Stage: smartCuration (deprecated) ----
+    // Phase 1 (DINOv2 + VLM group selection) was removed from the pipeline
+    // after testing showed the VLM cannot reliably pick "the best of N
+    // similar shots" without considering the trip as a whole. The work it
+    // used to do is now split between:
+    //   - the rule-based dedup stage (above) for true pixel-level duplicates
+    //   - the new sceneDedup stage (below) for cross-photo redundancy
+    // The runSmartCuration function is preserved for rollback but no longer
+    // invoked. SMART_CURATION_EXACT_THRESHOLD / NEAR_THRESHOLD env vars are
+    // ignored in production.
+    void runSmartCuration; // keep the import alive for rollback
 
-    // ---- Stage: aiReview (smart-curation Phase 2) ----
-    // Runs AFTER smartCuration. Per-photo VLM judgement on every still-active
-    // photo: catches blurry / cut-off / boring shots that survived Phase 1
-    // because they were ungrouped or won their group on sharpness alone.
+    // ---- Stage: aiReview (per-photo quality screening) ----
+    // First AI pass: each photo is judged independently against four hard
+    // tests (sharpness / subject exposure / composition / video value).
     // Conservative fallback: any failed batch keeps all its photos.
     onProgress('aiReview', 'start');
     t0 = Date.now();
@@ -615,32 +599,39 @@ export async function runTripProcessingPipeline(
       onProgress('aiReview', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: aiFinalDedup (smart-curation Phase 3) ----
-    // Runs AFTER aiReview. Cross-photo redundancy pass: VLM looks at batches
-    // of N already-good photos and trashes near-duplicates that Phase 1's
-    // similarity grouping missed (e.g. burst shots of the same subject that
-    // landed in different DINOv2 groups). Conservative fallback: any failed
-    // batch keeps all its photos. Only emits `scene_redundant` /
-    // `near_duplicate_worse`.
-    onProgress('aiFinalDedup', 'start');
+    // ---- Stage: sceneDedup (cross-photo scene redundancy with smart batching) ----
+    // Final AI pass: takes all surviving active photos, sorts them by
+    // capture time, and asks the VLM to find scene-redundant clusters and
+    // keep one per cluster. The batching uses DINOv2 cosine similarity
+    // across batch boundaries to merge same-scene neighbours into one
+    // batch — fixing the "burst pair split across two batches" failure
+    // mode of the older aiFinalDedup. Sequential over batches (one at a
+    // time) to stay under the VLM rate limit.
+    //
+    // The legacy runAIFinalDedup function is preserved for rollback but
+    // no longer invoked.
+    void runAIFinalDedup; // keep the import alive for rollback
+
+    onProgress('sceneDedup', 'start');
     t0 = Date.now();
     try {
-      const dedupResult = await runAIFinalDedup(tripId, {
+      const sceneResult = await runSceneDedup(tripId, {
         onProgress: (_stage, status, detail) => {
-          onProgress('aiFinalDedup', status, detail);
+          onProgress('sceneDedup', status, detail);
         },
       });
       console.log(
-        `[pipeline] aiFinalDedup: ${dedupResult.totalTrashed} trashed from ` +
-        `${dedupResult.totalProcessed} images, ${dedupResult.vlmCallsMade} VLM calls, ` +
-        `${dedupResult.vlmCallsFailed} batch failures, ${Date.now() - t0}ms`
+        `[pipeline] sceneDedup: ${sceneResult.totalTrashed} trashed from ` +
+        `${sceneResult.totalProcessed} images, ${sceneResult.vlmCallsMade} VLM calls, ` +
+        `${sceneResult.vlmCallsFailed} batch failures, ${sceneResult.batchesProcessed} batches ` +
+        `(merging=${sceneResult.embeddingsUsed ? 'on' : 'off'}), ${Date.now() - t0}ms`
       );
-      onProgress('aiFinalDedup', 'complete', `${dedupResult.totalTrashed} trashed`);
+      onProgress('sceneDedup', 'complete', `${sceneResult.totalTrashed} trashed`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      stageErrors.push({ stage: 'aiFinalDedup', error: msg });
-      console.error(`[pipeline] aiFinalDedup FAILED: ${msg} (${Date.now() - t0}ms)`);
-      onProgress('aiFinalDedup', 'complete', `failed: ${msg}`);
+      stageErrors.push({ stage: 'sceneDedup', error: msg });
+      console.error(`[pipeline] sceneDedup FAILED: ${msg} (${Date.now() - t0}ms)`);
+      onProgress('sceneDedup', 'complete', `failed: ${msg}`);
     }
 
     // ---- Compute stats from decisions ----

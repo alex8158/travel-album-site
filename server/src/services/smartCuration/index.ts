@@ -37,3 +37,12 @@ export {
   type AIFinalDedupResult,
   type AIFinalDedupOptions,
 } from './aiFinalDedup';
+
+export {
+  runSceneDedup,
+  buildSmartBatches,
+  buildSceneDedupPrompt,
+  parseSceneDedupResponse,
+  type SceneDedupResult,
+  type SceneDedupOptions,
+} from './sceneDedup';
