@@ -693,9 +693,17 @@ export async function runTripProcessingPipeline(
     onProgress('optimize', 'complete', `${optimizedCount} optimized`);
 
     // ---- Stage: aiRefinement (optional) ----
+    // Runs the second AI screening pass + per-photo refinement (which doubles
+    // as a final keep/trash check). Both stages need a VLM provider; the gate
+    // accepts any of dashscope / anthropic / bedrock that vlmClient supports
+    // so this stage works regardless of which provider the deployment chose.
     const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
-    const dashScopeConfiguredForRefinement = !!process.env.DASHSCOPE_API_KEY;
-    if (aiRefinementEnabled && dashScopeConfiguredForRefinement) {
+    const vlmConfiguredForRefinement =
+      !!process.env.DASHSCOPE_API_KEY ||
+      !!process.env.ANTHROPIC_API_KEY ||
+      !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
+      !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+    if (aiRefinementEnabled && vlmConfiguredForRefinement) {
       // Second AI dedup pass: catch duplicates that survived the first screening
       // (e.g. photos that were in different batches during the first pass)
       // Skip grouping so AI sees ALL remaining photos together without DINOv2 pre-filtering
@@ -716,8 +724,16 @@ export async function runTripProcessingPipeline(
       t0 = Date.now();
       try {
         const refinementResult = await runAiRefinement(tripId);
-        console.log(`[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ${Date.now() - t0}ms`);
-        onProgress('aiRefinement', 'complete', `${refinementResult.optimizedCount} refined`);
+        console.log(
+          `[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ` +
+          `${refinementResult.trashedCount} trashed, ${refinementResult.skippedCount} skipped, ` +
+          `${refinementResult.errorCount} errors, ${Date.now() - t0}ms`
+        );
+        onProgress(
+          'aiRefinement',
+          'complete',
+          `${refinementResult.optimizedCount} refined / ${refinementResult.trashedCount} trashed`
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         stageErrors.push({ stage: 'aiRefinement', error: msg });
