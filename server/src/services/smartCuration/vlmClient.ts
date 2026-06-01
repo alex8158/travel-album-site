@@ -42,7 +42,7 @@ import { createBedrockClient } from '../bedrockClient';
 // Public types
 // ---------------------------------------------------------------------------
 
-export type VLMProvider = 'anthropic' | 'dashscope' | 'bedrock';
+export type VLMProvider = 'anthropic' | 'dashscope' | 'bedrock' | 'openai';
 
 export interface VLMImage {
   /** Base-64 encoded image bytes (no data: prefix). */
@@ -91,21 +91,83 @@ function readTimeoutMs(): number {
   return parsed;
 }
 
+/** All valid provider values for type-checking and validation. */
+const VALID_PROVIDERS: readonly VLMProvider[] = ['anthropic', 'dashscope', 'bedrock', 'openai'];
+
 /**
- * Resolve the active provider from env. Falls back to dashscope when unset to
- * preserve existing deployments. An invalid value logs a warning and falls
- * back the same way rather than crashing the pipeline.
+ * Build a diagnostic string showing set/unset status of relevant env vars.
+ * NEVER prints actual secret values — only "set" or "unset".
+ */
+function envStatusSummary(): string {
+  const vars: Record<string, boolean> = {
+    DASHSCOPE_API_KEY: !!process.env.DASHSCOPE_API_KEY,
+    ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+    AWS_ACCESS_KEY_ID: !!process.env.AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: !!process.env.AWS_SECRET_ACCESS_KEY,
+    AWS_BEARER_TOKEN_BEDROCK: !!process.env.AWS_BEARER_TOKEN_BEDROCK,
+    OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
+    OPENAI_MODEL: !!process.env.OPENAI_MODEL,
+    OPENAI_BASE_URL: !!process.env.OPENAI_BASE_URL,
+  };
+  return Object.entries(vars)
+    .map(([k, v]) => `${k}=${v ? 'set' : 'unset'}`)
+    .join(', ');
+}
+
+/**
+ * Resolve the active provider from env using a two-layer strategy:
+ *
+ * 1. **Explicit**: If `SMART_CURATION_VLM_PROVIDER` is set to a valid value,
+ *    use it strictly (no auto-detection).
+ * 2. **Auto-detect**: If unset, probe credentials in priority order:
+ *    DashScope → Anthropic → Bedrock → OpenAI-compatible.
+ *    This preserves backward compatibility (DashScope was the old default).
+ *
+ * Falls back to 'dashscope' only when no provider can be detected at all
+ * (matches legacy behavior for deployments with no credentials configured).
  */
 export function getActiveProvider(): VLMProvider {
   const raw = (process.env.SMART_CURATION_VLM_PROVIDER || '').trim().toLowerCase();
-  if (raw === 'anthropic' || raw === 'dashscope' || raw === 'bedrock') return raw;
+
+  // Layer 1: Explicit provider setting
   if (raw !== '') {
+    if ((VALID_PROVIDERS as readonly string[]).includes(raw)) {
+      const provider = raw as VLMProvider;
+      console.log(
+        `[vlmClient] Provider resolved: provider=${provider}, method=explicit, env: ${envStatusSummary()}`
+      );
+      return provider;
+    }
+    // Invalid explicit value — warn and fall through to auto-detect
     console.warn(
       `[vlmClient] SMART_CURATION_VLM_PROVIDER="${raw}" is not recognised; ` +
-      `using 'dashscope'. Valid values: 'anthropic' | 'dashscope' | 'bedrock'.`
+      `valid values: ${VALID_PROVIDERS.join(' | ')}. Falling back to auto-detect.`
     );
   }
-  return 'dashscope';
+
+  // Layer 2: Auto-detect by credential presence (priority order)
+  let detected: VLMProvider;
+
+  if (process.env.DASHSCOPE_API_KEY) {
+    detected = 'dashscope';
+  } else if (process.env.ANTHROPIC_API_KEY) {
+    detected = 'anthropic';
+  } else if (
+    process.env.AWS_BEARER_TOKEN_BEDROCK ||
+    (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+  ) {
+    detected = 'bedrock';
+  } else if (process.env.OPENAI_API_KEY) {
+    detected = 'openai';
+  } else {
+    // No credentials found at all — fall back to dashscope (legacy default)
+    detected = 'dashscope';
+  }
+
+  console.log(
+    `[vlmClient] Provider resolved: provider=${detected}, method=auto-detect, env: ${envStatusSummary()}`
+  );
+  return detected;
 }
 
 /**
@@ -129,6 +191,8 @@ export function isVLMAvailable(): boolean {
         !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
         !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
       );
+    case 'openai':
+      return !!process.env.OPENAI_API_KEY;
   }
 }
 
@@ -153,6 +217,8 @@ export function getActiveModel(): string {
         process.env.BEDROCK_MODEL_ID ||
         DEFAULT_BEDROCK_MODEL
       );
+    case 'openai':
+      return process.env.OPENAI_MODEL || '';
   }
 }
 
@@ -342,6 +408,108 @@ async function callBedrock(req: VLMRequest): Promise<VLMResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAI-compatible provider (GPT-4o, vLLM, Ollama, LiteLLM, etc.)
+// ---------------------------------------------------------------------------
+
+let openaiClient: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI {
+  if (openaiClient) return openaiClient;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is required');
+
+  openaiClient = new OpenAI({
+    apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || undefined,
+    timeout: readTimeoutMs(),
+  });
+  return openaiClient;
+}
+
+async function callOpenAI(req: VLMRequest): Promise<VLMResponse> {
+  const client = getOpenAIClient();
+  const model = process.env.OPENAI_MODEL;
+  if (!model) throw new Error('OPENAI_MODEL environment variable is required for openai provider');
+
+  // Build content parts: images as image_url (base64 data URIs) + text prompt
+  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = req.images.map(
+    (img) => ({
+      type: 'image_url',
+      image_url: {
+        url: `data:${img.mediaType || 'image/jpeg'};base64,${img.base64}`,
+        detail: 'low' as const,
+      },
+    })
+  );
+  content.push({ type: 'text', text: req.prompt });
+
+  const response = await client.chat.completions.create({
+    model,
+    max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    messages: [{ role: 'user', content }],
+  });
+
+  const text = response.choices[0]?.message?.content ?? '';
+
+  return {
+    text,
+    provider: 'openai',
+    model,
+    usage: {
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Vision/image warning tracking
+// ---------------------------------------------------------------------------
+
+/** Track whether we've already emitted the vision/image warning to avoid spam. */
+let visionWarningEmitted = false;
+
+const VISION_ERROR_KEYWORDS = ['vision', 'image', 'multimodal', 'unsupported'];
+
+function isVisionRelatedError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return VISION_ERROR_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
+ * Check if a VLM response text is parseable as JSON.
+ */
+function isParseableJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    // Also try extracting JSON from markdown fences
+    const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+    if (fenceMatch) {
+      try {
+        JSON.parse(fenceMatch[1].trim());
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    // Try finding a JSON object in the text
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        JSON.parse(trimmed);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -356,13 +524,53 @@ export async function callVLM(req: VLMRequest): Promise<VLMResponse> {
     throw new Error('callVLM: at least one image is required');
   }
 
-  switch (getActiveProvider()) {
-    case 'anthropic':
-      return callAnthropic(req);
-    case 'dashscope':
-      return callDashscope(req);
-    case 'bedrock':
-      return callBedrock(req);
+  const provider = getActiveProvider();
+  const model = getActiveModel();
+
+  try {
+    let response: VLMResponse;
+    switch (provider) {
+      case 'anthropic':
+        response = await callAnthropic(req);
+        break;
+      case 'dashscope':
+        response = await callDashscope(req);
+        break;
+      case 'bedrock':
+        response = await callBedrock(req);
+        break;
+      case 'openai':
+        response = await callOpenAI(req);
+        break;
+      default:
+        throw new Error(`callVLM: unsupported provider "${provider}"`);
+    }
+
+    // Post-call diagnostic log
+    const parseable = isParseableJson(response.text);
+    console.log(
+      `[vlmClient] VLM call: provider=${response.provider}, model=${response.model}, ` +
+      `images=${req.images.length}, responseLength=${response.text.length}, parseable=${parseable}`
+    );
+
+    return response;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+
+    // Error diagnostic log
+    console.error(
+      `[vlmClient] VLM call failed: provider=${provider}, model=${model}, error=${errorMsg}`
+    );
+
+    // Vision/image support warning (emit only once)
+    if (!visionWarningEmitted && isVisionRelatedError(errorMsg)) {
+      console.warn(
+        `[vlmClient] WARNING: endpoint may not support vision/image input`
+      );
+      visionWarningEmitted = true;
+    }
+
+    throw err;
   }
 }
 
@@ -374,4 +582,6 @@ export function _resetVLMClientCacheForTests(): void {
   anthropicClient = null;
   dashscopeClient = null;
   bedrockClientCache = null;
+  openaiClient = null;
+  visionWarningEmitted = false;
 }

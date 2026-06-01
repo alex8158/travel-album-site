@@ -562,17 +562,52 @@ export async function runTripProcessingPipeline(
       onProgress('write', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: smartCuration (deprecated) ----
-    // Phase 1 (DINOv2 + VLM group selection) was removed from the pipeline
-    // after testing showed the VLM cannot reliably pick "the best of N
-    // similar shots" without considering the trip as a whole. The work it
-    // used to do is now split between:
-    //   - the rule-based dedup stage (above) for true pixel-level duplicates
-    //   - the new sceneDedup stage (below) for cross-photo redundancy
-    // The runSmartCuration function is preserved for rollback but no longer
-    // invoked. SMART_CURATION_EXACT_THRESHOLD / NEAR_THRESHOLD env vars are
-    // ignored in production.
-    void runSmartCuration; // keep the import alive for rollback
+    // ---- Stage: smartCuration (global similarity grouping — opt-in) ----
+    // Global similarity grouping using DINOv2 + VLM selection. Disabled by
+    // default (SMART_CURATION_GLOBAL_GROUPING=true to enable). When enabled,
+    // runs BEFORE sceneDedup so that cross-batch similar photos are grouped
+    // and deduplicated first, then sceneDedup handles within-batch scene
+    // redundancy.
+    //
+    // Threshold env vars (used by similarityGrouper):
+    //   SMART_CURATION_EXACT_THRESHOLD  (default 0.94)
+    //   SMART_CURATION_NEAR_THRESHOLD   (default 0.88)
+    //   SMART_CURATION_STRONG_THRESHOLD (default 0.92)
+    const globalGroupingEnabled = process.env.SMART_CURATION_GLOBAL_GROUPING === 'true';
+    // Read threshold env vars (consumed by similarityGrouper downstream)
+    // TODO: Pass thresholds to runSmartCuration once SmartCurationOptions supports them
+    const _exactThreshold = parseFloat(process.env.SMART_CURATION_EXACT_THRESHOLD || '0.94');
+    const _nearThreshold = parseFloat(process.env.SMART_CURATION_NEAR_THRESHOLD || '0.88');
+    const _strongThreshold = parseFloat(process.env.SMART_CURATION_STRONG_THRESHOLD || '0.92');
+
+    if (globalGroupingEnabled) {
+      onProgress('smartCuration', 'start');
+      t0 = Date.now();
+      console.log(
+        `[pipeline] smartCuration (global grouping) enabled — ` +
+        `thresholds: exact=${_exactThreshold}, near=${_nearThreshold}, strong=${_strongThreshold}`
+      );
+      try {
+        const curationResult = await runSmartCuration(tripId, {
+          onProgress: (_stage, status, detail) => {
+            onProgress('smartCuration', status, detail);
+          },
+        });
+        console.log(
+          `[pipeline] smartCuration: ${curationResult.totalTrashed} trashed from ` +
+          `${curationResult.totalProcessed} images, ${curationResult.groupsProcessed} groups, ` +
+          `${curationResult.vlmCallsMade} VLM calls, ${Date.now() - t0}ms`
+        );
+        onProgress('smartCuration', 'complete', `${curationResult.totalTrashed} trashed`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'smartCuration', error: msg });
+        console.error(`[pipeline] smartCuration FAILED: ${msg} (${Date.now() - t0}ms)`);
+        onProgress('smartCuration', 'complete', `failed: ${msg}`);
+      }
+    } else {
+      console.log(`[pipeline] smartCuration (global grouping) skipped — SMART_CURATION_GLOBAL_GROUPING not enabled`);
+    }
 
     // ---- Stage: aiReview (per-photo quality screening) ----
     // First AI pass: each photo is judged independently against four hard

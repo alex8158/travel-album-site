@@ -41,6 +41,7 @@
 import { getDb } from '../../database';
 import { getStorageProvider } from '../../storage/factory';
 import { resizeForAnalysis } from '../bedrockClient';
+import { computeHash, computePHash, hammingDistance } from '../dedupEngine';
 import { writeDebugReport, type DebugReportGroupInput } from './debugReportWriter';
 import { callVLM, isVLMAvailable } from './vlmClient';
 import {
@@ -93,6 +94,67 @@ const VALID_DEDUP_TRASH_REASONS: ReadonlySet<TrashReason> = new Set<TrashReason>
   'scene_redundant',
   'near_duplicate_worse',
 ]);
+
+// ---------------------------------------------------------------------------
+// Hash-based boundary merging types
+// ---------------------------------------------------------------------------
+
+/** Number of bits in a 64-bit pHash/dHash; used for hamming-to-similarity conversion. */
+const HASH_BIT_COUNT = 64;
+
+/** Threshold for hash-based boundary merging (stricter than embedding threshold to reduce false merges). */
+const HASH_BOUNDARY_THRESHOLD = 0.90;
+
+/**
+ * Hash data for boundary merging when ML embeddings are unavailable.
+ * Parallel arrays aligned with the candidate list.
+ */
+export interface HashBoundaryData {
+  pHashes: (string | null)[];
+  dHashes: (string | null)[];
+}
+
+/**
+ * Convert a hash hamming distance into a [0, 1] similarity value where 0
+ * hamming = 1.0 and HASH_BIT_COUNT hamming = 0.0.
+ *
+ * Replicates the logic from similarityGrouper.ts for use in boundary merging.
+ */
+function hammingToSimilarity(hamming: number): number {
+  if (hamming < 0) return 1;
+  if (hamming >= HASH_BIT_COUNT) return 0;
+  return 1 - hamming / HASH_BIT_COUNT;
+}
+
+/**
+ * Compute hash-based similarity between two candidates using pHash and dHash.
+ * Returns the maximum similarity from either hash type (more lenient).
+ * Returns 0 if hashes are unavailable for either candidate.
+ */
+function hashSimilarity(
+  hashData: HashBoundaryData,
+  i: number,
+  j: number
+): number {
+  const pi = hashData.pHashes[i];
+  const pj = hashData.pHashes[j];
+  const di = hashData.dHashes[i];
+  const dj = hashData.dHashes[j];
+
+  let maxSim = 0;
+
+  if (pi && pj) {
+    const pDist = hammingDistance(pi, pj);
+    maxSim = Math.max(maxSim, hammingToSimilarity(pDist));
+  }
+
+  if (di && dj) {
+    const dDist = hammingDistance(di, dj);
+    maxSim = Math.max(maxSim, hammingToSimilarity(dDist));
+  }
+
+  return maxSim;
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -262,25 +324,35 @@ function cosineSimilarity(a: number[] | null, b: number[] | null): number {
  *
  * When `embeddings` is null (ML service unavailable / per-candidate
  * extraction failed for some), boundary merging degrades to fixed-size
- * batches and a warning is emitted. The rest of the pipeline still works.
+ * batches UNLESS `hashData` is provided — in that case, hash-based
+ * similarity is used with a stricter threshold (HASH_BOUNDARY_THRESHOLD)
+ * as a weak signal for boundary merging.
+ *
+ * When `hashData` is provided and `embeddings` is null, the function uses
+ * hamming distance similarity for boundary decisions. This is a degraded
+ * mode that reduces the chance of splitting obvious burst sequences across
+ * batches, but is less accurate than embedding-based merging.
  */
 export function buildSmartBatches(
   candidates: CurationCandidate[],
   embeddings: (number[] | null)[] | null,
   batchSize: number,
   maxBatch: number,
-  boundaryThreshold: number
+  boundaryThreshold: number,
+  hashData?: HashBoundaryData
 ): CurationCandidate[][] {
   const batches: CurationCandidate[][] = [];
   if (candidates.length === 0) return batches;
 
-  const useMerging = embeddings !== null;
+  const useEmbeddingMerging = embeddings !== null;
+  const useHashMerging = !useEmbeddingMerging && hashData !== undefined;
+  const hashThreshold = HASH_BOUNDARY_THRESHOLD;
 
   let i = 0;
   while (i < candidates.length) {
     let actualEnd = Math.min(i + batchSize, candidates.length);
 
-    if (useMerging) {
+    if (useEmbeddingMerging) {
       // Greedy absorption: while the photo *just past* the boundary looks
       // like the same scene as the last in the current batch, swallow it.
       // We probe up to two future photos at each step so a single odd
@@ -294,6 +366,22 @@ export function buildSmartBatches(
         const sim2 = next2Emb ? cosineSimilarity(lastEmb, next2Emb) : 0;
 
         if (sim1 >= boundaryThreshold || sim2 >= boundaryThreshold) {
+          actualEnd++;
+        } else {
+          break;
+        }
+      }
+    } else if (useHashMerging) {
+      // Degraded mode: use hash-based similarity for boundary merging.
+      // Stricter threshold (0.90) to reduce false merges since hashes are
+      // a weaker signal than DINOv2 embeddings.
+      while (actualEnd < candidates.length && actualEnd - i < maxBatch) {
+        const sim1 = hashSimilarity(hashData!, actualEnd - 1, actualEnd);
+        const sim2 = actualEnd + 1 < candidates.length
+          ? hashSimilarity(hashData!, actualEnd - 1, actualEnd + 1)
+          : 0;
+
+        if (sim1 >= hashThreshold || sim2 >= hashThreshold) {
           actualEnd++;
         } else {
           break;
@@ -368,6 +456,65 @@ async function tryGetEmbeddings(
     aligned[validIndex[k]] = extracted[k].embedding ?? null;
   }
   return aligned;
+}
+
+/**
+ * Compute pHash/dHash for all candidates as a fallback when ML embeddings
+ * are unavailable. Returns HashBoundaryData that can be used for degraded
+ * boundary merging, or null if hash computation fails entirely.
+ *
+ * Reuses the same hash computation logic as similarityGrouper.ts
+ * (computePHash + computeHash from dedupEngine).
+ */
+async function tryComputeHashBoundaryData(
+  candidates: CurationCandidate[]
+): Promise<HashBoundaryData | null> {
+  const storage = getStorageProvider();
+
+  // Download candidates to local paths for hash computation.
+  const localPaths = await mapInParallel(candidates, PER_BATCH_IMAGE_CONCURRENCY, async (c) => {
+    try {
+      return await storage.downloadToTemp(c.filePath);
+    } catch (err) {
+      console.warn(
+        `[sceneDedup] hash fallback: download failed for ${c.mediaId}: ${err}`
+      );
+      return null;
+    }
+  });
+
+  const pHashes: (string | null)[] = new Array(candidates.length).fill(null);
+  const dHashes: (string | null)[] = new Array(candidates.length).fill(null);
+
+  let successCount = 0;
+
+  await mapInParallel(candidates, PER_BATCH_IMAGE_CONCURRENCY, async (c, i) => {
+    const localPath = localPaths[i];
+    if (!localPath) return;
+    try {
+      const [p, d] = await Promise.all([
+        computePHash(localPath),
+        computeHash(localPath),
+      ]);
+      pHashes[i] = p;
+      dHashes[i] = d;
+      successCount++;
+    } catch (err) {
+      console.warn(
+        `[sceneDedup] hash fallback: hash compute failed for ${c.mediaId}: ${err}`
+      );
+    }
+  });
+
+  if (successCount < 2) {
+    console.warn('[sceneDedup] hash fallback: insufficient hashes computed, using fixed-size batches');
+    return null;
+  }
+
+  console.log(
+    `[sceneDedup] degraded mode: hash-based boundary merging (${successCount}/${candidates.length} hashes computed, threshold=${HASH_BOUNDARY_THRESHOLD})`
+  );
+  return { pHashes, dHashes };
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +773,9 @@ export async function runSceneDedup(
     };
   }
 
+  // Track elapsed time for summary statistics
+  const dedupStartTime = Date.now();
+
   // Read configuration.
   const batchSize = readPositiveIntEnv('SMART_CURATION_SCENE_DEDUP_BATCH_SIZE', DEFAULT_BATCH_SIZE, 2, 50);
   const maxBatch = readPositiveIntEnv('SMART_CURATION_SCENE_DEDUP_MAX_BATCH', DEFAULT_MAX_BATCH, batchSize, 60);
@@ -639,17 +789,29 @@ export async function runSceneDedup(
   const embeddings = await tryGetEmbeddings(candidates);
   const embeddingsUsed = embeddings !== null;
 
+  // When embeddings are unavailable, try hash-based boundary merging as fallback.
+  let hashData: HashBoundaryData | undefined;
+  if (!embeddingsUsed) {
+    onProgress('sceneDedup', 'progress', 'computing hashes for degraded boundary merging');
+    const computed = await tryComputeHashBoundaryData(candidates);
+    if (computed) {
+      hashData = computed;
+    }
+  }
+
   const batches = buildSmartBatches(
     candidates,
     embeddings,
     batchSize,
     maxBatch,
-    boundaryThreshold
+    boundaryThreshold,
+    hashData
   );
 
   console.log(
     `[sceneDedup] ${candidates.length} candidates → ${batches.length} batches ` +
-    `(merging=${embeddingsUsed ? 'on' : 'off'}, threshold=${boundaryThreshold}, ` +
+    `(merging=${embeddingsUsed ? 'on' : hashData ? 'hash-fallback' : 'off'}, ` +
+    `threshold=${embeddingsUsed ? boundaryThreshold : hashData ? HASH_BOUNDARY_THRESHOLD : 'n/a'}, ` +
     `target=${batchSize}, max=${maxBatch})`
   );
 
@@ -739,6 +901,15 @@ export async function runSceneDedup(
   const totalProcessed = decisions.length;
   const totalKept = decisions.filter((d) => d.decision === 'keep').length;
   const totalTrashed = totalProcessed - totalKept;
+
+  // Summary statistics log
+  const elapsedMs = Date.now() - dedupStartTime;
+  const totalVlmCalls = vlmCallsMade + vlmCallsFailed;
+  console.log(
+    `[sceneDedup] Summary: vlmCalls=${totalVlmCalls}, succeeded=${vlmCallsMade}, ` +
+    `failed=${vlmCallsFailed}, elapsed=${elapsedMs}ms, ` +
+    `processed=${totalProcessed}, kept=${totalKept}, trashed=${totalTrashed}`
+  );
 
   onProgress(
     'sceneDedup',
