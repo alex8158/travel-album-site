@@ -147,6 +147,12 @@ export function validateAndClamp(raw: Record<string, unknown>): AdjustmentParams
     }
     if (field === 'temperature') {
       result[field] = Math.min(1, Math.max(-1, value));
+    } else if (field === 'brightness') {
+      // Tighter brightness range to prevent highlight clipping on flash photography
+      result[field] = Math.min(1.3, Math.max(0.7, value));
+    } else if (field === 'contrast') {
+      // Moderate contrast range to prevent crushing shadows/blowing highlights
+      result[field] = Math.min(1.4, Math.max(0.7, value));
     } else {
       result[field] = Math.min(2, Math.max(0, value));
     }
