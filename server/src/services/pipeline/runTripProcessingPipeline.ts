@@ -573,7 +573,7 @@ export async function runTripProcessingPipeline(
     //   SMART_CURATION_EXACT_THRESHOLD  (default 0.94)
     //   SMART_CURATION_NEAR_THRESHOLD   (default 0.88)
     //   SMART_CURATION_STRONG_THRESHOLD (default 0.92)
-    const globalGroupingEnabled = process.env.SMART_CURATION_GLOBAL_GROUPING === 'true';
+    const globalGroupingEnabled = process.env.SMART_CURATION_GLOBAL_GROUPING !== 'false';
     // Read threshold env vars (consumed by similarityGrouper downstream)
     // TODO: Pass thresholds to runSmartCuration once SmartCurationOptions supports them
     const _exactThreshold = parseFloat(process.env.SMART_CURATION_EXACT_THRESHOLD || '0.94');
