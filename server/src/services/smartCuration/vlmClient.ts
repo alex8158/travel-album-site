@@ -339,7 +339,7 @@ async function callDashscope(req: VLMRequest): Promise<VLMResponse> {
       type: 'image_url',
       image_url: {
         url: `data:${img.mediaType || 'image/jpeg'};base64,${img.base64}`,
-        detail: 'low',
+        detail: 'high' as const,
       },
     })
   );
@@ -438,7 +438,7 @@ async function callOpenAI(req: VLMRequest): Promise<VLMResponse> {
       type: 'image_url',
       image_url: {
         url: `data:${img.mediaType || 'image/jpeg'};base64,${img.base64}`,
-        detail: 'low' as const,
+        detail: 'high' as const,
       },
     })
   );

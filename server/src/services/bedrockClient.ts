@@ -282,11 +282,16 @@ export function extractJSON<T = unknown>(text: string): T {
 // Image resize helper
 // ---------------------------------------------------------------------------
 
-export async function resizeForAnalysis(imagePath: string): Promise<string> {
+export async function resizeForAnalysis(
+  imagePath: string,
+  options?: { maxSize?: number; quality?: number }
+): Promise<string> {
+  const maxSize = options?.maxSize ?? 1536;
+  const quality = options?.quality ?? 85;
   try {
     const buffer = await sharp(imagePath, { failOn: 'none' })
-      .resize(768, 768, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 80 })
+      .resize(maxSize, maxSize, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality })
       .toBuffer();
     return buffer.toString('base64');
   } catch (err: unknown) {
