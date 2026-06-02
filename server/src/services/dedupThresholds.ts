@@ -68,7 +68,7 @@ export const PROCESS_THRESHOLDS: Readonly<ProcessThresholds> = Object.freeze({
   clipTopK:               env('CLIP_TOP_K', 50),
   grayLowSeqDistance:     env('GRAY_LOW_SEQ_DISTANCE', 6),
   grayLowHashDistance:    env('GRAY_LOW_HASH_DISTANCE', 8),
-  dinov2DedupThreshold:   envBounded('DINOV2_DEDUP_THRESHOLD', 0.85, 0, 1),
+  dinov2DedupThreshold:   envBounded('DINOV2_DEDUP_THRESHOLD', 0.82, 0, 1),
 });
 
 // ---------------------------------------------------------------------------
