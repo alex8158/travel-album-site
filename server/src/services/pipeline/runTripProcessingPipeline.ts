@@ -615,12 +615,14 @@ export async function runTripProcessingPipeline(
     // Conservative fallback: any failed batch keeps all its photos.
     onProgress('aiReview', 'start');
     t0 = Date.now();
+    let aiReviewTrashedCount = 0;
     try {
       const reviewResult = await runAIReview(tripId, {
         onProgress: (_stage, status, detail) => {
           onProgress('aiReview', status, detail);
         },
       });
+      aiReviewTrashedCount = reviewResult.totalTrashed;
       console.log(
         `[pipeline] aiReview: ${reviewResult.totalTrashed} trashed from ` +
         `${reviewResult.totalProcessed} images, ${reviewResult.vlmCallsMade} VLM calls, ` +
@@ -649,12 +651,14 @@ export async function runTripProcessingPipeline(
 
     onProgress('sceneDedup', 'start');
     t0 = Date.now();
+    let sceneDedupTrashedCount = 0;
     try {
       const sceneResult = await runSceneDedup(tripId, {
         onProgress: (_stage, status, detail) => {
           onProgress('sceneDedup', status, detail);
         },
       });
+      sceneDedupTrashedCount = sceneResult.totalTrashed;
       console.log(
         `[pipeline] sceneDedup: ${sceneResult.totalTrashed} trashed from ` +
         `${sceneResult.totalProcessed} images, ${sceneResult.vlmCallsMade} VLM calls, ` +
@@ -737,7 +741,8 @@ export async function runTripProcessingPipeline(
       !!process.env.DASHSCOPE_API_KEY ||
       !!process.env.ANTHROPIC_API_KEY ||
       !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
-      !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+      !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+      !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
     if (aiRefinementEnabled && vlmConfiguredForRefinement) {
       // Second AI dedup pass: catch duplicates that survived the first screening
       // (e.g. photos that were in different batches during the first pass)
@@ -1078,6 +1083,8 @@ export async function runTripProcessingPipeline(
       totalVideos,
       blurryDeletedCount,
       dedupDeletedCount,
+      aiReviewTrashedCount,
+      sceneDedupTrashedCount,
       analyzedCount,
       optimizedCount,
       classifiedCount,

@@ -49,6 +49,8 @@ router.post('/:id/process', authMiddleware, requireAuth, async (req: Request, re
       totalVideos: result.totalVideos,
       blurryDeletedCount: result.blurryDeletedCount,
       dedupDeletedCount: result.dedupDeletedCount,
+      aiReviewTrashedCount: result.aiReviewTrashedCount,
+      sceneDedupTrashedCount: result.sceneDedupTrashedCount,
       analyzedCount: result.analyzedCount,
       optimizedCount: result.optimizedCount,
       classifiedCount: result.classifiedCount,

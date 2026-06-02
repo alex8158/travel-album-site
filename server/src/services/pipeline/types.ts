@@ -125,6 +125,8 @@ export interface PipelineResult {
   totalVideos: number;
   blurryDeletedCount: number;
   dedupDeletedCount: number;
+  aiReviewTrashedCount: number;
+  sceneDedupTrashedCount: number;
   analyzedCount: number;
   optimizedCount: number;
   classifiedCount: number;

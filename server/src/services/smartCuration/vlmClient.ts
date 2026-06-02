@@ -192,7 +192,7 @@ export function isVLMAvailable(): boolean {
         !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
       );
     case 'openai':
-      return !!process.env.OPENAI_API_KEY;
+      return !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
   }
 }
 
