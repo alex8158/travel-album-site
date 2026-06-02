@@ -160,8 +160,8 @@ function hashSimilarity(
 // Configuration
 // ---------------------------------------------------------------------------
 
-const DEFAULT_BATCH_SIZE = 25;
-const DEFAULT_MAX_BATCH = 30;
+const DEFAULT_BATCH_SIZE = 15;
+const DEFAULT_MAX_BATCH = 20;
 const DEFAULT_BOUNDARY_THRESHOLD = 0.75;
 
 /** Max in-flight image download/resize ops within a single batch. */

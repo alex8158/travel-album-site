@@ -148,11 +148,11 @@ export function validateAndClamp(raw: Record<string, unknown>): AdjustmentParams
     if (field === 'temperature') {
       result[field] = Math.min(1, Math.max(-1, value));
     } else if (field === 'brightness') {
-      // Tighter brightness range to prevent highlight clipping on flash photography
-      result[field] = Math.min(1.3, Math.max(0.7, value));
+      // Tight brightness range: underwater flash photography easily clips highlights
+      result[field] = Math.min(1.15, Math.max(0.8, value));
     } else if (field === 'contrast') {
       // Moderate contrast range to prevent crushing shadows/blowing highlights
-      result[field] = Math.min(1.4, Math.max(0.7, value));
+      result[field] = Math.min(1.2, Math.max(0.8, value));
     } else {
       result[field] = Math.min(2, Math.max(0, value));
     }
