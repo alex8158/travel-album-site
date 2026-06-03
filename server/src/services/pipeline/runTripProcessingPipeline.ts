@@ -744,22 +744,6 @@ export async function runTripProcessingPipeline(
       !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
       !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
     if (aiRefinementEnabled && vlmConfiguredForRefinement) {
-      // Second AI dedup pass: catch duplicates that survived the first screening
-      // (e.g. photos that were in different batches during the first pass)
-      // Skip grouping so AI sees ALL remaining photos together without DINOv2 pre-filtering
-      t0 = Date.now();
-      try {
-        const secondPassResult = await runAiScreening(tripId, { skipGrouping: true });
-        if (secondPassResult.totalRemoved > 0) {
-          console.log(`[pipeline] aiScreening-2nd: ${secondPassResult.totalRemoved} removed from ${secondPassResult.totalProcessed} images, ${Date.now() - t0}ms`);
-        } else {
-          console.log(`[pipeline] aiScreening-2nd: no additional duplicates found, ${Date.now() - t0}ms`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[pipeline] aiScreening-2nd failed (non-fatal): ${msg}`);
-      }
-
       onProgress('aiRefinement', 'start');
       t0 = Date.now();
       try {
