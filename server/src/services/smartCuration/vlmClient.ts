@@ -514,64 +514,143 @@ function isParseableJson(text: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Provider-agnostic VLM call. Routes to whichever provider is configured via
- * `SMART_CURATION_VLM_PROVIDER`. Throws if the provider's credentials are not
- * set or if the upstream call fails — callers handle their own conservative
- * fallback (typically: keep every photo in the affected batch).
+ * Provider-agnostic VLM call with automatic cascade fallback.
+ *
+ * Routes to the configured primary provider. If the call fails with an
+ * authentication or authorization error (401/403), automatically tries the
+ * next available provider in priority order. This ensures that a single
+ * expired key doesn't kill the entire pipeline when other providers are
+ * configured.
+ *
+ * Throws only when ALL available providers have been exhausted.
  */
 export async function callVLM(req: VLMRequest): Promise<VLMResponse> {
   if (req.images.length === 0) {
     throw new Error('callVLM: at least one image is required');
   }
 
-  const provider = getActiveProvider();
-  const model = getActiveModel();
+  const primaryProvider = getActiveProvider();
 
-  try {
-    let response: VLMResponse;
-    switch (provider) {
-      case 'anthropic':
-        response = await callAnthropic(req);
-        break;
-      case 'dashscope':
-        response = await callDashscope(req);
-        break;
-      case 'bedrock':
-        response = await callBedrock(req);
-        break;
-      case 'openai':
-        response = await callOpenAI(req);
-        break;
-      default:
-        throw new Error(`callVLM: unsupported provider "${provider}"`);
-    }
-
-    // Post-call diagnostic log
-    const parseable = isParseableJson(response.text);
-    console.log(
-      `[vlmClient] VLM call: provider=${response.provider}, model=${response.model}, ` +
-      `images=${req.images.length}, responseLength=${response.text.length}, parseable=${parseable}`
-    );
-
-    return response;
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-
-    // Error diagnostic log
-    console.error(
-      `[vlmClient] VLM call failed: provider=${provider}, model=${model}, error=${errorMsg}`
-    );
-
-    // Vision/image support warning (emit only once)
-    if (!visionWarningEmitted && isVisionRelatedError(errorMsg)) {
-      console.warn(
-        `[vlmClient] WARNING: endpoint may not support vision/image input`
-      );
-      visionWarningEmitted = true;
-    }
-
-    throw err;
+  // Build cascade: primary first, then other providers that have credentials
+  const cascade: VLMProvider[] = [primaryProvider];
+  const allProviders: VLMProvider[] = ['anthropic', 'dashscope', 'bedrock', 'openai'];
+  for (const p of allProviders) {
+    if (p === primaryProvider) continue;
+    if (hasCredentials(p)) cascade.push(p);
   }
+
+  let lastError: Error | null = null;
+
+  for (const provider of cascade) {
+    const model = getModelForProvider(provider);
+    try {
+      let response: VLMResponse;
+      switch (provider) {
+        case 'anthropic':
+          response = await callAnthropic(req);
+          break;
+        case 'dashscope':
+          response = await callDashscope(req);
+          break;
+        case 'bedrock':
+          response = await callBedrock(req);
+          break;
+        case 'openai':
+          response = await callOpenAI(req);
+          break;
+        default:
+          throw new Error(`callVLM: unsupported provider "${provider}"`);
+      }
+
+      // Post-call diagnostic log
+      const parseable = isParseableJson(response.text);
+      console.log(
+        `[vlmClient] VLM call: provider=${response.provider}, model=${response.model}, ` +
+        `images=${req.images.length}, responseLength=${response.text.length}, parseable=${parseable}`
+      );
+
+      return response;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      lastError = err instanceof Error ? err : new Error(errorMsg);
+
+      // Check if this is an auth error that warrants trying the next provider
+      const isAuthError = isAuthenticationError(errorMsg);
+
+      console.error(
+        `[vlmClient] VLM call failed: provider=${provider}, model=${model}, error=${errorMsg}`
+      );
+
+      // Vision/image support warning (emit only once)
+      if (!visionWarningEmitted && isVisionRelatedError(errorMsg)) {
+        console.warn(
+          `[vlmClient] WARNING: endpoint may not support vision/image input`
+        );
+        visionWarningEmitted = true;
+      }
+
+      // Only cascade on auth errors; other errors (rate limit, timeout, etc.)
+      // are likely to affect all providers, so just throw immediately.
+      if (!isAuthError) {
+        throw lastError;
+      }
+
+      // Try next provider in cascade
+      const nextIdx = cascade.indexOf(provider) + 1;
+      if (nextIdx < cascade.length) {
+        console.warn(
+          `[vlmClient] Auth error on ${provider}, cascading to ${cascade[nextIdx]}...`
+        );
+      }
+    }
+  }
+
+  // All providers exhausted
+  throw lastError ?? new Error('callVLM: all providers failed');
+}
+
+/**
+ * Check if a provider has its credentials configured (without activating it).
+ */
+function hasCredentials(provider: VLMProvider): boolean {
+  switch (provider) {
+    case 'anthropic': return !!process.env.ANTHROPIC_API_KEY;
+    case 'dashscope': return !!process.env.DASHSCOPE_API_KEY;
+    case 'bedrock':
+      return !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
+        !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+    case 'openai': return !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
+  }
+}
+
+/**
+ * Get the model name for a specific provider (used in cascade logging).
+ */
+function getModelForProvider(provider: VLMProvider): string {
+  switch (provider) {
+    case 'anthropic':
+      return process.env.SMART_CURATION_ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL;
+    case 'dashscope':
+      return process.env.SMART_CURATION_DASHSCOPE_MODEL || process.env.DASHSCOPE_MODEL || DEFAULT_DASHSCOPE_MODEL;
+    case 'bedrock':
+      return process.env.SMART_CURATION_BEDROCK_MODEL || process.env.BEDROCK_MODEL_ID || DEFAULT_BEDROCK_MODEL;
+    case 'openai':
+      return process.env.OPENAI_MODEL || '';
+  }
+}
+
+/**
+ * Check if an error message indicates an authentication/authorization failure.
+ */
+function isAuthenticationError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('authentication') ||
+    lower.includes('unauthorized') ||
+    lower.includes('403') ||
+    lower.includes('401') ||
+    lower.includes('signature expired') ||
+    lower.includes('invalid api key') ||
+    lower.includes('permission denied');
 }
 
 /**

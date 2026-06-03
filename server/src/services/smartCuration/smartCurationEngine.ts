@@ -341,19 +341,14 @@ async function resolveNearDuplicateGroupWithVLM(
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
       `[smartCuration] VLM call failed for group ${group.groupId} (size=${group.candidates.length}), ` +
-        `falling back to quality scoring: ${msg}`
+        `keeping all photos (conservative fallback): ${msg}`
     );
     fallbackUsed = true;
 
-    // Fallback only operates on the pre-selected survivors; the dropped
-    // candidates are already trashed via dropDecisions. Honour keepQuota.min
-    // so 9+ photo groups still keep 2 survivors rather than collapsing to 1.
-    const fallbackDecisions = await fallbackResolveNearDuplicate(
-      { ...group, candidates: selected },
-      selected,
-      keepQuota.min
-    );
-    vlmDecisions = fallbackDecisions;
+    // Conservative fallback: keep every photo in the group. Do NOT use quality
+    // scoring to substitute for AI judgment — wrong deletions are worse than
+    // keeping duplicates. The user can re-run when the VLM provider is back.
+    vlmDecisions = selected.map((c) => buildGroupDecision(group, c, 'keep', null));
   }
 
   return {
@@ -492,27 +487,15 @@ export async function runSmartCuration(
         if (result.value.fallbackUsed) fallbacksUsed++;
       } else {
         // Whole-group resolution rejected (e.g. download failed for all candidates).
-        // Final fallback: quality scoring across the full group, honouring the
-        // tier's keep quota.
+        // Conservative fallback: keep every photo rather than risk wrong deletions.
         const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
         console.warn(
-          `[smartCuration] Group ${g.groupId} resolution rejected, applying quality fallback: ${reason}`
+          `[smartCuration] Group ${g.groupId} resolution rejected, keeping all photos: ${reason}`
         );
-        try {
-          const quota = getKeepQuota(g.candidates.length);
-          const fb = await fallbackResolveNearDuplicate(g, g.candidates, quota.min);
-          decisions.push(...fb);
-          fallbacksUsed++;
-        } catch (innerErr) {
-          // Last resort: keep every photo in the group rather than risk
-          // arbitrary deletions.
-          console.error(
-            `[smartCuration] Group ${g.groupId} quality fallback also failed; keeping all candidates: ${innerErr}`
-          );
-          for (const c of g.candidates) {
-            decisions.push(buildGroupDecision(g, c, 'keep', null));
-          }
+        for (const c of g.candidates) {
+          decisions.push(buildGroupDecision(g, c, 'keep', null));
         }
+        fallbacksUsed++;
       }
       processedGroups++;
       onProgress('smartCuration', 'progress', `${processedGroups}/${totalGroups} groups`);
