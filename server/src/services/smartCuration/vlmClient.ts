@@ -282,6 +282,7 @@ async function callAnthropic(req: VLMRequest): Promise<VLMResponse> {
   const response = await client.messages.create({
     model,
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    temperature: 0,
     messages: [{ role: 'user', content }],
   });
 
@@ -348,6 +349,7 @@ async function callDashscope(req: VLMRequest): Promise<VLMResponse> {
   const response = await client.chat.completions.create({
     model,
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    temperature: 0,
     messages: [{ role: 'user', content }],
   });
 
@@ -447,6 +449,7 @@ async function callOpenAI(req: VLMRequest): Promise<VLMResponse> {
   const response = await client.chat.completions.create({
     model,
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    temperature: 0,
     messages: [{ role: 'user', content }],
   });
 
