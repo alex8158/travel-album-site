@@ -228,6 +228,11 @@ TEST 2 — SUBJECT EXPOSURE ("low_subject_quality"):
   Look at ONLY the subject (ignore the background/water).
   - Is the subject a dark silhouette where you cannot see its details/colors? → TRASH
   - Are highlights on the subject blown to pure white with no texture? → TRASH
+    **CRITICAL for underwater flash photos**: If a white/light-colored subject
+    (nudibranch, anemone, coral) has areas that are PURE WHITE with ZERO texture
+    or detail visible, that is overexposure from flash — TRASH it. Compare: a
+    properly exposed white subject still shows subtle color gradients, patterns,
+    or surface texture. An overexposed one is a featureless white blob.
   - Is the subject heavily cut off at frame edge or buried behind occlusion? → TRASH
 
 TEST 3 — COMPOSITION ("low_aesthetic_quality"):
