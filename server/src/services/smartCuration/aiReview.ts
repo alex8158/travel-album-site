@@ -38,6 +38,8 @@ import type {
   CurationDecision,
   TrashReason,
 } from './smartCurationEngine';
+import type { VLMCallStats } from '../pipeline/types';
+import { recordVLMSuccess, recordVLMFailure, recordVLMSkippedStage } from '../pipeline/types';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -58,6 +60,8 @@ export interface AIReviewOptions {
     status: 'start' | 'progress' | 'complete',
     detail?: string
   ) => void;
+  /** Shared VLM call stats tracker — incremented in real-time during VLM calls. */
+  vlmCallStats?: VLMCallStats;
 }
 
 /** Trash reasons the VLM is allowed to emit during the review pass. */
@@ -424,12 +428,14 @@ export async function runAIReview(
   options?: AIReviewOptions
 ): Promise<AIReviewResult> {
   const onProgress = options?.onProgress ?? (() => {});
+  const vlmTracker = options?.vlmCallStats ?? null;
 
   onProgress('aiReview', 'start');
 
   const candidates = loadActiveCandidates(tripId);
 
   if (candidates.length === 0) {
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'aiReview');
     onProgress('aiReview', 'complete', '0 photos');
     return {
       totalProcessed: 0,
@@ -445,6 +451,7 @@ export async function runAIReview(
   // the conservative policy and we cannot evaluate without a model.
   if (!isVLMAvailable()) {
     console.warn('[aiReview] No VLM provider configured — skipping AI review');
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'aiReview');
     onProgress('aiReview', 'complete', 'skipped: no VLM provider');
     return {
       totalProcessed: candidates.length,
@@ -489,11 +496,28 @@ export async function runAIReview(
     let batchDecisions: BatchDecision[];
     if (result.status === 'fulfilled') {
       vlmCallsMade++;
+      if (vlmTracker) recordVLMSuccess(vlmTracker, 'aiReview');
       batchDecisions = result.value;
     } else {
       vlmCallsFailed++;
       const msg =
         result.reason instanceof Error ? result.reason.message : String(result.reason);
+      // Categorize failure for the shared tracker
+      if (vlmTracker) {
+        const lower = msg.toLowerCase();
+        if (lower.includes('parse') || lower.includes('failed to parse')) {
+          recordVLMFailure(vlmTracker, 'aiReview', 'parse');
+        } else if (lower.includes('timeout') || lower.includes('timed out')) {
+          recordVLMFailure(vlmTracker, 'aiReview', 'timeout');
+        } else if (
+          lower.includes('401') || lower.includes('403') ||
+          lower.includes('authentication') || lower.includes('unauthorized')
+        ) {
+          recordVLMFailure(vlmTracker, 'aiReview', 'auth');
+        } else {
+          recordVLMFailure(vlmTracker, 'aiReview', 'other');
+        }
+      }
       console.warn(
         `[aiReview] Batch ${b + 1}/${totalBatches} failed, keeping all ${batch.length} photos: ${msg}`
       );

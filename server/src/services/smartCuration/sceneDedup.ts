@@ -53,6 +53,8 @@ import type {
   CurationDecision,
   TrashReason,
 } from './smartCurationEngine';
+import type { VLMCallStats } from '../pipeline/types';
+import { recordVLMSuccess, recordVLMFailure, recordVLMSkippedStage } from '../pipeline/types';
 
 /**
  * Mirrors the (non-exported) EmbeddingResult type from mlQualityService.
@@ -87,6 +89,8 @@ export interface SceneDedupOptions {
     status: 'start' | 'progress' | 'complete',
     detail?: string
   ) => void;
+  /** Shared VLM call stats tracker — incremented in real-time during VLM calls. */
+  vlmCallStats?: VLMCallStats;
 }
 
 /** Trash reasons accepted from the VLM in this stage. */
@@ -725,12 +729,14 @@ export async function runSceneDedup(
   options?: SceneDedupOptions
 ): Promise<SceneDedupResult> {
   const onProgress = options?.onProgress ?? (() => {});
+  const vlmTracker = options?.vlmCallStats ?? null;
 
   onProgress('sceneDedup', 'start');
 
   const candidates = loadActiveCandidates(tripId);
 
   if (candidates.length === 0) {
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'sceneDedup');
     onProgress('sceneDedup', 'complete', '0 photos');
     return {
       totalProcessed: 0,
@@ -746,6 +752,7 @@ export async function runSceneDedup(
 
   if (!isVLMAvailable()) {
     console.warn('[sceneDedup] No VLM provider configured — skipping scene dedup');
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'sceneDedup');
     onProgress('sceneDedup', 'complete', 'skipped: no VLM provider');
     return {
       totalProcessed: candidates.length,
@@ -760,6 +767,7 @@ export async function runSceneDedup(
   }
 
   if (candidates.length < 2) {
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'sceneDedup');
     onProgress('sceneDedup', 'complete', '1 photo, no dedup needed');
     return {
       totalProcessed: candidates.length,
@@ -840,9 +848,26 @@ export async function runSceneDedup(
       try {
         batchDecisions = await evaluateBatch(batch);
         vlmCallsMade++;
+        if (vlmTracker) recordVLMSuccess(vlmTracker, 'sceneDedup');
       } catch (err) {
         vlmCallsFailed++;
         const msg = err instanceof Error ? err.message : String(err);
+        // Categorize failure for the shared tracker
+        if (vlmTracker) {
+          const lower = msg.toLowerCase();
+          if (lower.includes('parse') || lower.includes('failed to parse')) {
+            recordVLMFailure(vlmTracker, 'sceneDedup', 'parse');
+          } else if (lower.includes('timeout') || lower.includes('timed out')) {
+            recordVLMFailure(vlmTracker, 'sceneDedup', 'timeout');
+          } else if (
+            lower.includes('401') || lower.includes('403') ||
+            lower.includes('authentication') || lower.includes('unauthorized')
+          ) {
+            recordVLMFailure(vlmTracker, 'sceneDedup', 'auth');
+          } else {
+            recordVLMFailure(vlmTracker, 'sceneDedup', 'other');
+          }
+        }
         console.warn(
           `[sceneDedup] Batch ${b + 1}/${batches.length} failed (size=${batch.length}), ` +
           `keeping all photos: ${msg}`

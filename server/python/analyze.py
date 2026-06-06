@@ -115,6 +115,207 @@ def softmax(scores):
 # ---------------------------------------------------------------------------
 
 
+def detect_subject_overexposure(
+    image_path,
+    v_threshold=245,
+    s_threshold=45,
+    min_area_ratio=0.006,
+    max_area_ratio=0.015,
+    severe_total_area_ratio=0.012,
+    min_component_pixels=300,
+    center_weight=1.5,
+    texture_gradient_threshold=5.0,
+):
+    """Detect overexposed subjects using multi-criteria analysis.
+
+    Detection criteria (ALL must be met for a qualifying region):
+    1. HSV V >= v_threshold (very bright)
+    2. HSV S <= s_threshold (low saturation / near-white)
+    3. Local Sobel gradient std < texture_gradient_threshold (featureless/detail-lost)
+    4. Connected component area >= min_component_pixels
+
+    Anti-false-positive guards:
+    - Bright sand/seafloor: has texture (gradient > threshold), excluded
+    - Water surface reflections: typically small/scattered, fails area threshold
+    - Bubbles: small components, fails area threshold
+    - Specular highlights: tiny, fails area threshold
+
+    Center weighting: Components overlapping center 60% of image contribute
+    center_weight (1.5x) to area ratio.
+
+    Returns dict with severity, subjectOverexposed, largestRegionRatio,
+    totalBrightArea, numQualifyingRegions, overexposureReason, qualityPenalty.
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return {
+                "severity": "none",
+                "subjectOverexposed": False,
+                "largestRegionRatio": None,
+                "totalBrightArea": 0.0,
+                "numQualifyingRegions": 0,
+                "overexposureReason": None,
+                "qualityPenalty": 0.0,
+            }
+
+        height, width = img.shape[:2]
+        total_pixels = height * width
+
+        # Convert to HSV
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        v_channel = hsv[:, :, 2]
+        s_channel = hsv[:, :, 1]
+
+        # Criterion 1 & 2: V >= v_threshold AND S <= s_threshold
+        bright_mask = (v_channel >= v_threshold) & (s_channel <= s_threshold)
+
+        # Criterion 3: Sobel gradient std < texture_gradient_threshold
+        # Compute Sobel gradient magnitude on grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        gradient_magnitude = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
+
+        # Connected component analysis on the bright_mask
+        bright_mask_uint8 = bright_mask.astype(np.uint8) * 255
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            bright_mask_uint8, connectivity=8
+        )
+
+        # Define center 60% region
+        center_x_start = int(width * 0.2)
+        center_x_end = int(width * 0.8)
+        center_y_start = int(height * 0.2)
+        center_y_end = int(height * 0.8)
+
+        qualifying_regions = []
+        largest_region_pixels = 0
+
+        # Skip label 0 (background)
+        for label_id in range(1, num_labels):
+            component_area = stats[label_id, cv2.CC_STAT_AREA]
+
+            # Criterion 4: minimum component size
+            if component_area < min_component_pixels:
+                continue
+
+            # Criterion 3: check texture within this component
+            # Use eroded mask to exclude boundary pixels (edges have high
+            # gradient from the transition, not from internal texture)
+            component_mask = (labels == label_id).astype(np.uint8)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            eroded_mask = cv2.erode(component_mask, kernel, iterations=1)
+            interior_pixels = eroded_mask > 0
+
+            # If erosion removes all pixels (very thin component), use original
+            if np.sum(interior_pixels) < 10:
+                interior_pixels = component_mask > 0
+
+            component_gradients = gradient_magnitude[interior_pixels]
+            gradient_std = float(np.std(component_gradients))
+
+            if gradient_std >= texture_gradient_threshold:
+                # Textured region — anti-false-positive exclusion
+                continue
+
+            # This component qualifies
+            # Determine center weighting
+            comp_x = stats[label_id, cv2.CC_STAT_LEFT]
+            comp_y = stats[label_id, cv2.CC_STAT_TOP]
+            comp_w = stats[label_id, cv2.CC_STAT_WIDTH]
+            comp_h = stats[label_id, cv2.CC_STAT_HEIGHT]
+
+            # Check if component overlaps with center 60%
+            overlaps_center = (
+                comp_x < center_x_end
+                and (comp_x + comp_w) > center_x_start
+                and comp_y < center_y_end
+                and (comp_y + comp_h) > center_y_start
+            )
+
+            weight = center_weight if overlaps_center else 1.0
+            weighted_area = component_area * weight
+
+            qualifying_regions.append({
+                "pixels": component_area,
+                "weighted_pixels": weighted_area,
+                "overlaps_center": overlaps_center,
+            })
+
+            if component_area > largest_region_pixels:
+                largest_region_pixels = component_area
+
+        num_qualifying = len(qualifying_regions)
+
+        if num_qualifying == 0:
+            return {
+                "severity": "none",
+                "subjectOverexposed": False,
+                "largestRegionRatio": None,
+                "totalBrightArea": 0.0,
+                "numQualifyingRegions": 0,
+                "overexposureReason": None,
+                "qualityPenalty": 0.0,
+            }
+
+        # Compute area ratios
+        total_weighted_area = sum(r["weighted_pixels"] for r in qualifying_regions)
+        total_area_ratio = total_weighted_area / total_pixels
+        largest_region_ratio = largest_region_pixels / total_pixels
+
+        # Check if any single component exceeds max_area_ratio
+        any_single_severe = any(
+            (r["pixels"] / total_pixels) > max_area_ratio
+            for r in qualifying_regions
+        )
+
+        # Severity classification
+        if total_area_ratio >= severe_total_area_ratio or any_single_severe:
+            severity = "severe"
+        elif total_area_ratio >= min_area_ratio:
+            severity = "mild"
+        else:
+            severity = "none"
+
+        subject_overexposed = severity in ("mild", "severe")
+
+        # Quality penalty: -0.15 for mild, 0 for none/severe
+        if severity == "mild":
+            quality_penalty = -0.15
+        else:
+            quality_penalty = 0.0
+
+        overexposure_reason = (
+            "subject_highlight_clipped" if subject_overexposed else None
+        )
+
+        return {
+            "severity": severity,
+            "subjectOverexposed": subject_overexposed,
+            "largestRegionRatio": round(float(largest_region_ratio), 6),
+            "totalBrightArea": round(float(total_area_ratio), 6),
+            "numQualifyingRegions": num_qualifying,
+            "overexposureReason": overexposure_reason,
+            "qualityPenalty": quality_penalty,
+        }
+
+    except Exception as exc:
+        print(
+            f"Subject overexposure detection failed for {image_path}: {exc}",
+            file=sys.stderr,
+        )
+        return {
+            "severity": "none",
+            "subjectOverexposed": False,
+            "largestRegionRatio": None,
+            "totalBrightArea": 0.0,
+            "numQualifyingRegions": 0,
+            "overexposureReason": None,
+            "qualityPenalty": 0.0,
+        }
+
+
 def detect_overexposure(image_path, overexposure_threshold=0.40):
     """Detect overexposure using histogram analysis.
 
@@ -522,6 +723,17 @@ def cmd_analyze(args):
     start_time = time.time()
     args.images = _resolve_images(args)
 
+    # Log received subject overexposure thresholds
+    print(
+        f"[analyze] overexposure thresholds: V={args.subject_v_threshold}, "
+        f"S={args.subject_s_threshold}, minArea={args.min_area_ratio}, "
+        f"maxArea={args.max_area_ratio}, "
+        f"severeTotalArea={args.severe_total_area_ratio}, "
+        f"minComponentPixels={args.min_component_pixels}, "
+        f"textureGradient={args.texture_gradient_threshold}",
+        file=sys.stderr,
+    )
+
     # Load model
     model_load_start = time.time()
     model, processor = load_model(args.model_dir)
@@ -540,6 +752,7 @@ def cmd_analyze(args):
             "blur_score": None,
             "overexposure_status": "unknown",
             "overexposure_ratio": None,
+            "subject_overexposure": None,
         }
 
         # CLIP classification (independent of blur detection)
@@ -580,6 +793,26 @@ def cmd_analyze(args):
             print(f"Overexposure detection failed for {image_path}: {exc}",
                   file=sys.stderr)
             result["overexposure_error"] = str(exc)
+
+        # Subject-level overexposure detection
+        try:
+            subject_result = detect_subject_overexposure(
+                image_path,
+                v_threshold=args.subject_v_threshold,
+                s_threshold=args.subject_s_threshold,
+                min_area_ratio=args.min_area_ratio,
+                max_area_ratio=args.max_area_ratio,
+                severe_total_area_ratio=args.severe_total_area_ratio,
+                min_component_pixels=args.min_component_pixels,
+                texture_gradient_threshold=args.texture_gradient_threshold,
+            )
+            result["subject_overexposure"] = subject_result
+        except Exception as exc:
+            print(
+                f"Subject overexposure detection failed for {image_path}: {exc}",
+                file=sys.stderr,
+            )
+            result["subject_overexposure"] = None
 
         results.append(result)
 
@@ -844,6 +1077,34 @@ def build_parser():
     analyze_parser.add_argument(
         "--overexposure-threshold", type=float, default=0.40,
         help="Overexposure threshold: fraction of pixels > 240 (default: 0.40)"
+    )
+    analyze_parser.add_argument(
+        "--subject-v-threshold", type=int, default=245,
+        help="HSV V-channel brightness threshold for subject overexposure (default: 245)"
+    )
+    analyze_parser.add_argument(
+        "--subject-s-threshold", type=int, default=45,
+        help="HSV S-channel low saturation threshold for subject overexposure (default: 45)"
+    )
+    analyze_parser.add_argument(
+        "--min-area-ratio", type=float, default=0.006,
+        help="Minimum connected component area ratio for subject overexposure (default: 0.006)"
+    )
+    analyze_parser.add_argument(
+        "--max-area-ratio", type=float, default=0.015,
+        help="Maximum area ratio for single component severe classification (default: 0.015)"
+    )
+    analyze_parser.add_argument(
+        "--severe-total-area-ratio", type=float, default=0.012,
+        help="Total qualifying area ratio above which severity is severe (default: 0.012)"
+    )
+    analyze_parser.add_argument(
+        "--min-component-pixels", type=int, default=300,
+        help="Minimum pixels per qualifying connected component (default: 300)"
+    )
+    analyze_parser.add_argument(
+        "--texture-gradient-threshold", type=float, default=5.0,
+        help="Sobel gradient std below this = featureless/overexposed (default: 5.0)"
     )
 
     # --- dedup subcommand ---

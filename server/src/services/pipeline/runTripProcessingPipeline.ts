@@ -24,7 +24,9 @@ import { detectJunkClip, JunkClipResult } from '../junkClipDetector';
 import { generateVersions, DEFAULT_PROFILES } from '../multiVersionGenerator';
 import { runAiScreening } from '../aiImageScreener';
 import { runAiRefinement } from '../aiImageOptimizer';
-import { runSmartCuration, runAIReview, runAIFinalDedup, runSceneDedup } from '../smartCuration';
+import { runAIReview, runAIFinalDedup, runSceneDedup } from '../smartCuration';
+import { runGlobalSimilarity } from '../smartCuration/globalSimilarity';
+import { isVLMAvailable } from '../smartCuration/vlmClient';
 import { reduce } from './resultReducer';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
@@ -33,9 +35,17 @@ import type {
   ClassificationAssessment,
   BlurAssessment,
   DedupAssessment,
+  GlobalSimilarityAssessment,
   PipelineOptions,
   PipelineResult,
   PipelineProgressCallback,
+  VLMCallStats,
+} from './types';
+import {
+  createVLMCallStatsTracker,
+  deriveVLMStatus,
+  buildVLMDiagnostic,
+  recordVLMSkippedStage,
 } from './types';
 import type { MediaItemRow } from '../../helpers/mediaItemRow';
 
@@ -237,14 +247,56 @@ async function runOverexposureStage(
     // Use Python result if available
     const pyResult = pythonResults.get(ctx.mediaId);
     if (pyResult && !pyResult.overexposureError && pyResult.overexposureStatus !== 'unknown') {
+      // First check global overexposure (>40% pixels above 240)
+      if (pyResult.overexposureStatus === 'overexposed') {
+        ctx.overexposure = {
+          overexposureStatus: 'overexposed',
+          overexposureRatio: pyResult.overexposureRatio,
+          qualityPenalty: 0,
+        };
+        continue;
+      }
+
+      // Now check subject-level overexposure
+      if (pyResult.subjectOverexposure) {
+        const { severity, qualityPenalty, largestRegionRatio } = pyResult.subjectOverexposure;
+        if (severity === 'severe') {
+          ctx.overexposure = {
+            overexposureStatus: 'overexposed',
+            overexposureRatio: largestRegionRatio,
+            qualityPenalty: 0,
+          };
+        } else if (severity === 'mild') {
+          ctx.overexposure = {
+            overexposureStatus: 'normal',
+            overexposureRatio: largestRegionRatio,
+            qualityPenalty: qualityPenalty,
+          };
+        } else {
+          // severity === 'none'
+          ctx.overexposure = {
+            overexposureStatus: 'normal',
+            overexposureRatio: pyResult.overexposureRatio,
+            qualityPenalty: 0,
+          };
+        }
+        continue;
+      }
+
+      // Subject detection was not available but global check passed
       ctx.overexposure = {
         overexposureStatus: pyResult.overexposureStatus,
         overexposureRatio: pyResult.overexposureRatio,
+        qualityPenalty: 0,
       };
       continue;
     }
 
     // Python unavailable or failed — do a quick Node.js fallback using sharp
+    // (global pixel brightness check using overexposureGlobalRatio from PROCESS_THRESHOLDS)
+    if (pyResult?.overexposureError || pyResult?.subjectOverexposure === null) {
+      console.warn(`[overexposure] OpenCV/decode failure for ${ctx.mediaId}, falling back to sharp global brightness check`);
+    }
     try {
       const sharp = (await import('sharp')).default;
       const { data, info } = await sharp(ctx.localPath)
@@ -258,15 +310,16 @@ async function runOverexposureStage(
         if (data[i] > 240) overexposedPixels++;
       }
       const ratio = totalPixels > 0 ? overexposedPixels / totalPixels : 0;
-      const THRESHOLD = 0.40;
+      const THRESHOLD = PROCESS_THRESHOLDS.overexposureGlobalRatio;
 
       ctx.overexposure = {
         overexposureStatus: ratio >= THRESHOLD ? 'overexposed' : 'normal',
         overexposureRatio: Math.round(ratio * 10000) / 10000,
+        qualityPenalty: 0,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      ctx.overexposure = { overexposureStatus: 'unknown', overexposureRatio: null, error: msg };
+      ctx.overexposure = { overexposureStatus: 'unknown', overexposureRatio: null, qualityPenalty: 0, error: msg };
     }
   }
 
@@ -437,12 +490,20 @@ export async function runTripProcessingPipeline(
 
   let contexts: ImageProcessContext[] = [];
   let dedupAssessment: DedupAssessment | null = null;
+  const vlmCallStats = createVLMCallStatsTracker();
 
   try {
     const pipelineStart = Date.now();
 
     // ---- Stage: collectInputs ----
     console.log(`[pipeline] ===== START trip=${tripId} =====`);
+    console.log(
+      `[pipeline] thresholds: blur=${PROCESS_THRESHOLDS.blurThreshold}, overexposureGlobal=${PROCESS_THRESHOLDS.overexposureGlobalRatio}, ` +
+      `overexposureSubjectV=${PROCESS_THRESHOLDS.overexposureSubjectVThreshold}, overexposureSubjectS=${PROCESS_THRESHOLDS.overexposureSubjectSThreshold}, ` +
+      `overexposureSevereTotalArea=${PROCESS_THRESHOLDS.overexposureSubjectSevereTotalAreaRatio}, ` +
+      `dinov2Confirmed=${PROCESS_THRESHOLDS.dinov2ConfirmedThreshold}, dinov2GrayLow=${PROCESS_THRESHOLDS.dinov2GrayLowThreshold}, dinov2Dedup=${PROCESS_THRESHOLDS.dinov2DedupThreshold}, ` +
+      `clipConfirmed=${PROCESS_THRESHOLDS.clipConfirmedThreshold}, globalSimilarityTopK=${PROCESS_THRESHOLDS.globalSimilarityTopK}`
+    );
     onProgress('collectInputs', 'start');
     let t0 = Date.now();
     try {
@@ -498,7 +559,7 @@ export async function runTripProcessingPipeline(
       console.log(`[pipeline] overexposure: ${overexposedCount} overexposed, ${overexposureTrashedCount} trashed, ${Date.now() - t0}ms`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      stageErrors.push({ stage: 'blur', error: `overexposure: ${msg}` });
+      stageErrors.push({ stage: 'overexposure', error: msg });
       console.error(`[pipeline] overexposure FAILED: ${msg} (${Date.now() - t0}ms)`);
     }
 
@@ -518,12 +579,74 @@ export async function runTripProcessingPipeline(
       onProgress('dedup', 'complete', `failed: ${msg}`);
     }
 
+    // ---- Stage: globalSimilarity ----
+    // Compute prelimActiveMediaIds: images NOT trashed by blur (blurry),
+    // severe overexposure, or hash duplicate. Then run global similarity
+    // BEFORE the final reducer so its results feed into the single reduce pass.
+    let globalSimilarityAssessment: GlobalSimilarityAssessment | null = null;
+    onProgress('globalSimilarity', 'start');
+    t0 = Date.now();
+    try {
+      const dedupRemovedSet = new Set(dedupAssessment?.removed ?? []);
+      const prelimActiveMediaIds = contexts
+        .filter((ctx) => {
+          // Exclude blurry images
+          if (ctx.blur?.blurStatus === 'blurry') return false;
+          // Exclude severely overexposed images
+          if (ctx.overexposure?.overexposureStatus === 'overexposed') return false;
+          // Exclude hash duplicates
+          if (dedupRemovedSet.has(ctx.mediaId)) return false;
+          return true;
+        })
+        .map((ctx) => ctx.mediaId);
+
+      console.log(`[pipeline] globalSimilarity: ${prelimActiveMediaIds.length} preliminary active images (from ${contexts.length} total)`);
+
+      if (prelimActiveMediaIds.length >= 2) {
+        const globalResult = await runGlobalSimilarity(tripId, prelimActiveMediaIds, {
+          onProgress: (_stage, status, detail) => {
+            onProgress('globalSimilarity', status, detail);
+          },
+          vlmStats: vlmCallStats,
+        });
+
+        // Convert GlobalSimilarityResult → GlobalSimilarityAssessment for the reducer
+        const trashedByGlobalSimilarity: string[] = [];
+        for (const cluster of globalResult.clusters) {
+          for (const mediaId of cluster.trashedMediaIds) {
+            trashedByGlobalSimilarity.push(mediaId);
+          }
+        }
+
+        if (trashedByGlobalSimilarity.length > 0) {
+          globalSimilarityAssessment = { trashed: trashedByGlobalSimilarity };
+        }
+
+        console.log(
+          `[pipeline] globalSimilarity: ${globalResult.clusters.length} clusters, ` +
+          `${trashedByGlobalSimilarity.length} trashed, ` +
+          `${globalResult.localQualityResolved} local-quality, ${globalResult.vlmResolved} vlm, ` +
+          `${globalResult.fallbackKeptAll} fallback-kept, ` +
+          `${globalResult.vlmCallsMade} VLM calls, ${Date.now() - t0}ms`
+        );
+      } else {
+        recordVLMSkippedStage(vlmCallStats, 'globalSimilarity');
+        console.log(`[pipeline] globalSimilarity: skipped (fewer than 2 preliminary active images), ${Date.now() - t0}ms`);
+      }
+      onProgress('globalSimilarity', 'complete', `${globalSimilarityAssessment?.trashed.length ?? 0} trashed`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stageErrors.push({ stage: 'globalSimilarity', error: msg });
+      console.error(`[pipeline] globalSimilarity FAILED: ${msg} (${Date.now() - t0}ms)`);
+      onProgress('globalSimilarity', 'complete', `failed: ${msg}`);
+    }
+
     // ---- Stage: reduce ----
     let decisions: ReturnType<typeof reduce> = [];
     onProgress('reduce', 'start');
     t0 = Date.now();
     try {
-      decisions = reduce(contexts, dedupAssessment);
+      decisions = reduce(contexts, dedupAssessment, globalSimilarityAssessment);
       // Sanity check: decisions should have unique mediaIds
       const uniqueIds = new Set(decisions.map(d => d.mediaId));
       if (uniqueIds.size !== decisions.length) {
@@ -562,53 +685,6 @@ export async function runTripProcessingPipeline(
       onProgress('write', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Stage: smartCuration (global similarity grouping — opt-in) ----
-    // Global similarity grouping using DINOv2 + VLM selection. Disabled by
-    // default (SMART_CURATION_GLOBAL_GROUPING=true to enable). When enabled,
-    // runs BEFORE sceneDedup so that cross-batch similar photos are grouped
-    // and deduplicated first, then sceneDedup handles within-batch scene
-    // redundancy.
-    //
-    // Threshold env vars (used by similarityGrouper):
-    //   SMART_CURATION_EXACT_THRESHOLD  (default 0.94)
-    //   SMART_CURATION_NEAR_THRESHOLD   (default 0.88)
-    //   SMART_CURATION_STRONG_THRESHOLD (default 0.92)
-    const globalGroupingEnabled = process.env.SMART_CURATION_GLOBAL_GROUPING !== 'false';
-    // Read threshold env vars (consumed by similarityGrouper downstream)
-    // TODO: Pass thresholds to runSmartCuration once SmartCurationOptions supports them
-    const _exactThreshold = parseFloat(process.env.SMART_CURATION_EXACT_THRESHOLD || '0.94');
-    const _nearThreshold = parseFloat(process.env.SMART_CURATION_NEAR_THRESHOLD || '0.88');
-    const _strongThreshold = parseFloat(process.env.SMART_CURATION_STRONG_THRESHOLD || '0.92');
-
-    if (globalGroupingEnabled) {
-      onProgress('smartCuration', 'start');
-      t0 = Date.now();
-      console.log(
-        `[pipeline] smartCuration (global grouping) enabled — ` +
-        `thresholds: exact=${_exactThreshold}, near=${_nearThreshold}, strong=${_strongThreshold}`
-      );
-      try {
-        const curationResult = await runSmartCuration(tripId, {
-          onProgress: (_stage, status, detail) => {
-            onProgress('smartCuration', status, detail);
-          },
-        });
-        console.log(
-          `[pipeline] smartCuration: ${curationResult.totalTrashed} trashed from ` +
-          `${curationResult.totalProcessed} images, ${curationResult.groupsProcessed} groups, ` +
-          `${curationResult.vlmCallsMade} VLM calls, ${Date.now() - t0}ms`
-        );
-        onProgress('smartCuration', 'complete', `${curationResult.totalTrashed} trashed`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        stageErrors.push({ stage: 'smartCuration', error: msg });
-        console.error(`[pipeline] smartCuration FAILED: ${msg} (${Date.now() - t0}ms)`);
-        onProgress('smartCuration', 'complete', `failed: ${msg}`);
-      }
-    } else {
-      console.log(`[pipeline] smartCuration (global grouping) skipped — SMART_CURATION_GLOBAL_GROUPING not enabled`);
-    }
-
     // ---- Stage: aiReview (per-photo quality screening) ----
     // First AI pass: each photo is judged independently against four hard
     // tests (sharpness / subject exposure / composition / video value).
@@ -621,6 +697,7 @@ export async function runTripProcessingPipeline(
         onProgress: (_stage, status, detail) => {
           onProgress('aiReview', status, detail);
         },
+        vlmCallStats,
       });
       aiReviewTrashedCount = reviewResult.totalTrashed;
       console.log(
@@ -657,6 +734,7 @@ export async function runTripProcessingPipeline(
         onProgress: (_stage, status, detail) => {
           onProgress('sceneDedup', status, detail);
         },
+        vlmCallStats,
       });
       sceneDedupTrashedCount = sceneResult.totalTrashed;
       console.log(
@@ -673,13 +751,63 @@ export async function runTripProcessingPipeline(
       onProgress('sceneDedup', 'complete', `failed: ${msg}`);
     }
 
-    // ---- Compute stats from decisions ----
-    const blurryDeletedCount = decisions.filter(
-      d => d.finalStatus === 'trashed' && d.trashedReasons.includes('blur')
-    ).length;
-    const dedupDeletedCount = decisions.filter(
-      d => d.finalStatus === 'trashed' && d.trashedReasons.includes('duplicate')
-    ).length;
+    // ---- Stage: aiRefinement (optional) ----
+    // Third post-reducer AI stage: per-photo refinement (which doubles
+    // as a final keep/trash check). Needs a VLM provider; the gate
+    // accepts any of dashscope / anthropic / bedrock that vlmClient supports.
+    // Runs AFTER sceneDedup per design: writeDecisions → aiReview → sceneDedup → aiRefinement
+    const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
+    const vlmConfiguredForRefinement =
+      !!process.env.DASHSCOPE_API_KEY ||
+      !!process.env.ANTHROPIC_API_KEY ||
+      !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
+      !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
+      !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
+    let aiRefinementTrashedCount = 0;
+    if (aiRefinementEnabled && vlmConfiguredForRefinement) {
+      onProgress('aiRefinement', 'start');
+      t0 = Date.now();
+      try {
+        const refinementResult = await runAiRefinement(tripId, { vlmCallStats });
+        aiRefinementTrashedCount = refinementResult.trashedCount;
+        console.log(
+          `[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ` +
+          `${refinementResult.trashedCount} trashed, ${refinementResult.skippedCount} skipped, ` +
+          `${refinementResult.errorCount} errors, ${Date.now() - t0}ms`
+        );
+        onProgress(
+          'aiRefinement',
+          'complete',
+          `${refinementResult.optimizedCount} refined / ${refinementResult.trashedCount} trashed`
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'aiRefinement', error: msg });
+        onProgress('aiRefinement', 'complete', `failed: ${msg}`);
+      }
+    } else {
+      recordVLMSkippedStage(vlmCallStats, 'aiRefinement');
+    }
+
+    // ---- Compute stats from decisions (Constraint 6: primary trash reason) ----
+    // Pre-reducer counts use the PRIMARY trash reason (first entry in trashedReasons).
+    // Priority order: blur > overexposure > duplicate > global_similarity.
+    // Each image is counted under its primary reason only — no double-counting.
+    let blurryDeletedCount = 0;
+    let overexposureDeletedCount = 0;
+    let dedupDeletedCount = 0;
+    let globalSimilarityTrashedCount = 0;
+    for (const d of decisions) {
+      if (d.finalStatus === 'trashed' && d.trashedReasons.length > 0) {
+        const primaryReason = d.trashedReasons[0];
+        switch (primaryReason) {
+          case 'blur': blurryDeletedCount++; break;
+          case 'overexposure': overexposureDeletedCount++; break;
+          case 'duplicate': dedupDeletedCount++; break;
+          case 'global_similarity': globalSimilarityTrashedCount++; break;
+        }
+      }
+    }
     const classifiedCount = decisions.filter(
       d => d.finalCategory !== null
     ).length;
@@ -730,40 +858,6 @@ export async function runTripProcessingPipeline(
     }
     console.log(`[pipeline] optimize: ${optimizedCount} optimized, ${failedCount} failed, ${Date.now() - t0}ms`);
     onProgress('optimize', 'complete', `${optimizedCount} optimized`);
-
-    // ---- Stage: aiRefinement (optional) ----
-    // Runs the second AI screening pass + per-photo refinement (which doubles
-    // as a final keep/trash check). Both stages need a VLM provider; the gate
-    // accepts any of dashscope / anthropic / bedrock that vlmClient supports
-    // so this stage works regardless of which provider the deployment chose.
-    const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
-    const vlmConfiguredForRefinement =
-      !!process.env.DASHSCOPE_API_KEY ||
-      !!process.env.ANTHROPIC_API_KEY ||
-      !!process.env.AWS_BEARER_TOKEN_BEDROCK ||
-      !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
-      !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL);
-    if (aiRefinementEnabled && vlmConfiguredForRefinement) {
-      onProgress('aiRefinement', 'start');
-      t0 = Date.now();
-      try {
-        const refinementResult = await runAiRefinement(tripId);
-        console.log(
-          `[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ` +
-          `${refinementResult.trashedCount} trashed, ${refinementResult.skippedCount} skipped, ` +
-          `${refinementResult.errorCount} errors, ${Date.now() - t0}ms`
-        );
-        onProgress(
-          'aiRefinement',
-          'complete',
-          `${refinementResult.optimizedCount} refined / ${refinementResult.trashedCount} trashed`
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        stageErrors.push({ stage: 'aiRefinement', error: msg });
-        onProgress('aiRefinement', 'complete', `failed: ${msg}`);
-      }
-    }
 
     // thumbnail
     onProgress('thumbnail', 'start');
@@ -1056,6 +1150,30 @@ export async function runTripProcessingPipeline(
 
     const skippedCount = dedupAssessment?.skippedIndices.length ?? 0;
 
+    // ---- Compute VLM status ----
+    const vlmEnabled = process.env.AI_REVIEW_ENABLED !== 'false';
+    const vlmAvailable = isVLMAvailable();
+    const vlmStatus = deriveVLMStatus(vlmCallStats, vlmEnabled, vlmAvailable);
+    vlmCallStats.diagnostic = buildVLMDiagnostic(vlmCallStats, vlmEnabled, vlmAvailable);
+
+    // ---- Compute final active/trashed counts from DB (Constraint 4: after all stages) ----
+    const activeCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'active'"
+    ).get(tripId) as { cnt: number }).cnt;
+    const trashedCount = (db.prepare(
+      "SELECT COUNT(*) as cnt FROM media_items WHERE trip_id = ? AND media_type = 'image' AND status = 'trashed'"
+    ).get(tripId) as { cnt: number }).cnt;
+
+    // ---- Completion summary log (Constraint 7) ----
+    // This log MUST appear even if the pipeline completes with errors.
+    console.log(
+      `[pipeline] ===== SUMMARY trip=${tripId} =====\n` +
+      `  blur=${blurryDeletedCount}, overexposure=${overexposureDeletedCount}, dedup=${dedupDeletedCount},\n` +
+      `  globalSimilarity=${globalSimilarityTrashedCount}, aiReview=${aiReviewTrashedCount}, sceneDedup=${sceneDedupTrashedCount},\n` +
+      `  vlmStatus=${vlmStatus}, vlmCalls=${vlmCallStats.totalCalls}, vlmFailed=${vlmCallStats.failedCalls}, vlmParseFailures=${vlmCallStats.parseFailures},\n` +
+      `  finalActive=${activeCount}, finalTrashed=${trashedCount}, total=${totalImages}`
+    );
+
     console.log(`[pipeline] ===== DONE trip=${tripId} total=${Date.now() - pipelineStart}ms blur=${blurryDeletedCount} dedup=${dedupDeletedCount} errors=${stageErrors.length} =====`);
     if (stageErrors.length > 0) {
       console.log(`[pipeline] stage errors: ${stageErrors.map(e => `${e.stage}: ${e.error.slice(0, 100)}`).join('; ')}`);
@@ -1066,9 +1184,12 @@ export async function runTripProcessingPipeline(
       totalImages,
       totalVideos,
       blurryDeletedCount,
+      overexposureDeletedCount,
       dedupDeletedCount,
+      globalSimilarityTrashedCount,
       aiReviewTrashedCount,
       sceneDedupTrashedCount,
+      aiRefinementTrashedCount,
       analyzedCount,
       optimizedCount,
       classifiedCount,
@@ -1079,6 +1200,8 @@ export async function runTripProcessingPipeline(
       partialFailureCount,
       downloadFailedCount,
       coverImageId,
+      vlmStatus,
+      vlmCallStats,
     };
   } finally {
     tempCache.cleanup();

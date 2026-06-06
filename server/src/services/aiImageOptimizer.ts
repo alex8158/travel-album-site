@@ -7,6 +7,8 @@ import { getDb } from '../database';
 import { resizeForAnalysis } from './bedrockClient';
 import { callVLM, isVLMAvailable, getActiveProvider, getActiveModel } from './smartCuration/vlmClient';
 import type { TrashReason } from './smartCuration/smartCurationEngine';
+import type { VLMCallStats } from './pipeline/types';
+import { recordVLMSuccess, recordVLMFailure, recordVLMSkippedStage } from './pipeline/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -456,9 +458,13 @@ export async function applyAdjustments(
  * rest of the batch). Concurrency is bounded at 3 in-flight requests to
  * stay under per-minute rate limits.
  */
-export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchResult> {
+export async function runAiRefinement(
+  tripId: string,
+  options?: { vlmCallStats?: VLMCallStats },
+): Promise<AiOptimizeBatchResult> {
   const db = getDb();
   const storageProvider = getStorageProvider();
+  const vlmTracker = options?.vlmCallStats ?? null;
 
   // Query active images for this trip
   const activeImages = db.prepare(
@@ -476,11 +482,13 @@ export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchRe
   };
 
   if (activeImages.length === 0) {
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'aiRefinement');
     return result;
   }
 
   if (!isVLMAvailable()) {
     console.warn('[pipeline] aiRefinement: no VLM provider configured — skipping');
+    if (vlmTracker) recordVLMSkippedStage(vlmTracker, 'aiRefinement');
     result.skippedCount = activeImages.length;
     for (const image of activeImages) {
       result.results.push({
@@ -526,6 +534,7 @@ export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchRe
 
         if (!verdict) {
           // Could not parse anything — skip this image, do not delete.
+          if (vlmTracker) recordVLMFailure(vlmTracker, 'aiRefinement', 'parse');
           console.warn(
             `[pipeline] aiRefinement: failed to parse verdict for image ${image.id} ` +
             `(provider=${response.provider} model=${response.model})`
@@ -540,6 +549,9 @@ export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchRe
           });
           return;
         }
+
+        // VLM call succeeded with parseable response
+        if (vlmTracker) recordVLMSuccess(vlmTracker, 'aiRefinement');
 
         // Trash verdict — soft-delete and skip optimisation.
         if (verdict.decision === 'trash' && verdict.trashReason) {
@@ -600,6 +612,20 @@ export async function runAiRefinement(tripId: string): Promise<AiOptimizeBatchRe
       } catch (err) {
         // Error isolation: log and continue to next image
         const msg = err instanceof Error ? err.message : String(err);
+        // Categorize VLM failure for the shared tracker
+        if (vlmTracker) {
+          const lower = msg.toLowerCase();
+          if (lower.includes('timeout') || lower.includes('timed out')) {
+            recordVLMFailure(vlmTracker, 'aiRefinement', 'timeout');
+          } else if (
+            lower.includes('401') || lower.includes('403') ||
+            lower.includes('authentication') || lower.includes('unauthorized')
+          ) {
+            recordVLMFailure(vlmTracker, 'aiRefinement', 'auth');
+          } else {
+            recordVLMFailure(vlmTracker, 'aiRefinement', 'other');
+          }
+        }
         console.error(`[pipeline] aiRefinement: error processing image ${image.id}: ${msg}`);
         result.errorCount++;
         result.results.push({

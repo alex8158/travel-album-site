@@ -1,41 +1,58 @@
 import type {
   ImageProcessContext,
   DedupAssessment,
+  GlobalSimilarityAssessment,
+  TrashReason,
   PerImageFinalDecision,
 } from './types';
 
 /**
  * Merge assessments into final decisions.
  *
- * Priority: blur > duplicate.
- * If an image is both blurry AND a dedup duplicate, the primary trashed reason
- * is 'blur' (listed first). This ensures blurry images are treated as "bad shots"
- * rather than "redundant copies".
+ * Priority ordering (highest first): blur > overexposure > duplicate > global_similarity
+ *
+ * An image can have multiple trash reasons. The reasons array is ordered by priority.
+ * For example, a blurry AND overexposed image will have trashedReasons = ['blur', 'overexposure'].
  *
  * Reducer responsibilities:
- * - If blurry → add 'blur' to trashedReasons (first)
- * - If dedup removed AND not already blurry → add 'duplicate'
- * - If trashedReasons non-empty → finalStatus = 'trashed'
+ * - If blurry → add 'blur' to trashedReasons
+ * - If overexposure severity=severe → add 'overexposure' to trashedReasons
+ * - If dedup removed → add 'duplicate' to trashedReasons
+ * - If global similarity trashed → add 'global_similarity' to trashedReasons
+ * - finalStatus = 'trashed' if and only if trashedReasons.length > 0
  * - If all assessments null → active, category=other, blurStatus=suspect
  */
 export function reduce(
   contexts: ImageProcessContext[],
   dedupAssessment: DedupAssessment | null,
+  globalSimilarityAssessment: GlobalSimilarityAssessment | null,
 ): PerImageFinalDecision[] {
   const removedSet = new Set(dedupAssessment?.removed ?? []);
+  const globalTrashedSet = new Set(globalSimilarityAssessment?.trashed ?? []);
 
   return contexts.map((ctx): PerImageFinalDecision => {
-    const trashedReasons: Array<'blur' | 'duplicate'> = [];
+    const trashedReasons: TrashReason[] = [];
 
-    // Blur → trash (highest priority)
+    // 1. Blur → trash (highest priority)
     const isBlurry = ctx.blur?.blurStatus === 'blurry';
     if (isBlurry) {
       trashedReasons.push('blur');
     }
 
-    // Dedup removed → trash (only if not already blurry — blur is the primary reason)
-    if (removedSet.has(ctx.mediaId) && !isBlurry) {
+    // 2. Overexposure (severity=severe) → trash
+    const isOverexposed = ctx.overexposure?.overexposureStatus === 'overexposed';
+    if (isOverexposed) {
+      trashedReasons.push('overexposure');
+    }
+
+    // 3. Dedup removed → trash
+    if (removedSet.has(ctx.mediaId)) {
       trashedReasons.push('duplicate');
+    }
+
+    // 4. Global similarity trashed → trash (lowest priority)
+    if (globalTrashedSet.has(ctx.mediaId)) {
+      trashedReasons.push('global_similarity');
     }
 
     const finalStatus = trashedReasons.length > 0 ? 'trashed' : 'active';
@@ -48,6 +65,14 @@ export function reduce(
     const finalBlurStatus = ctx.blur?.blurStatus ?? 'suspect';
     const blurSource = ctx.blur?.source ?? null;
     const sharpnessScore = ctx.blur?.sharpnessScore ?? null;
+
+    // Overexposure severity
+    const overexposureSeverity: 'none' | 'mild' | 'severe' | undefined =
+      ctx.overexposure
+        ? ctx.overexposure.overexposureStatus === 'overexposed'
+          ? 'severe'
+          : 'none'
+        : undefined;
 
     // qualityScore is not computed in this pipeline phase
     const qualityScore: number | null = null;
@@ -64,6 +89,7 @@ export function reduce(
       finalCategory,
       finalStatus,
       trashedReasons,
+      overexposureSeverity,
       sharpnessScore,
       qualityScore,
       categorySource,

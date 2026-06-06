@@ -6,6 +6,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { getPythonPath } from '../helpers/pythonPath';
 import {
+  PROCESS_THRESHOLDS,
   CLIP_CONFIRMED_THRESHOLD,
   CLIP_GRAY_HIGH_THRESHOLD,
   CLIP_GRAY_LOW_THRESHOLD,
@@ -22,6 +23,16 @@ const execFileAsync = promisify(execFile);
 // ---------------------------------------------------------------------------
 
 export type ImageCategory = 'people' | 'animal' | 'landscape' | 'other';
+
+export interface SubjectOverexposureResult {
+  severity: 'none' | 'mild' | 'severe';
+  subjectOverexposed: boolean;
+  largestRegionRatio: number | null;
+  totalBrightArea: number;
+  numQualifyingRegions: number;
+  overexposureReason: string | null;
+  qualityPenalty: number;
+}
 
 export interface PythonAnalyzeResult {
   file: string;
@@ -45,6 +56,8 @@ export interface PythonAnalyzeResult {
   blurScore: number | null;
   overexposureStatus: 'overexposed' | 'normal' | 'unknown';
   overexposureRatio: number | null;
+  /** Subject-level overexposure detection result (null if detection failed or unavailable) */
+  subjectOverexposure: SubjectOverexposureResult | null;
 }
 
 export interface PythonDedupGroup {
@@ -270,7 +283,23 @@ async function runAnalyzeBatch(
       '--model-dir', modelDir,
       '--blur-threshold', String(blurThreshold),
       '--clear-threshold', String(clearThreshold),
+      '--subject-v-threshold', String(PROCESS_THRESHOLDS.overexposureSubjectVThreshold),
+      '--subject-s-threshold', String(PROCESS_THRESHOLDS.overexposureSubjectSThreshold),
+      '--min-area-ratio', String(PROCESS_THRESHOLDS.overexposureSubjectMinAreaRatio),
+      '--max-area-ratio', String(PROCESS_THRESHOLDS.overexposureSubjectMaxAreaRatio),
+      '--severe-total-area-ratio', String(PROCESS_THRESHOLDS.overexposureSubjectSevereTotalAreaRatio),
+      '--min-component-pixels', String(PROCESS_THRESHOLDS.overexposureMinComponentPixels),
+      '--texture-gradient-threshold', String(PROCESS_THRESHOLDS.overexposureTextureGradientThreshold),
     ];
+
+    console.log(
+      `[pythonAnalyzer] passing overexposure thresholds: ` +
+      `V=${PROCESS_THRESHOLDS.overexposureSubjectVThreshold}, S=${PROCESS_THRESHOLDS.overexposureSubjectSThreshold}, ` +
+      `minArea=${PROCESS_THRESHOLDS.overexposureSubjectMinAreaRatio}, maxArea=${PROCESS_THRESHOLDS.overexposureSubjectMaxAreaRatio}, ` +
+      `severeTotalArea=${PROCESS_THRESHOLDS.overexposureSubjectSevereTotalAreaRatio}, ` +
+      `minComponentPixels=${PROCESS_THRESHOLDS.overexposureMinComponentPixels}, ` +
+      `textureGradient=${PROCESS_THRESHOLDS.overexposureTextureGradientThreshold}`
+    );
 
     const { stdout, stderr } = await execFileAsync(getPythonPath(), args, {
       timeout: EXEC_TIMEOUT,
@@ -298,6 +327,21 @@ function mapAnalyzeResult(raw: any): PythonAnalyzeResult {
   const classifyError: string | null = raw.classify_error ?? null;
   const blurError: string | null = raw.blur_error ?? null;
   const overexposureError: string | null = raw.overexposure_error ?? null;
+
+  // Map subject_overexposure from Python output
+  let subjectOverexposure: SubjectOverexposureResult | null = null;
+  if (raw.subject_overexposure && typeof raw.subject_overexposure === 'object') {
+    subjectOverexposure = {
+      severity: raw.subject_overexposure.severity ?? 'none',
+      subjectOverexposed: raw.subject_overexposure.subjectOverexposed ?? false,
+      largestRegionRatio: raw.subject_overexposure.largestRegionRatio ?? null,
+      totalBrightArea: raw.subject_overexposure.totalBrightArea ?? 0,
+      numQualifyingRegions: raw.subject_overexposure.numQualifyingRegions ?? 0,
+      overexposureReason: raw.subject_overexposure.overexposureReason ?? null,
+      qualityPenalty: raw.subject_overexposure.qualityPenalty ?? 0,
+    };
+  }
+
   return {
     file: raw.file,
     classifyError,
@@ -311,6 +355,7 @@ function mapAnalyzeResult(raw: any): PythonAnalyzeResult {
     blurScore: raw.blur_score ?? null,
     overexposureStatus: raw.overexposure_status ?? 'unknown',
     overexposureRatio: raw.overexposure_ratio ?? null,
+    subjectOverexposure,
   };
 }
 

@@ -119,7 +119,24 @@ vi.mock('../compilationEngine', () => ({
 }));
 
 vi.mock('../dedupThresholds', () => ({
-  PROCESS_THRESHOLDS: { minImagesForDedup: 2 },
+  PROCESS_THRESHOLDS: {
+    minImagesForDedup: 2,
+    blurThreshold: 15,
+    clearThreshold: 50,
+    overexposureGlobalRatio: 0.40,
+    overexposureSubjectVThreshold: 245,
+    overexposureSubjectSThreshold: 45,
+    overexposureSubjectMinAreaRatio: 0.006,
+    overexposureSubjectMaxAreaRatio: 0.015,
+    overexposureSubjectSevereTotalAreaRatio: 0.012,
+    overexposureMinComponentPixels: 300,
+    overexposureTextureGradientThreshold: 5.0,
+    dinov2ConfirmedThreshold: 0.88,
+    dinov2GrayLowThreshold: 0.75,
+    dinov2DedupThreshold: 0.82,
+    clipConfirmedThreshold: 0.93,
+    globalSimilarityTopK: 10,
+  },
 }));
 
 // Mock fs to avoid real file system operations in collectInputs
