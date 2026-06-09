@@ -1139,7 +1139,11 @@ export async function runHighlightEvaluation(
     let batches: BatchablePhoto[][];
     try {
       const { groupBySimilarity, buildSmartBatches } = await import('./aiImageScreener');
-      const imagesForGrouping = usablePhotos.map(p => ({ id: p.id, file_path: p.filePath }));
+      // Use original storage keys (not local temp paths) since groupBySimilarity downloads internally
+      const usableIds = new Set(usablePhotos.map(p => p.id));
+      const imagesForGrouping = rawPhotos
+        .filter(r => usableIds.has(r.id))
+        .map(r => ({ id: r.id, file_path: r.file_path }));
       const groups = await groupBySimilarity(imagesForGrouping, 0.75);
       const smartBatches = buildSmartBatches(imagesForGrouping, groups, 6);
       // Map back to BatchablePhoto format
