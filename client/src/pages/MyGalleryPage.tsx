@@ -218,7 +218,7 @@ export default function MyGalleryPage() {
             }
           }
         } catch { /* ignore */ }
-      }, 25000); // Wait 25s for slideshow generation to complete
+      }, 30000); // Wait 30s for slideshow generation to complete
     } catch (err) {
       if (err instanceof HighlightsApiError) {
         if (err.status === 409) {
@@ -316,6 +316,14 @@ export default function MyGalleryPage() {
       loadTrash();
       // Load AI highlight evaluation results (best-effort, ignored if endpoint unavailable).
       fetchHighlightData();
+      // Check for latest slideshow video (auto-generated after AI evaluation)
+      authFetch(`/api/slideshow/latest?tripId=${id}`).then(async (res) => {
+        if (cancelled || !res.ok) return;
+        const job = await res.json() as { id: string; status: string };
+        if (job.status === 'completed' && job.id) {
+          setLatestSlideshowJobId(job.id);
+        }
+      }).catch(() => { /* ignore */ });
     }
     return () => { cancelled = true; };
   }, [id]);
@@ -838,16 +846,18 @@ export default function MyGalleryPage() {
                 {evaluationSummary.batchesFailed > 0
                   ? `（${evaluationSummary.batchesFailed} 批处理失败）`
                   : ''}
-                {latestSlideshowJobId && (
-                  <a
-                    href={`/api/slideshow/${latestSlideshowJobId}/download`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ marginLeft: '12px', color: '#4a90d9', textDecoration: 'underline' }}
-                  >
-                    🎬 下载精华视频
-                  </a>
-                )}
+              </p>
+            )}
+            {latestSlideshowJobId && !isEvaluating && (
+              <p style={{ margin: evaluationSummary ? '8px 0 0 0' : 0 }}>
+                <a
+                  href={`/api/slideshow/${latestSlideshowJobId}/download`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#4a90d9', textDecoration: 'underline' }}
+                >
+                  🎬 下载精华视频
+                </a>
               </p>
             )}
           </div>
