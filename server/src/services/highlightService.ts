@@ -25,6 +25,8 @@ export interface HighlightEvaluation {
   batchesFailed: number;
   /** 实际使用的（最后一个成功的）provider 标识 */
   usedProvider?: string;
+  /** Number of photos trashed by the post-VLM global survivor dedup stage */
+  globalSimilarityAfterVlmDeletedCount?: number;
 }
 
 /**
@@ -1286,6 +1288,16 @@ export async function runHighlightEvaluation(
       }
     }
 
+    // 10.5) Global survivor dedup — cross-group near-duplicate elimination
+    let globalSimilarityAfterVlmDeletedCount = 0;
+    try {
+      const { runSurvivorDedup } = await import('./smartCuration/survivorDedup');
+      const dedupResult = await runSurvivorDedup(tripId);
+      globalSimilarityAfterVlmDeletedCount = dedupResult.globalSimilarityAfterVlmDeletedCount;
+    } catch (err) {
+      console.error(`[highlightService] Global survivor dedup error: ${err}`);
+    }
+
     // 11) Auto-trash overexposed photos identified by AI.
     let overexposedTrashedCount = 0;
     if (allOverexposedIds.length > 0) {
@@ -1323,6 +1335,7 @@ export async function runHighlightEvaluation(
       batchesProcessed,
       batchesFailed,
       usedProvider,
+      globalSimilarityAfterVlmDeletedCount,
     };
   } catch (err) {
     // Don't double-mark if we already marked the job failed above.

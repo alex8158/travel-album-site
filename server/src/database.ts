@@ -742,6 +742,13 @@ function initTables(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_jobs_active ON highlight_jobs(trip_id) WHERE status = 'running';
   `);
 
+  // Migration: add dinov2_embedding column to media_items table (global-survivor-dedup)
+  try {
+    db.exec(`ALTER TABLE media_items ADD COLUMN dinov2_embedding TEXT`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();

@@ -37,6 +37,8 @@ export interface HighlightEvaluation {
   batchesProcessed: number;
   batchesFailed: number;
   usedProvider?: string;
+  /** Number of photos trashed by the post-VLM global survivor dedup stage */
+  globalSimilarityAfterVlmDeletedCount?: number;
 }
 
 /** Per-photo AI highlight evaluation result. */
