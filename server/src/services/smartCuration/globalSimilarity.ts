@@ -114,7 +114,7 @@ export function selectBestByQuality(candidates: CurationCandidate[]): string {
  * Compute the composite quality score for a candidate.
  * Formula: sharpness*0.4 + aesthetic*0.3 + exposure*0.3 + overexposureQualityPenalty
  */
-function computeCompositeScore(candidate: CurationCandidate): number {
+export function computeCompositeScore(candidate: CurationCandidate): number {
   return (
     candidate.sharpnessScore * 0.4 +
     candidate.aestheticScore * 0.3 +
