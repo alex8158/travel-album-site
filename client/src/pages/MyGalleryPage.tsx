@@ -22,16 +22,17 @@ import {
   triggerHighlightEvaluation,
   getHighlights,
   getSimilarGroups,
+  getMyTierPhotos,
   HighlightsApiError,
 } from '../api';
-import type { HighlightPhoto, SimilarGroup, HighlightEvaluation } from '../api';
+import type { HighlightPhoto, SimilarGroup, HighlightEvaluation, TierPhotoItem } from '../api';
 import type {
   GalleryData,
   TrashedItem,
   AppendMode,
 } from './GalleryPage';
 
-type FilterMode = 'all' | 'highlights' | 'similar-groups';
+type FilterMode = 'all' | 'highlights' | 'similar-groups' | 'tier';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
 type VideoTab = 'original' | 'compiled';
@@ -145,6 +146,11 @@ export default function MyGalleryPage() {
   const [selectedSimilarGroup, setSelectedSimilarGroup] = useState<SimilarGroup | null>(null);
   const [latestSlideshowJobId, setLatestSlideshowJobId] = useState<string | null>(null);
 
+  // --- Highlight Tier (精华) state ---
+  const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
+  const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
+  const [tierLoading, setTierLoading] = useState(false);
+
   async function fetchGallery() {
     if (!id) return;
     try {
@@ -195,6 +201,21 @@ export default function MyGalleryPage() {
     }
   }
 
+  async function fetchTierPhotos() {
+    if (!id) return;
+    setTierLoading(true);
+    try {
+      const result = await getMyTierPhotos(id);
+      setTierPhotos(result.photos);
+      setTierSlideshowUrl(result.slideshowUrl);
+    } catch {
+      setTierPhotos([]);
+      setTierSlideshowUrl(null);
+    } finally {
+      setTierLoading(false);
+    }
+  }
+
   async function handleTriggerHighlightEvaluation() {
     if (!id || isEvaluating) return;
     setIsEvaluating(true);
@@ -241,6 +262,13 @@ export default function MyGalleryPage() {
       if (appendTimerRef.current) clearTimeout(appendTimerRef.current);
     };
   }, []);
+
+  // Fetch tier photos when the tier tab is selected
+  useEffect(() => {
+    if (filterMode === 'tier') {
+      fetchTierPhotos();
+    }
+  }, [filterMode, id]);
 
   // --- Append media handlers ---
   const handleAppendClick = useCallback(() => {
@@ -624,6 +652,10 @@ export default function MyGalleryPage() {
         for (const memberId of g.memberPhotoIds) groupedIds.add(memberId);
       }
       base = images.filter((img) => groupedIds.has(img.item.id));
+    } else if (filterMode === 'tier') {
+      // Tier mode uses its own photo list fetched from getMyTierPhotos; return empty here
+      // The tier tab renders tierPhotos directly instead of filteredImages
+      return [];
     }
     if (activeCategory === 'all') return base;
     return base.filter((img) => {
@@ -951,7 +983,7 @@ export default function MyGalleryPage() {
       {images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
-          {(highlightCount > 0 || similarGroupedPhotoCount > 0) && (
+          {(highlightCount > 0 || similarGroupedPhotoCount > 0 || images.length > 0) && (
             <div
               data-testid="highlight-filter-tabs"
               role="radiogroup"
@@ -1011,9 +1043,26 @@ export default function MyGalleryPage() {
               >
                 🔗 相似组 ({similarGroupedPhotoCount})
               </button>
+              <button
+                onClick={() => setFilterMode('tier')}
+                role="radio"
+                aria-checked={filterMode === 'tier'}
+                data-testid="highlight-filter-tier"
+                style={{
+                  padding: '6px 16px',
+                  borderRadius: '4px',
+                  border: filterMode === 'tier' ? '2px solid #e91e63' : '1px solid #ccc',
+                  background: filterMode === 'tier' ? '#fce4ec' : '#fff',
+                  fontWeight: filterMode === 'tier' ? 'bold' : 'normal',
+                  cursor: 'pointer',
+                  color: '#c2185b',
+                }}
+              >
+                💎 精华
+              </button>
             </div>
           )}
-          <div data-testid="category-tabs" style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+          <div data-testid="category-tabs" style={{ display: filterMode === 'tier' ? 'none' : 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
             {CATEGORY_TABS.map((tab) => (
               <button
                 key={tab}
@@ -1032,7 +1081,78 @@ export default function MyGalleryPage() {
               </button>
             ))}
           </div>
-          {filteredImages.length > 0 ? (
+          {filterMode === 'tier' ? (
+            <div data-testid="tier-view">
+              {tierLoading ? (
+                <div style={{ textAlign: 'center', padding: '32px', color: '#999' }}>加载中...</div>
+              ) : tierPhotos.length === 0 ? (
+                <div data-testid="tier-empty" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
+                  暂无精华照片，请先运行精选评估
+                </div>
+              ) : (
+                <>
+                  {tierSlideshowUrl && (
+                    <div data-testid="tier-slideshow" style={{ marginBottom: '16px' }}>
+                      <video
+                        src={tierSlideshowUrl}
+                        controls
+                        style={{ width: '100%', maxHeight: '400px', borderRadius: '8px', background: '#000' }}
+                      >
+                        您的浏览器不支持视频播放
+                      </video>
+                    </div>
+                  )}
+                  <div
+                    data-testid="tier-photo-grid"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                      gap: '12px',
+                    }}
+                  >
+                    {tierPhotos.map((photo) => (
+                      <div
+                        key={photo.id}
+                        data-testid={`tier-photo-${photo.id}`}
+                        style={{
+                          borderRadius: '8px',
+                          overflow: 'hidden',
+                          border: '1px solid #eee',
+                          position: 'relative',
+                        }}
+                      >
+                        <img
+                          src={photo.thumbnailUrl}
+                          alt={photo.category || '精华照片'}
+                          style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                        />
+                        {photo.reason && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              background: 'rgba(0,0,0,0.6)',
+                              color: '#fff',
+                              padding: '4px 8px',
+                              fontSize: '0.75rem',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={photo.reason}
+                          >
+                            {photo.reason}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : filteredImages.length > 0 ? (
           <div
             data-testid="image-grid"
             style={{

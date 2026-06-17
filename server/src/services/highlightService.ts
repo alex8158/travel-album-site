@@ -945,6 +945,7 @@ export function getSimilarGroupsForTrip(tripId: string): SimilarGroup[] {
 // ---------------------------------------------------------------------------
 
 import { getStorageProvider } from '../storage/factory';
+import { runTierSelection } from './highlightTierSelector';
 
 /**
  * 显式的 service 层错误，包含 `code` 字段供 API 层映射 HTTP 状态码：
@@ -1324,6 +1325,15 @@ export async function runHighlightEvaluation(
     // 12) Log a warning if the highlight ratio drifted out of [30%, 40%].
     const ratio = computeHighlightRatio(highlightCount, totalPhotos);
     logRatioWarningIfOutOfRange(ratio);
+
+    // 13) Run highlight tier selection (精华) as the final stage.
+    //     Wrapped in try/catch so tier failure does not invalidate highlight evaluation results.
+    try {
+      const tierResult = await runTierSelection(tripId);
+      console.log(`[highlight] Tier selection completed: ${tierResult.tierCount} photos selected`);
+    } catch (err) {
+      console.error(`[highlight] Tier selection failed (non-fatal): ${err}`);
+    }
 
     markJobCompleted();
 

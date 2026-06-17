@@ -51,6 +51,13 @@ router.put('/trips/:id/media/trash', authMiddleware, requireAuth, (req: Request,
        WHERE trip_id = ? AND id IN (${placeholders}) AND status = 'active'`
     ).run(tripId, ...mediaIds);
 
+    // Cascade: clear highlight tier flag for trashed photos
+    if (result.changes > 0) {
+      db.prepare(
+        `UPDATE highlight_results SET is_highlight_tier = 0 WHERE photo_id IN (${placeholders})`
+      ).run(...mediaIds);
+    }
+
     return res.json({ trashedCount: result.changes });
   } catch (err) {
     next(err);

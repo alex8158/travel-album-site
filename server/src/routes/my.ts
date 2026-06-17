@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { getDb } from '../database';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
@@ -149,6 +151,73 @@ router.get('/trips/:id/gallery', (req: Request, res: Response) => {
 
   const galleryData = { trip, images, videos, originalVideos, compiledVideos };
   return res.json(galleryData);
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/my/trips/:id/tier-photos — Authenticated endpoint for tier photos
+// Only accessible to the trip owner or admin
+// Requirements: 7.2, 8.2, 9.3
+// ---------------------------------------------------------------------------
+router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+  const userId = req.user!.userId;
+
+  const tripRow = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!tripRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Only the owner or admin can access this endpoint
+  if (req.user!.role !== 'admin' && tripRow.user_id !== userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权访问此相册' } });
+  }
+
+  // Query tier photos (excluding trashed)
+  const photos = db
+    .prepare(
+      `SELECT mi.id, mi.file_path, mi.category, hr.reason
+       FROM highlight_results hr
+       INNER JOIN media_items mi ON mi.id = hr.photo_id
+       WHERE hr.trip_id = ?
+         AND hr.is_highlight_tier = 1
+         AND mi.status = 'active'
+       ORDER BY mi.category, mi.created_at ASC`
+    )
+    .all(tripId) as Array<{
+    id: string;
+    file_path: string;
+    category: string | null;
+    reason: string | null;
+  }>;
+
+  const tierPhotos = photos.map((row) => ({
+    id: row.id,
+    filePath: row.file_path,
+    thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    originalUrl: `/api/media/${row.id}/original`,
+    category: row.category,
+    reason: row.reason,
+  }));
+
+  // Check for tier slideshow video
+  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
+  const tierSlideshowDir = path.join(uploadsBase, tripId, 'tier-slideshow');
+  let slideshowUrl: string | null = null;
+
+  if (fs.existsSync(tierSlideshowDir)) {
+    try {
+      const files = fs.readdirSync(tierSlideshowDir);
+      const mp4File = files.find((f) => f.endsWith('.mp4'));
+      if (mp4File) {
+        slideshowUrl = `/api/trips/${tripId}/tier-slideshow/${mp4File}`;
+      }
+    } catch {
+      // Directory not readable
+    }
+  }
+
+  return res.json({ photos: tierPhotos, slideshowUrl });
 });
 
 export default router;

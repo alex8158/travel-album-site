@@ -742,6 +742,13 @@ function initTables(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_jobs_active ON highlight_jobs(trip_id) WHERE status = 'running';
   `);
 
+  // Migration: add is_highlight_tier column to highlight_results table (highlight-tier)
+  try {
+    db.exec(`ALTER TABLE highlight_results ADD COLUMN is_highlight_tier INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists — ignore for idempotency
+  }
+
   // Migration: add dinov2_embedding column to media_items table (global-survivor-dedup)
   try {
     db.exec(`ALTER TABLE media_items ADD COLUMN dinov2_embedding TEXT`);

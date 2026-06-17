@@ -1,6 +1,26 @@
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { authFetch } from './contexts/AuthContext';
 
+// ============================================================
+// Highlight Tier (精华) Types
+// ============================================================
+
+/** A single photo in the highlight tier response. */
+export interface TierPhotoItem {
+  id: string;
+  filePath: string;
+  thumbnailUrl: string;
+  originalUrl: string;
+  category: string | null;
+  reason: string | null;
+}
+
+/** Response shape for tier photos endpoints. */
+export interface TierPhotosResponse {
+  photos: TierPhotoItem[];
+  slideshowUrl: string | null;
+}
+
 export function apiPost<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
   return axios.post(url, data, config);
 }
@@ -136,4 +156,45 @@ export async function getSimilarGroups(tripId: string): Promise<SimilarGroup[]> 
   // Accept either a bare array or a wrapped { groups: [...] } / { similarGroups: [...] } object.
   if (Array.isArray(body)) return body as SimilarGroup[];
   return (body?.groups ?? body?.similarGroups ?? []) as SimilarGroup[];
+}
+
+
+// ============================================================
+// Highlight Tier (精华) API
+// ============================================================
+
+/**
+ * Fetch highlight tier photos for a trip (public endpoint).
+ *
+ * Calls `GET /api/trips/:id/tier-photos`. Returns tier photos and slideshow URL.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function getTierPhotos(tripId: string): Promise<TierPhotosResponse> {
+  try {
+    const res = await axios.get<TierPhotosResponse>(`/api/trips/${tripId}/tier-photos`);
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response) {
+      const body = error.response.data as { error?: { code?: string; message?: string } } | null;
+      const message = body?.error?.message || `请求失败（HTTP ${error.response.status}）`;
+      const code = body?.error?.code;
+      throw new HighlightsApiError(message, error.response.status, code);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Fetch highlight tier photos for a trip (authenticated endpoint for My Gallery).
+ *
+ * Calls `GET /api/my/trips/:id/tier-photos`. Returns tier photos and slideshow URL.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function getMyTierPhotos(tripId: string): Promise<TierPhotosResponse> {
+  const res = await authFetch(`/api/my/trips/${tripId}/tier-photos`);
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
+  }
+  return (await res.json()) as TierPhotosResponse;
 }

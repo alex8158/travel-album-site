@@ -4,6 +4,7 @@ import axios from 'axios';
 import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
+import { getTierPhotos } from '../api';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
 
@@ -107,6 +108,7 @@ export default function GalleryPage() {
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
+  const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
 
   const images = data?.images ?? [];
   const videos = data?.videos ?? [];
@@ -153,6 +155,27 @@ export default function GalleryPage() {
     return () => { cancelled = true; };
   }, [id]);
 
+  // Fetch tier slideshow URL for public trips
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTierSlideshow() {
+      if (!id) return;
+      try {
+        const tierData = await getTierPhotos(id);
+        if (!cancelled) {
+          setTierSlideshowUrl(tierData.slideshowUrl);
+        }
+      } catch {
+        // Silently ignore — tier data may not exist yet
+      }
+    }
+    // Only fetch once gallery data confirms the trip is public
+    if (data && data.trip.visibility !== 'unlisted') {
+      loadTierSlideshow();
+    }
+    return () => { cancelled = true; };
+  }, [id, data]);
+
   if (loading) {
     return <div role="status" aria-label="加载中">加载中...</div>;
   }
@@ -188,6 +211,21 @@ export default function GalleryPage() {
         <h1>{trip.title}</h1>
         {trip.description && <p>{trip.description}</p>}
       </header>
+
+      {tierSlideshowUrl && (
+        <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
+          <h2>精华视频</h2>
+          <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+            <video
+              src={tierSlideshowUrl}
+              controls
+              data-testid="tier-slideshow-video"
+              style={{ width: '100%', borderRadius: '8px', background: '#000' }}
+              aria-label="精华幻灯片视频"
+            />
+          </div>
+        </section>
+      )}
 
       {images.length > 0 && (
         <section aria-label="图片区域">
