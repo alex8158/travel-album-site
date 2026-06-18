@@ -1326,14 +1326,15 @@ export async function runHighlightEvaluation(
     const ratio = computeHighlightRatio(highlightCount, totalPhotos);
     logRatioWarningIfOutOfRange(ratio);
 
-    // 13) Run highlight tier selection (精华) as the final stage.
-    //     Wrapped in try/catch so tier failure does not invalidate highlight evaluation results.
-    try {
-      const tierResult = await runTierSelection(tripId);
-      console.log(`[highlight] Tier selection completed: ${tierResult.tierCount} photos selected`);
-    } catch (err) {
-      console.error(`[highlight] Tier selection failed (non-fatal): ${err}`);
-    }
+    // 13) Run highlight tier selection (精华) as fire-and-forget.
+    //     Does NOT block the response — runs in the background after evaluation returns.
+    runTierSelection(tripId)
+      .then((tierResult) => {
+        console.log(`[highlight] Tier selection completed: ${tierResult.tierCount} photos selected`);
+      })
+      .catch((err) => {
+        console.error(`[highlight] Tier selection failed (non-fatal): ${err}`);
+      });
 
     markJobCompleted();
 
