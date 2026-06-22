@@ -1031,7 +1031,7 @@ export default function MyGalleryPage() {
                   color: '#b8860b',
                 }}
               >
-                ★ 精华 ({highlightCount})
+                ★ 精选 ({highlightCount})
               </button>
               <button
                 onClick={() => setFilterMode('similar-groups')}

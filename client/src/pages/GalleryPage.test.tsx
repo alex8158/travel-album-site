@@ -305,7 +305,7 @@ describe('GalleryPage', () => {
 
       const tabs = screen.getByTestId('gallery-mode-tabs');
       expect(tabs.querySelectorAll('button')).toHaveLength(2);
-      expect(screen.getByText('全部')).toBeDefined();
+      expect(screen.getByText('精选')).toBeDefined();
       expect(screen.getByText('精华')).toBeDefined();
     });
 
@@ -319,7 +319,7 @@ describe('GalleryPage', () => {
         expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
       });
 
-      const allTab = screen.getByText('全部');
+      const allTab = screen.getByText('精选');
       expect(allTab.className).toContain('active');
       const tierTab = screen.getByText('精华');
       expect(tierTab.className).not.toContain('active');

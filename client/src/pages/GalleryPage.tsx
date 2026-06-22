@@ -240,7 +240,7 @@ export default function GalleryPage() {
       {/* Gallery mode tabs — only for public trips with highlight data */}
       {data.trip.visibility === 'public' && (
         <div className="pill-tabs" data-testid="gallery-mode-tabs">
-          <button className={`pill-tab${galleryTab === 'all' ? ' active' : ''}`} onClick={() => setGalleryTab('all')}>全部</button>
+          <button className={`pill-tab${galleryTab === 'all' ? ' active' : ''}`} onClick={() => setGalleryTab('all')}>精选</button>
           <button className={`pill-tab${galleryTab === 'tier' ? ' active' : ''}`} onClick={() => setGalleryTab('tier')}>精华</button>
         </div>
       )}
