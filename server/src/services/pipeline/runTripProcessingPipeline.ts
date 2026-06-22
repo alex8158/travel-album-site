@@ -28,6 +28,7 @@ import { runAIReview, runAIFinalDedup, runSceneDedup } from '../smartCuration';
 import { runGlobalSimilarity } from '../smartCuration/globalSimilarity';
 import { isVLMAvailable } from '../smartCuration/vlmClient';
 import { reduce } from './resultReducer';
+import { runHighlightEvaluation } from '../highlightService';
 import { writeDecisions } from './resultWriter';
 import { CompilationEngine } from '../compilationEngine';
 import type {
@@ -1177,6 +1178,18 @@ export async function runTripProcessingPipeline(
     console.log(`[pipeline] ===== DONE trip=${tripId} total=${Date.now() - pipelineStart}ms blur=${blurryDeletedCount} dedup=${dedupDeletedCount} errors=${stageErrors.length} =====`);
     if (stageErrors.length > 0) {
       console.log(`[pipeline] stage errors: ${stageErrors.map(e => `${e.stage}: ${e.error.slice(0, 100)}`).join('; ')}`);
+    }
+
+    // Auto-trigger highlight evaluation + tier selection (fire-and-forget)
+    // This runs 精选 → 精华 → slideshow generation in the background
+    if (activeCount >= 2) {
+      runHighlightEvaluation(tripId)
+        .then((result) => {
+          console.log(`[pipeline] Auto highlight evaluation completed: ${result.highlightCount} highlights selected`);
+        })
+        .catch((err) => {
+          console.error(`[pipeline] Auto highlight evaluation failed (non-fatal): ${err}`);
+        });
     }
 
     return {
