@@ -16,6 +16,7 @@ import type { ProcessResult } from '../components/ProcessTrigger';
 import ProcessingLog from '../components/ProcessingLog';
 import HighlightBadge from '../components/HighlightBadge';
 import SimilarGroupPanel from '../components/SimilarGroupPanel';
+import PhotoPicker from '../components/PhotoPicker';
 import { useAuth, authFetch } from '../contexts/AuthContext';
 import {
   updateCategory,
@@ -23,6 +24,9 @@ import {
   getHighlights,
   getSimilarGroups,
   getMyTierPhotos,
+  removeFromTier,
+  addToTier,
+  regenerateTierSlideshow,
   HighlightsApiError,
 } from '../api';
 import type { HighlightPhoto, SimilarGroup, HighlightEvaluation, TierPhotoItem } from '../api';
@@ -150,6 +154,10 @@ export default function MyGalleryPage() {
   const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
   const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
   const [tierLoading, setTierLoading] = useState(false);
+  const [emptySlots, setEmptySlots] = useState<number>(0);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [tierError, setTierError] = useState<string | null>(null);
 
   async function fetchGallery() {
     if (!id) return;
@@ -1085,12 +1093,41 @@ export default function MyGalleryPage() {
             <div data-testid="tier-view">
               {tierLoading ? (
                 <div style={{ textAlign: 'center', padding: '32px', color: '#999' }}>加载中...</div>
-              ) : tierPhotos.length === 0 ? (
+              ) : tierPhotos.length === 0 && emptySlots === 0 ? (
                 <div data-testid="tier-empty" style={{ textAlign: 'center', padding: '32px', color: '#999' }}>
                   暂无精华照片，请先运行精选评估
                 </div>
               ) : (
                 <>
+                  {/* Category quota labels (Requirement 4.3) */}
+                  <div data-testid="tier-quota-labels" style={{ display: 'flex', gap: '16px', marginBottom: '12px', flexWrap: 'wrap', fontSize: '0.9rem', color: '#555' }}>
+                    {(() => {
+                      const quotas: Record<string, { min: number; max: number; label: string }> = {
+                        animal: { min: 6, max: 9, label: '动物' },
+                        landscape: { min: 3, max: 9, label: '风景' },
+                        people: { min: 3, max: 9, label: '人物' },
+                      };
+                      const counts: Record<string, number> = {};
+                      for (const photo of tierPhotos) {
+                        const cat = photo.category || 'other';
+                        counts[cat] = (counts[cat] || 0) + 1;
+                      }
+                      return Object.entries(quotas).map(([key, { min, max, label }]) => (
+                        <span key={key} data-testid={`tier-quota-${key}`} style={{ padding: '4px 8px', background: '#f5f5f5', borderRadius: '4px' }}>
+                          {label}: {counts[key] || 0}/{min}-{max}
+                        </span>
+                      ));
+                    })()}
+                  </div>
+
+                  {/* Tier error message */}
+                  {tierError && (
+                    <div data-testid="tier-error" role="alert" style={{ color: '#d32f2f', marginBottom: '12px', padding: '8px', background: '#fdecea', borderRadius: '4px' }}>
+                      {tierError}
+                    </div>
+                  )}
+
+                  {/* Slideshow video */}
                   {tierSlideshowUrl && (
                     <div data-testid="tier-slideshow" style={{ marginBottom: '16px' }}>
                       <video
@@ -1102,6 +1139,46 @@ export default function MyGalleryPage() {
                       </video>
                     </div>
                   )}
+
+                  {/* Regenerate slideshow button (Requirements 5.1-5.5) */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <button
+                      data-testid="tier-regenerate-btn"
+                      disabled={regenerating}
+                      onClick={async () => {
+                        if (!id || regenerating) return;
+                        setRegenerating(true);
+                        setTierError(null);
+                        try {
+                          const result = await regenerateTierSlideshow(id);
+                          setTierSlideshowUrl(result.slideshowUrl);
+                        } catch (err) {
+                          const msg = err instanceof HighlightsApiError ? err.message : '视频生成失败，请重试';
+                          setTierError(msg);
+                        } finally {
+                          setRegenerating(false);
+                        }
+                      }}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '6px',
+                        border: '1px solid #e91e63',
+                        background: regenerating ? '#f5f5f5' : '#fce4ec',
+                        color: '#c2185b',
+                        cursor: regenerating ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      {regenerating && (
+                        <span data-testid="tier-regenerate-spinner" style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #e91e63', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      )}
+                      重新生成视频
+                    </button>
+                  </div>
+
+                  {/* Tier photo grid with remove buttons and empty slots */}
                   <div
                     data-testid="tier-photo-grid"
                     style={{
@@ -1126,6 +1203,47 @@ export default function MyGalleryPage() {
                           alt={photo.category || '精华照片'}
                           style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
                         />
+                        {/* Remove button overlay (Requirements 1.1-1.4) */}
+                        <button
+                          data-testid={`tier-remove-btn-${photo.id}`}
+                          aria-label="移除精华"
+                          onClick={async () => {
+                            if (!id) return;
+                            const photoToRemove = photo;
+                            // Optimistic: remove photo and add empty slot
+                            setTierPhotos((prev) => prev.filter((p) => p.id !== photoToRemove.id));
+                            setEmptySlots((prev) => prev + 1);
+                            setTierError(null);
+                            try {
+                              await removeFromTier(id, photoToRemove.id);
+                            } catch (err) {
+                              // Rollback: restore photo and remove empty slot
+                              setTierPhotos((prev) => [...prev, photoToRemove]);
+                              setEmptySlots((prev) => Math.max(0, prev - 1));
+                              const msg = err instanceof HighlightsApiError ? err.message : '移除失败，请重试';
+                              setTierError(msg);
+                            }
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: 4,
+                            right: 4,
+                            width: 28,
+                            height: 28,
+                            borderRadius: '50%',
+                            border: 'none',
+                            background: 'rgba(0,0,0,0.6)',
+                            color: '#fff',
+                            fontSize: '1rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            lineHeight: 1,
+                          }}
+                        >
+                          ×
+                        </button>
                         {photo.reason && (
                           <div
                             style={{
@@ -1148,7 +1266,58 @@ export default function MyGalleryPage() {
                         )}
                       </div>
                     ))}
+                    {/* Empty slots with + icon (Requirements 2.1, 2.3, 2.4) */}
+                    {Array.from({ length: emptySlots }).map((_, idx) => (
+                      <button
+                        key={`empty-slot-${idx}`}
+                        data-testid={`tier-empty-slot-${idx}`}
+                        aria-label="添加照片"
+                        onClick={() => {
+                          setPickerOpen(true);
+                          setTierError(null);
+                        }}
+                        style={{
+                          borderRadius: '8px',
+                          border: '2px dashed #ccc',
+                          background: '#fafafa',
+                          aspectRatio: '1',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          fontSize: '2.5rem',
+                          color: '#bbb',
+                          transition: 'border-color 0.2s, color 0.2s',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#e91e63'; e.currentTarget.style.color = '#e91e63'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#ccc'; e.currentTarget.style.color = '#bbb'; }}
+                      >
+                        +
+                      </button>
+                    ))}
                   </div>
+
+                  {/* PhotoPicker dialog */}
+                  {id && (
+                    <PhotoPicker
+                      tripId={id}
+                      open={pickerOpen}
+                      onClose={() => setPickerOpen(false)}
+                      onSelect={async (photo) => {
+                        if (!id) return;
+                        setPickerOpen(false);
+                        setTierError(null);
+                        try {
+                          const addedPhoto = await addToTier(id, photo.id);
+                          setTierPhotos((prev) => [...prev, addedPhoto]);
+                          setEmptySlots((prev) => Math.max(0, prev - 1));
+                        } catch (err) {
+                          const msg = err instanceof HighlightsApiError ? err.message : '添加失败，请重试';
+                          setTierError(msg);
+                        }
+                      }}
+                    />
+                  )}
                 </>
               )}
             </div>

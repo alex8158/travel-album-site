@@ -658,6 +658,10 @@ export function persistResults(
   const persist = db.transaction(() => {
     // 1) Wipe previous results for this trip. similar_group_members has
     //    FK ... ON DELETE CASCADE so it follows similar_groups automatically.
+    //    NOTE: Deleting all rows implicitly enforces the cascade invariant
+    //    (is_highlight_tier = 1 ⟹ is_highlight = 1) because re-inserted rows
+    //    do not include is_highlight_tier and default to 0. Tier status is
+    //    re-established separately by runTierSelection() after evaluation.
     db.prepare('DELETE FROM highlight_results WHERE trip_id = ?').run(tripId);
     db.prepare('DELETE FROM similar_groups WHERE trip_id = ?').run(tripId);
 
@@ -939,6 +943,73 @@ export function getSimilarGroupsForTrip(tripId: string): SimilarGroup[] {
   return result;
 }
 
+
+// ---------------------------------------------------------------------------
+// Cascade: clearing is_highlight auto-clears is_highlight_tier
+// ---------------------------------------------------------------------------
+
+/**
+ * Clear `is_highlight` for one or more photos, cascading `is_highlight_tier = 0`
+ * to preserve the subset invariant:
+ *   `is_highlight_tier = 1` ⟹ `is_highlight = 1`
+ *
+ * When `is_highlight` is set to 0, `is_highlight_tier` MUST also be set to 0.
+ * This function atomically performs both updates in a single statement.
+ *
+ * Use this function (or the equivalent combined UPDATE) **wherever** highlight
+ * status is removed from individual photos outside of `persistResults`
+ * (which handles the cascade implicitly via DELETE + re-INSERT).
+ *
+ * @param tripId   The trip the photos belong to
+ * @param photoIds One or more photo IDs whose highlight status should be cleared
+ *
+ * @example
+ *   // Clear highlight for a single photo
+ *   clearHighlightWithCascade('trip-1', ['photo-1']);
+ *
+ *   // Batch clear after similar-group dedup
+ *   clearHighlightWithCascade('trip-1', ['photo-2', 'photo-3']);
+ *
+ * Requirements: 10.2, 10.3
+ */
+export function clearHighlightWithCascade(tripId: string, photoIds: string[]): void {
+  if (!tripId || !Array.isArray(photoIds) || photoIds.length === 0) return;
+
+  const db = getDb();
+  const placeholders = photoIds.map(() => '?').join(',');
+
+  // Atomically clear both is_highlight and is_highlight_tier in a single UPDATE.
+  // This guarantees the subset invariant is never transiently violated.
+  db.prepare(
+    `UPDATE highlight_results
+        SET is_highlight = 0,
+            is_highlight_tier = 0,
+            reason = NULL
+      WHERE trip_id = ?
+        AND photo_id IN (${placeholders})`,
+  ).run(tripId, ...photoIds);
+}
+
+/**
+ * Clear `is_highlight_tier` for one or more photos without changing `is_highlight`.
+ *
+ * Use this when a photo remains a highlight but should be removed from the tier
+ * (e.g., when the photo is trashed — its highlight row may still exist briefly,
+ * or during manual tier removal).
+ *
+ * @param photoIds One or more photo IDs whose tier status should be cleared
+ *
+ * Requirements: 10.2
+ */
+export function clearHighlightTierForPhotos(photoIds: string[]): void {
+  if (!Array.isArray(photoIds) || photoIds.length === 0) return;
+
+  const db = getDb();
+  const placeholders = photoIds.map(() => '?').join(',');
+  db.prepare(
+    `UPDATE highlight_results SET is_highlight_tier = 0 WHERE photo_id IN (${placeholders})`,
+  ).run(...photoIds);
+}
 
 // ---------------------------------------------------------------------------
 // Orchestrator: runHighlightEvaluation
@@ -1264,6 +1335,7 @@ export async function runHighlightEvaluation(
     // 10) Auto-trash similar group non-best photos.
     //     For each similar group, keep only the bestId; trash the rest.
     let similarGroupTrashedCount = 0;
+    const similarGroupTrashedIds: string[] = [];
     if (allSimilarGroups.length > 0) {
       const trashStmt = db.prepare(
         `UPDATE media_items
@@ -1278,11 +1350,16 @@ export async function runHighlightEvaluation(
         for (const memberId of sg.memberIds) {
           if (memberId !== sg.bestId) {
             const info = trashStmt.run(memberId);
-            if (info.changes > 0) similarGroupTrashedCount++;
+            if (info.changes > 0) {
+              similarGroupTrashedCount++;
+              similarGroupTrashedIds.push(memberId);
+            }
           }
         }
       }
-      if (similarGroupTrashedCount > 0) {
+      // Cascade: clear is_highlight_tier for trashed photos (subset invariant)
+      if (similarGroupTrashedIds.length > 0) {
+        clearHighlightTierForPhotos(similarGroupTrashedIds);
         console.log(
           `[highlightService] Auto-trashed ${similarGroupTrashedCount} similar-group non-best photos for trip ${tripId}`,
         );
@@ -1311,11 +1388,17 @@ export async function runHighlightEvaluation(
              END
          WHERE id = ? AND status = 'active'`
       );
+      const overexposedTrashedIds: string[] = [];
       for (const photoId of allOverexposedIds) {
         const info = trashOverexposedStmt.run(photoId);
-        if (info.changes > 0) overexposedTrashedCount++;
+        if (info.changes > 0) {
+          overexposedTrashedCount++;
+          overexposedTrashedIds.push(photoId);
+        }
       }
-      if (overexposedTrashedCount > 0) {
+      // Cascade: clear is_highlight_tier for trashed photos (subset invariant)
+      if (overexposedTrashedIds.length > 0) {
+        clearHighlightTierForPhotos(overexposedTrashedIds);
         console.log(
           `[highlightService] Auto-trashed ${overexposedTrashedCount} overexposed photos for trip ${tripId}`,
         );

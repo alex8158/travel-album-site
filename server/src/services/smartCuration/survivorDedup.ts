@@ -20,6 +20,7 @@ import {
 import { UnionFind } from './unionFind';
 import { PROCESS_THRESHOLDS } from '../dedupThresholds';
 import { getDb } from '../../database';
+import { clearHighlightTierForPhotos } from '../highlightService';
 
 // --- Interfaces ---
 
@@ -290,6 +291,11 @@ export async function runSurvivorDedup(tripId: string): Promise<SurvivorDedupRes
     for (const id of trashedIds) {
       const info = trashStmt.run(id);
       if (info.changes > 0) actualTrashed++;
+    }
+
+    // Cascade: clear is_highlight_tier for trashed photos (subset invariant)
+    if (actualTrashed > 0) {
+      clearHighlightTierForPhotos(trashedIds);
     }
 
     // 8. Log

@@ -1,198 +1,357 @@
-# Design Document: Manual Photo Management
+# Design Document: Manual Photo Management (手动精华管理)
 
 ## Overview
 
-本设计实现"我的相册"页面中的手动照片管理功能，包括单张删除、分类更换（单张和批量）、以及从待删除区恢复。这些操作补充了 CLIP 自动分类和去重处理，让用户可以手动纠正自动处理的不准确结果。
+This feature extends the existing highlight-tier (精华) system to support manual curation. Currently, tier selection is entirely AI-driven via `runTierSelection()` in `highlightTierSelector.ts`. This design adds three capabilities:
 
-核心变更：
-- 后端新增 `PUT /api/media/:id/category` 端点用于更换分类
-- 前端在 MyGalleryPage 中为每张图片添加删除按钮和分类选择器
-- 前端多选模式下增加"更换分类"批量操作
-- 复用已有的 `PUT /api/trips/:id/media/trash`（批量删除）和 `PUT /api/media/:id/restore`（恢复）API
+1. **Manual remove/add operations** — Users can remove photos from the tier and add replacements from the highlight pool via a Photo Picker dialog in My Gallery.
+2. **Slideshow regeneration** — A "重新生成视频" button triggers re-creation of the tier slideshow video using the current (manually curated) tier photos.
+3. **Public Gallery tabs** — Visitors see "全部" (all highlights) and "精华" (tier photos + slideshow) tabs in the Public Gallery.
+
+The design preserves the existing subset invariant (`is_highlight_tier = 1` ⟹ `is_highlight = 1` AND `status = 'active'`) and treats category quotas as advisory.
 
 ## Architecture
 
 ```mermaid
-graph TD
-    A[MyGalleryPage] -->|单张删除| B[PUT /api/trips/:id/media/trash]
-    A -->|更换分类| C[PUT /api/media/:id/category]
-    A -->|批量更换分类| C
-    A -->|恢复图片| D[PUT /api/media/:id/restore]
-    B --> E[media_items 表]
-    C --> E
-    D --> E
-    A -->|刷新数据| F[GET /api/my/trips/:id/gallery]
-    A -->|刷新待删除区| G[GET /api/trips/:id/trash]
+flowchart TD
+    subgraph Frontend
+        MG["MyGalleryPage (精华 tab)"]
+        PP["PhotoPicker Dialog"]
+        PG["GalleryPage (全部/精华 tabs)"]
+    end
+
+    subgraph Backend["Server API Layer"]
+        PUT_ADD["PUT /api/my/trips/:id/tier-photos/:photoId"]
+        DEL_REM["DELETE /api/my/trips/:id/tier-photos/:photoId"]
+        POST_REGEN["POST /api/my/trips/:id/tier-slideshow/regenerate"]
+        GET_TIER["GET /api/trips/:id/tier-photos"]
+        GET_HL["GET /api/trips/:id/highlight-photos"]
+        GET_MY_TIER["GET /api/my/trips/:id/tier-photos (existing)"]
+        GET_MY_POOL["GET /api/my/trips/:id/highlight-pool"]
+    end
+
+    subgraph Services
+        DB[(SQLite - highlight_results)]
+        SG["slideshowGenerator"]
+    end
+
+    MG -->|"Remove photo"| DEL_REM
+    MG -->|"Click +"| PP
+    PP -->|"Load candidates"| GET_MY_POOL
+    PP -->|"Select photo"| PUT_ADD
+    MG -->|"重新生成视频"| POST_REGEN
+    PG -->|"全部 tab"| GET_HL
+    PG -->|"精华 tab"| GET_TIER
+
+    PUT_ADD --> DB
+    DEL_REM --> DB
+    POST_REGEN --> DB
+    POST_REGEN --> SG
+    GET_TIER --> DB
+    GET_HL --> DB
+    GET_MY_POOL --> DB
 ```
 
-前端采用乐观更新策略：分类更换成功后直接更新本地 state，无需重新拉取整个 gallery 数据。删除和恢复操作则通过 refetch gallery + trash 数据来保持一致性（与现有批量删除逻辑一致）。
+### Key Design Decisions
+
+1. **Optimistic UI with server validation** — The frontend updates the UI optimistically on remove/add, rolling back on API failure. The server is the source of truth for invariant enforcement.
+2. **Soft quotas** — Category quotas are displayed as informational labels (`"动物: 7/6-9"`) but never block add/remove operations. This gives users full creative control.
+3. **Synchronous regeneration** — The `POST /regenerate` endpoint runs slideshow generation inline and returns the new URL on success. This simplifies the frontend (no polling needed) at the cost of a longer request duration (~10-30s depending on photo count). A loading indicator communicates progress.
+4. **New highlight-photos endpoint** — A new `GET /api/trips/:id/highlight-photos` endpoint serves all highlight photos (not just tier) for the Public Gallery "全部" tab, keeping it decoupled from the existing `/gallery` endpoint logic.
 
 ## Components and Interfaces
 
-### 后端：Category API 端点
+### New API Endpoints
 
-在 `server/src/routes/trash.ts` 中新增路由（该文件已包含其他媒体状态管理路由）：
+#### 1. `PUT /api/my/trips/:id/tier-photos/:photoId` — Add photo to tier
+
+**Auth:** Required (owner or admin)
+
+**Validation:**
+- Photo belongs to the specified trip
+- `highlight_results.is_highlight = 1` for this photo
+- `media_items.status = 'active'`
+
+**Action:** Sets `is_highlight_tier = 1` for the photo in `highlight_results`
+
+**Response:**
+```typescript
+// 200 OK
+{ photo: TierPhotoItem }
+
+// 400 Bad Request
+{ error: { code: 'NOT_ELIGIBLE', message: '该照片不在精选池中或已被删除，无法添加到精华' } }
+
+// 403 Forbidden
+{ error: { code: 'FORBIDDEN', message: '无权操作此资源' } }
+
+// 404 Not Found
+{ error: { code: 'NOT_FOUND', message: '照片不存在' } }
+```
+
+#### 2. `DELETE /api/my/trips/:id/tier-photos/:photoId` — Remove photo from tier
+
+**Auth:** Required (owner or admin)
+
+**Validation:**
+- Photo belongs to the specified trip
+- `highlight_results.is_highlight_tier = 1` currently
+
+**Action:** Sets `is_highlight_tier = 0` for the photo in `highlight_results`
+
+**Response:**
+```typescript
+// 200 OK
+{ success: true }
+
+// 400 Bad Request
+{ error: { code: 'NOT_IN_TIER', message: '该照片当前不在精华中' } }
+
+// 403 Forbidden
+{ error: { code: 'FORBIDDEN', message: '无权操作此资源' } }
+
+// 404 Not Found
+{ error: { code: 'NOT_FOUND', message: '照片不存在' } }
+```
+
+#### 3. `POST /api/my/trips/:id/tier-slideshow/regenerate` — Regenerate slideshow
+
+**Auth:** Required (owner or admin)
+
+**Action:** Queries current tier photos, generates a new slideshow video, replaces existing file.
+
+**Response:**
+```typescript
+// 200 OK
+{ slideshowUrl: string }
+
+// 400 Bad Request
+{ error: { code: 'NO_TIER_PHOTOS', message: '没有精华照片可用于生成视频' } }
+
+// 403 Forbidden
+{ error: { code: 'FORBIDDEN', message: '无权操作此资源' } }
+
+// 500 Internal Server Error
+{ error: { code: 'GENERATION_FAILED', message: string } }
+```
+
+#### 4. `GET /api/my/trips/:id/highlight-pool` — Get available highlight photos for picker
+
+**Auth:** Required (owner or admin)
+
+**Returns:** All photos where `is_highlight = 1`, `status = 'active'`, and `is_highlight_tier = 0` for this trip.
+
+**Response:**
+```typescript
+// 200 OK
+{ photos: TierPhotoItem[] }
+```
+
+#### 5. `GET /api/trips/:id/highlight-photos` — Public highlight photos (全部 tab)
+
+**Auth:** Optional (public for public trips, owner/admin for any)
+
+**Returns:** All photos where `is_highlight = 1` and `status = 'active'` for the trip.
+
+**Response:**
+```typescript
+// 200 OK
+{ photos: TierPhotoItem[] }
+```
+
+### Frontend Components
+
+#### 1. PhotoPicker Dialog
+
+A modal dialog opened when the user clicks an Empty_Slot `+` icon.
 
 ```typescript
-// PUT /api/media/:id/category
-router.put('/media/:id/category', authMiddleware, requireAuth, (req, res, next) => {
-  const VALID_CATEGORIES = ['people', 'animal', 'landscape', 'other'];
-  const { category } = req.body;
-  // 1. 验证 category 值
-  // 2. 查找 media_item，验证存在性
-  // 3. 验证权限（media owner / trip owner / admin）
-  // 4. 更新 category 字段
-  // 5. 返回更新后的 MediaItem
-});
-```
-
-权限检查逻辑复用 trash.ts 中已有的模式：检查 `req.user` 是否为 media 的 user_id、所属 trip 的 user_id、或 admin。
-
-### 前端：MyGalleryPage 变更
-
-#### 新增状态
-
-```typescript
-// 分类选择器状态
-const [categoryPickerMediaId, setCategoryPickerMediaId] = useState<string | null>(null);
-// 批量分类选择器
-const [batchCategoryPickerOpen, setBatchCategoryPickerOpen] = useState(false);
-// 批量分类操作中
-const [batchCategoryChanging, setBatchCategoryChanging] = useState(false);
-```
-
-#### 单张删除按钮
-
-在每张图片卡片上（非多选模式下）添加删除按钮，点击后弹出 `window.confirm` 确认，确认后调用已有的 `PUT /api/trips/:id/media/trash` 接口（mediaIds 数组传单个 id）。
-
-#### 分类选择器组件
-
-内联在图片卡片上的下拉/弹出选择器，包含四个分类选项。点击图片卡片上的分类标签触发显示。选择后调用 `PUT /api/media/:id/category`，成功后更新本地 `data` state 中对应图片的 category。
-
-#### 批量分类操作
-
-在多选模式的底部操作栏中，已有"删除选中"按钮旁边新增"更换分类"按钮。点击后弹出分类选择器，选择后对所有选中图片逐一调用 category API。使用 `Promise.allSettled` 处理部分失败场景。
-
-## Data Models
-
-### 数据库层（无变更）
-
-`media_items` 表已有 `category TEXT` 列，取值为 `people`、`animal`、`landscape`、`other` 或 `NULL`。无需 schema 变更。
-
-### API 请求/响应
-
-#### PUT /api/media/:id/category
-
-请求：
-```json
-{ "category": "landscape" }
-```
-
-成功响应（200）：
-```json
-{
-  "id": "uuid",
-  "tripId": "uuid",
-  "category": "landscape",
-  ...其他 MediaItem 字段
+interface PhotoPickerProps {
+  tripId: string;
+  open: boolean;
+  onClose: () => void;
+  onSelect: (photo: TierPhotoItem) => void;
 }
 ```
 
-错误响应：
-- 400: `{ "error": { "code": "INVALID_CATEGORY", "message": "分类值无效，必须为 people、animal、landscape 或 other" } }`
-- 404: `{ "error": { "code": "NOT_FOUND", "message": "媒体文件不存在" } }`
-- 403: `{ "error": { "code": "FORBIDDEN", "message": "无权操作此资源" } }`
+- Fetches available photos from `GET /api/my/trips/:id/highlight-pool`
+- Displays photos in a grid with thumbnails
+- Clicking a photo triggers `onSelect` and closes the dialog
+- Shows loading state while fetching
+- Shows empty state message if no eligible photos remain
 
-### 前端类型（无新增）
+#### 2. Enhanced "精华" Tab in MyGalleryPage
 
-已有的 `MediaItem` 类型包含 `category?: string` 字段，`GalleryImage` 包含 `item: MediaItem`。无需新增类型定义。
+Changes to the existing tier tab:
+- Each tier photo card gains a "移除精华" button (×icon overlay)
+- After removal, the card transforms into an Empty_Slot with a `+` icon
+- Above the grid: category quota labels (`"动物: 7/6-9"`, etc.)
+- Below the slideshow video: "重新生成视频" button
+- Button shows spinner during generation, disables interaction
+
+#### 3. Public Gallery Tabs (GalleryPage)
+
+New tab bar added to GalleryPage:
+- "全部" tab (default): shows all highlight photos in the existing image grid
+- "精华" tab: shows tier photos + tier slideshow video
+- Tab bar uses the same `pill-tabs` styling as category tabs
+
+### Client API Functions (additions to `api.ts`)
+
+```typescript
+/** Add a photo to the tier */
+export async function addToTier(tripId: string, photoId: string): Promise<TierPhotoItem>;
+
+/** Remove a photo from the tier */
+export async function removeFromTier(tripId: string, photoId: string): Promise<void>;
+
+/** Regenerate tier slideshow */
+export async function regenerateTierSlideshow(tripId: string): Promise<{ slideshowUrl: string }>;
+
+/** Get highlight pool (available photos for picker) */
+export async function getHighlightPool(tripId: string): Promise<{ photos: TierPhotoItem[] }>;
+
+/** Get all highlight photos for public gallery */
+export async function getHighlightPhotos(tripId: string): Promise<{ photos: TierPhotoItem[] }>;
+```
+
+## Data Models
+
+### Database — No Schema Changes
+
+All operations use the existing `highlight_results` table columns:
+
+| Column | Type | Used by this feature |
+|--------|------|---------------------|
+| trip_id | TEXT FK | Filter by trip |
+| photo_id | TEXT FK | Identify specific photo |
+| is_highlight | INTEGER | Validate eligibility (must be 1) |
+| is_highlight_tier | INTEGER | Toggle 0↔1 for add/remove |
+
+The `media_items` table provides:
+| Column | Type | Used by this feature |
+|--------|------|---------------------|
+| status | TEXT | Must be 'active' for tier eligibility |
+| category | TEXT | Display quota counts |
+
+### State Transitions
+
+```
+Highlight Pool photo (is_highlight=1, is_highlight_tier=0)
+    ──[PUT add]──→ Tier Photo (is_highlight=1, is_highlight_tier=1)
+    ←──[DELETE remove]──
+```
+
+### Invariants (enforced by server)
+
+1. `is_highlight_tier = 1` ⟹ `is_highlight = 1` (add validation)
+2. `is_highlight_tier = 1` ⟹ `media_items.status = 'active'` (add validation)
+3. Trashing a tier photo auto-clears `is_highlight_tier` (existing cascade)
+4. Removing highlight status auto-clears `is_highlight_tier` (new cascade)
+
 
 
 ## Correctness Properties
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-### Property 1: Category update round trip
+### Property 1: Remove clears tier flag
 
-*For any* active media item and *for any* valid category value (people, animal, landscape, other), calling `PUT /api/media/:id/category` with that value and then reading the media item back should return the same category value.
+*For any* photo that currently has `is_highlight_tier = 1` in the `highlight_results` table, calling the remove endpoint for that photo SHALL result in `is_highlight_tier = 0` for that row, and the photo SHALL no longer appear in tier photo queries for the trip.
 
-**Validates: Requirements 2.2, 4.2**
+**Validates: Requirements 1.2, 8.2, 8.3**
 
-### Property 2: Invalid category rejection
+### Property 2: Highlight pool excludes tier photos and trashed photos
 
-*For any* string that is not one of `people`, `animal`, `landscape`, `other`, calling `PUT /api/media/:id/category` with that string should return a 400 status code and the category field of the media item should remain unchanged.
+*For any* trip with a mix of highlight photos (various `is_highlight_tier` and `status` values), the highlight pool query SHALL return only photos where `is_highlight = 1` AND `media_items.status = 'active'` AND `is_highlight_tier = 0`. No tier photos and no trashed photos shall appear in the pool results.
 
-**Validates: Requirements 2.4, 4.4**
+**Validates: Requirements 2.2, 2.6, 3.3**
 
-### Property 3: Authorization enforcement on category update
+### Property 3: Add enforces subset invariant
 
-*For any* media item and *for any* authenticated user who is neither the media owner, the trip owner, nor an admin, calling `PUT /api/media/:id/category` should return a 403 status code and the category field should remain unchanged.
+*For any* photo, the add-to-tier operation SHALL succeed (setting `is_highlight_tier = 1`) if and only if the photo satisfies `is_highlight = 1` AND `media_items.status = 'active'` AND belongs to the specified trip. For any photo that fails any of these conditions, the operation SHALL be rejected with an appropriate error and `is_highlight_tier` SHALL remain 0.
 
-**Validates: Requirements 4.3, 4.6**
+**Validates: Requirements 2.3, 2.5, 3.1, 7.2, 7.3, 7.5, 10.1**
 
-### Property 4: Trash sets manual reason
+### Property 4: Quotas are advisory (not enforced)
 
-*For any* active media item, calling `PUT /api/trips/:id/media/trash` with that item's ID should result in the item having `status = 'trashed'` and `trashed_reason = 'manual'`.
+*For any* trip and category, adding a photo to the tier SHALL succeed regardless of how many tier photos already exist in that category (even above `max`), and removing a photo SHALL succeed regardless of how few would remain (even below `min`).
 
-**Validates: Requirements 1.2**
+**Validates: Requirements 4.1, 4.2**
 
-### Property 5: Restore clears trashed state
+### Property 5: Regeneration uses current tier photos
 
-*For any* trashed media item, calling `PUT /api/media/:id/restore` should result in the item having `status = 'active'` and `trashed_reason = NULL`.
+*For any* trip with at least one tier photo, calling the regenerate endpoint SHALL produce a slideshow using exactly the set of photos currently marked `is_highlight_tier = 1` and `status = 'active'` for that trip. The resulting slideshow URL SHALL be non-null.
 
-**Validates: Requirements 3.1**
+**Validates: Requirements 5.2, 9.2**
 
-### Property 6: Category filtering correctness
+### Property 6: Public highlight query returns all active highlights
 
-*For any* list of images with assigned categories and *for any* category tab selection, the filtered result should contain exactly those images whose category matches the selected tab (with `other` tab including images with `null` or `other` category, and `all` tab including every image).
+*For any* public trip, the highlight-photos endpoint SHALL return every photo with `is_highlight = 1` AND `media_items.status = 'active'`, and no photo missing either condition SHALL appear in the results.
 
-**Validates: Requirements 2.3, 3.3**
+**Validates: Requirements 6.3**
+
+### Property 7: Trash cascades tier flag
+
+*For any* photo that has `is_highlight_tier = 1`, when that photo's status is changed to 'trashed', the system SHALL automatically set `is_highlight_tier = 0`.
+
+**Validates: Requirements 10.2**
+
+### Property 8: Highlight removal cascades tier flag
+
+*For any* photo that has `is_highlight_tier = 1`, when that photo's `is_highlight` is set to 0, the system SHALL automatically set `is_highlight_tier = 0`.
+
+**Validates: Requirements 10.3**
 
 ## Error Handling
 
-| 场景 | 前端行为 | 后端响应 |
-|------|---------|---------|
-| 单张删除失败 | 图片保持原位，用户可重试 | 已有 trash API 错误处理 |
-| 分类更换失败 | 恢复原始分类显示，用户可重试 | 400/403/404/500 |
-| 恢复失败 | 图片保持在待删除区，用户可重试 | 已有 restore API 错误处理 |
-| 批量分类部分失败 | 显示失败数量提示，保持多选模式 | 逐个请求，各自返回状态 |
-| 无效分类值 | 前端不应发送（UI 限制选项） | 400 INVALID_CATEGORY |
-| 无权限 | 页面本身已有权限校验 | 403 FORBIDDEN |
-| 媒体不存在 | 刷新 gallery 数据 | 404 NOT_FOUND |
+| Scenario | HTTP Code | Error Code | Message |
+|----------|-----------|------------|---------|
+| Photo not found in trip | 404 | `NOT_FOUND` | 照片不存在 |
+| Photo not eligible for tier (not highlight or trashed) | 400 | `NOT_ELIGIBLE` | 该照片不在精选池中或已被删除，无法添加到精华 |
+| Photo not currently in tier (on remove) | 400 | `NOT_IN_TIER` | 该照片当前不在精华中 |
+| No tier photos for regeneration | 400 | `NO_TIER_PHOTOS` | 没有精华照片可用于生成视频 |
+| User not owner/admin | 403 | `FORBIDDEN` | 无权操作此资源 |
+| Slideshow generation failure | 500 | `GENERATION_FAILED` | (dynamic error detail) |
+| Unauthenticated request | 401 | `UNAUTHORIZED` | 未登录 |
 
-前端错误处理策略：
-- 单张操作失败：静默失败，保持当前状态，用户可重试（与现有 restore/delete 模式一致）
-- 批量操作部分失败：使用 `Promise.allSettled` 收集结果，显示失败数量，成功的部分更新本地状态
+**Frontend error handling:**
+- On API failure during remove: show toast/error, keep photo in place (no optimistic removal)
+- On API failure during add: show toast/error, keep empty slot visible
+- On regeneration failure: show error message, restore button to idle state
+- Network errors: show generic "网络错误，请重试" message
 
 ## Testing Strategy
 
-### 单元测试
+### Unit Tests (example-based)
 
-- Category API 端点测试（`server/src/routes/trash.test.ts`）：
-  - 有效分类更新返回 200 和更新后的 MediaItem
-  - 无效分类返回 400
-  - 不存在的媒体返回 404
-  - 无权限用户返回 403
-  - 媒体拥有者、旅行拥有者、管理员均可操作
+- **API endpoint routing**: Verify each endpoint returns 401 without auth, 403 for non-owners
+- **UI rendering**: Verify buttons, tabs, and dialog states render correctly
+- **Error handling**: Verify error messages display on API failures
+- **Public gallery tabs**: Verify tab presence and default state
 
-- 前端组件测试：
-  - 单张删除按钮触发确认对话框
-  - 分类选择器显示四个选项
-  - 选择相同分类不发送请求
-  - 批量分类操作栏在多选模式下显示
+### Property-Based Tests
 
-### 属性测试
+**Library:** fast-check (already used in the project per `gallery.property.test.ts`)
 
-使用 `fast-check` 库进行属性测试，每个属性测试至少运行 100 次迭代。
+**Configuration:** Minimum 100 iterations per property test.
 
-每个测试用注释标注对应的设计属性：
-- `// Feature: manual-photo-management, Property 1: Category update round trip`
-- `// Feature: manual-photo-management, Property 2: Invalid category rejection`
-- `// Feature: manual-photo-management, Property 3: Authorization enforcement on category update`
-- `// Feature: manual-photo-management, Property 4: Trash sets manual reason`
-- `// Feature: manual-photo-management, Property 5: Restore clears trashed state`
-- `// Feature: manual-photo-management, Property 6: Category filtering correctness`
+Each property from the Correctness Properties section above will be implemented as a property-based test:
 
-属性测试重点：
-- Property 1-5 在后端 API 层测试，使用 `fast-check` 生成随机分类值、随机用户角色等
-- Property 6 在前端逻辑层测试，使用 `fast-check` 生成随机图片列表和分类组合，验证过滤逻辑
+- **Property 1**: Generate random trip+photo in tier, call remove, assert flag=0
+- **Property 2**: Generate random sets of photos (mix of states), query pool, assert filtering
+- **Property 3**: Generate random photos (eligible and ineligible), call add, assert success/failure matches eligibility
+- **Property 4**: Generate random trips at various quota states, add/remove, assert no quota enforcement
+- **Property 5**: Generate random tier photo sets, call regenerate (with mocked slideshowGenerator), assert photo list matches
+- **Property 6**: Generate random photo sets for public trip, query highlights, assert completeness
+- **Property 7**: Generate random tier photos, trash them, assert tier flag cleared
+- **Property 8**: Generate random tier photos, remove highlight, assert tier flag cleared
+
+Tag format: `Feature: manual-photo-management, Property {N}: {title}`
+
+### Integration Tests
+
+- End-to-end flow: add photo → verify in tier → regenerate slideshow → verify new URL
+- Remove photo → verify removed from tier queries
+- Public gallery: verify correct data in both tabs
+- Cascade: trash a tier photo → verify auto-removal from tier

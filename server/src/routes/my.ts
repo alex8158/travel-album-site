@@ -5,6 +5,8 @@ import { getDb } from '../database';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 import { authMiddleware, requireAuth } from '../middleware/auth';
+import { getStorageProvider } from '../storage/factory';
+import { generateSlideshow } from '../services/slideshowGenerator';
 import type { GalleryImage, DuplicateGroup } from '../types';
 
 interface DuplicateGroupRow {
@@ -218,6 +220,203 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
   }
 
   return res.json({ photos: tierPhotos, slideshowUrl });
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/my/trips/:id/tier-photos/:photoId — Add photo to tier
+// Auth: Required (owner or admin)
+// Requirements: 2.3, 2.5, 3.1, 3.2, 7.1–7.6, 10.1
+// ---------------------------------------------------------------------------
+router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+  const photoId = req.params.photoId as string;
+  const userId = req.user!.userId;
+
+  // Check trip exists
+  const tripRow = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!tripRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '照片不存在' } });
+  }
+
+  // Only the owner or admin can operate
+  if (req.user!.role !== 'admin' && tripRow.user_id !== userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  // Check photo exists and belongs to this trip
+  const mediaRow = db.prepare(
+    'SELECT * FROM media_items WHERE id = ? AND trip_id = ?'
+  ).get(photoId, tripId) as MediaItemRow | undefined;
+
+  if (!mediaRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '照片不存在' } });
+  }
+
+  // Check photo is active and in highlight pool
+  const highlightRow = db.prepare(
+    'SELECT * FROM highlight_results WHERE photo_id = ? AND trip_id = ?'
+  ).get(photoId, tripId) as { photo_id: string; trip_id: string; is_highlight: number; is_highlight_tier: number; reason: string | null } | undefined;
+
+  if (!highlightRow || highlightRow.is_highlight !== 1 || mediaRow.status !== 'active') {
+    return res.status(400).json({
+      error: { code: 'NOT_ELIGIBLE', message: '该照片不在精选池中或已被删除，无法添加到精华' },
+    });
+  }
+
+  // Set is_highlight_tier = 1
+  db.prepare(
+    'UPDATE highlight_results SET is_highlight_tier = 1 WHERE photo_id = ? AND trip_id = ?'
+  ).run(photoId, tripId);
+
+  // Return updated TierPhotoItem
+  const photo = {
+    id: mediaRow.id,
+    filePath: mediaRow.file_path,
+    thumbnailUrl: `/api/media/${mediaRow.id}/thumbnail`,
+    originalUrl: `/api/media/${mediaRow.id}/original`,
+    category: mediaRow.category,
+    reason: highlightRow.reason,
+  };
+
+  return res.json({ photo });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/my/trips/:id/tier-photos/:photoId — Remove photo from tier
+// Auth: Required (owner or admin)
+// Requirements: 1.2, 8.1–8.6
+// ---------------------------------------------------------------------------
+router.delete('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+  const photoId = req.params.photoId as string;
+  const userId = req.user!.userId;
+
+  // Check trip exists
+  const tripRow = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!tripRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '照片不存在' } });
+  }
+
+  // Only the owner or admin can operate
+  if (req.user!.role !== 'admin' && tripRow.user_id !== userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  // Check photo exists and belongs to this trip
+  const mediaRow = db.prepare(
+    'SELECT * FROM media_items WHERE id = ? AND trip_id = ?'
+  ).get(photoId, tripId) as MediaItemRow | undefined;
+
+  if (!mediaRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '照片不存在' } });
+  }
+
+  // Check photo is currently in the tier
+  const highlightRow = db.prepare(
+    'SELECT * FROM highlight_results WHERE photo_id = ? AND trip_id = ?'
+  ).get(photoId, tripId) as { photo_id: string; trip_id: string; is_highlight: number; is_highlight_tier: number } | undefined;
+
+  if (!highlightRow || highlightRow.is_highlight_tier !== 1) {
+    return res.status(400).json({
+      error: { code: 'NOT_IN_TIER', message: '该照片当前不在精华中' },
+    });
+  }
+
+  // Set is_highlight_tier = 0
+  db.prepare(
+    'UPDATE highlight_results SET is_highlight_tier = 0 WHERE photo_id = ? AND trip_id = ?'
+  ).run(photoId, tripId);
+
+  return res.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/my/trips/:id/tier-slideshow/regenerate — Regenerate tier slideshow
+// Auth: Required (owner or admin)
+// Requirements: 5.2, 5.6, 9.1–9.6
+// ---------------------------------------------------------------------------
+router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+  const userId = req.user!.userId;
+
+  // Check trip exists
+  const tripRow = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!tripRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Only the owner or admin can operate
+  if (req.user!.role !== 'admin' && tripRow.user_id !== userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  // Query current tier photos
+  const tierPhotos = db.prepare(
+    `SELECT mi.id, mi.file_path
+     FROM highlight_results hr
+     INNER JOIN media_items mi ON mi.id = hr.photo_id
+     WHERE hr.trip_id = ?
+       AND hr.is_highlight_tier = 1
+       AND mi.status = 'active'`
+  ).all(tripId) as Array<{ id: string; file_path: string }>;
+
+  // If no tier photos, return 400
+  if (tierPhotos.length === 0) {
+    return res.status(400).json({
+      error: { code: 'NO_TIER_PHOTOS', message: '没有精华照片可用于生成视频' },
+    });
+  }
+
+  // Download photos to temp via storage provider
+  const storageProvider = getStorageProvider();
+  const photoPaths: string[] = [];
+
+  for (const photo of tierPhotos) {
+    try {
+      const localPath = await storageProvider.downloadToTemp(photo.file_path);
+      photoPaths.push(localPath);
+    } catch (err) {
+      console.warn(`[regenerate] Failed to download photo ${photo.id}: ${err}`);
+    }
+  }
+
+  if (photoPaths.length === 0) {
+    return res.status(500).json({
+      error: { code: 'GENERATION_FAILED', message: '无法下载精华照片' },
+    });
+  }
+
+  // Generate slideshow
+  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
+  const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow');
+
+  try {
+    const result = await generateSlideshow({
+      photoPaths,
+      audioPath: null,
+      outputDir,
+      photoDuration: 3,
+    });
+
+    if (result.success && result.outputPath) {
+      const filename = path.basename(result.outputPath);
+      const slideshowUrl = `/api/trips/${tripId}/tier-slideshow/${filename}`;
+      return res.json({ slideshowUrl });
+    }
+
+    return res.status(500).json({
+      error: { code: 'GENERATION_FAILED', message: result.error || '视频生成失败' },
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`[regenerate] Slideshow generation error for trip ${tripId}: ${errorMessage}`);
+    return res.status(500).json({
+      error: { code: 'GENERATION_FAILED', message: errorMessage },
+    });
+  }
 });
 
 export default router;

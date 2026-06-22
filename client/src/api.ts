@@ -198,3 +198,84 @@ export async function getMyTierPhotos(tripId: string): Promise<TierPhotosRespons
   }
   return (await res.json()) as TierPhotosResponse;
 }
+
+/**
+ * Add a photo to the highlight tier.
+ *
+ * Calls `PUT /api/my/trips/:id/tier-photos/:photoId`. Returns the added photo.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function addToTier(tripId: string, photoId: string): Promise<TierPhotoItem> {
+  const res = await authFetch(`/api/my/trips/${tripId}/tier-photos/${photoId}`, { method: 'PUT' });
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
+  }
+  const body = await res.json();
+  return body.photo as TierPhotoItem;
+}
+
+/**
+ * Remove a photo from the highlight tier.
+ *
+ * Calls `DELETE /api/my/trips/:id/tier-photos/:photoId`.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function removeFromTier(tripId: string, photoId: string): Promise<void> {
+  const res = await authFetch(`/api/my/trips/${tripId}/tier-photos/${photoId}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
+  }
+}
+
+/**
+ * Regenerate the tier slideshow video using current tier photos.
+ *
+ * Calls `POST /api/my/trips/:id/tier-slideshow/regenerate`. Returns the new slideshow URL.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function regenerateTierSlideshow(tripId: string): Promise<{ slideshowUrl: string }> {
+  const res = await authFetch(`/api/my/trips/${tripId}/tier-slideshow/regenerate`, { method: 'POST' });
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
+  }
+  return (await res.json()) as { slideshowUrl: string };
+}
+
+/**
+ * Get highlight pool photos available for the picker (excludes tier photos).
+ *
+ * Calls `GET /api/my/trips/:id/highlight-pool`. Returns photos eligible to be added to the tier.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function getHighlightPool(tripId: string): Promise<{ photos: TierPhotoItem[] }> {
+  const res = await authFetch(`/api/my/trips/${tripId}/highlight-pool`);
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
+  }
+  return (await res.json()) as { photos: TierPhotoItem[] };
+}
+
+/**
+ * Get all highlight photos for a trip (public endpoint for 全部 tab).
+ *
+ * Calls `GET /api/trips/:id/highlight-photos`. Returns all active highlight photos.
+ * Throws `HighlightsApiError` on non-2xx responses.
+ */
+export async function getHighlightPhotos(tripId: string): Promise<{ photos: TierPhotoItem[] }> {
+  try {
+    const res = await axios.get<{ photos: TierPhotoItem[] }>(`/api/trips/${tripId}/highlight-photos`);
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response) {
+      const body = error.response.data as { error?: { code?: string; message?: string } } | null;
+      const message = body?.error?.message || `请求失败（HTTP ${error.response.status}）`;
+      const code = body?.error?.code;
+      throw new HighlightsApiError(message, error.response.status, code);
+    }
+    throw error;
+  }
+}

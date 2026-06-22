@@ -4,7 +4,7 @@ import axios from 'axios';
 import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
-import { getTierPhotos } from '../api';
+import { getTierPhotos, getHighlightPhotos, TierPhotoItem } from '../api';
 
 type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
 
@@ -109,6 +109,9 @@ export default function GalleryPage() {
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
   const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
+  const [galleryTab, setGalleryTab] = useState<'all' | 'tier'>('all');
+  const [highlightPhotos, setHighlightPhotos] = useState<TierPhotoItem[]>([]);
+  const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
 
   const images = data?.images ?? [];
   const videos = data?.videos ?? [];
@@ -155,15 +158,16 @@ export default function GalleryPage() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Fetch tier slideshow URL for public trips
+  // Fetch tier slideshow URL and tier photos for public trips
   useEffect(() => {
     let cancelled = false;
-    async function loadTierSlideshow() {
+    async function loadTierData() {
       if (!id) return;
       try {
         const tierData = await getTierPhotos(id);
         if (!cancelled) {
           setTierSlideshowUrl(tierData.slideshowUrl);
+          setTierPhotos(tierData.photos);
         }
       } catch {
         // Silently ignore — tier data may not exist yet
@@ -171,7 +175,28 @@ export default function GalleryPage() {
     }
     // Only fetch once gallery data confirms the trip is public
     if (data && data.trip.visibility !== 'unlisted') {
-      loadTierSlideshow();
+      loadTierData();
+    }
+    return () => { cancelled = true; };
+  }, [id, data]);
+
+  // Fetch highlight photos for the "全部" tab
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHighlightPhotos() {
+      if (!id) return;
+      try {
+        const result = await getHighlightPhotos(id);
+        if (!cancelled) {
+          setHighlightPhotos(result.photos);
+        }
+      } catch {
+        // Silently ignore — highlight data may not exist yet
+      }
+    }
+    // Only fetch for public trips
+    if (data && data.trip.visibility !== 'unlisted') {
+      loadHighlightPhotos();
     }
     return () => { cancelled = true; };
   }, [id, data]);
@@ -212,22 +237,119 @@ export default function GalleryPage() {
         {trip.description && <p>{trip.description}</p>}
       </header>
 
-      {tierSlideshowUrl && (
-        <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
-          <h2>精华视频</h2>
-          <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-            <video
-              src={tierSlideshowUrl}
-              controls
-              data-testid="tier-slideshow-video"
-              style={{ width: '100%', borderRadius: '8px', background: '#000' }}
-              aria-label="精华幻灯片视频"
-            />
+      {/* Gallery mode tabs — only for public trips with highlight data */}
+      {data.trip.visibility === 'public' && (
+        <div className="pill-tabs" data-testid="gallery-mode-tabs">
+          <button className={`pill-tab${galleryTab === 'all' ? ' active' : ''}`} onClick={() => setGalleryTab('all')}>全部</button>
+          <button className={`pill-tab${galleryTab === 'tier' ? ' active' : ''}`} onClick={() => setGalleryTab('tier')}>精华</button>
+        </div>
+      )}
+
+      {/* "全部" tab: show all highlight photos */}
+      {galleryTab === 'all' && data.trip.visibility === 'public' && highlightPhotos.length > 0 && (
+        <section aria-label="全部精选照片">
+          <h2>精选照片 ({highlightPhotos.length})</h2>
+          <div
+            data-testid="highlight-photos-grid"
+            className="media-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: '12px',
+            }}
+          >
+            {highlightPhotos.map((photo) => (
+              <div
+                key={photo.id}
+                data-testid={`highlight-photo-${photo.id}`}
+                className="media-card"
+              >
+                <img
+                  src={photo.thumbnailUrl}
+                  alt={photo.category || '精选照片'}
+                  style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                />
+              </div>
+            ))}
           </div>
         </section>
       )}
 
-      {images.length > 0 && (
+      {/* "精华" tab: show tier photos + slideshow */}
+      {galleryTab === 'tier' && data.trip.visibility === 'public' && (
+        <>
+          {tierSlideshowUrl && (
+            <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
+              <h2>精华视频</h2>
+              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <video
+                  src={tierSlideshowUrl}
+                  controls
+                  data-testid="tier-slideshow-video"
+                  style={{ width: '100%', borderRadius: '8px', background: '#000' }}
+                  aria-label="精华幻灯片视频"
+                />
+              </div>
+            </section>
+          )}
+          {tierPhotos.length > 0 && (
+            <section aria-label="精华照片">
+              <h2>精华照片 ({tierPhotos.length})</h2>
+              <div
+                data-testid="tier-photos-grid"
+                className="media-grid"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                  gap: '12px',
+                }}
+              >
+                {tierPhotos.map((photo) => (
+                  <div
+                    key={photo.id}
+                    data-testid={`tier-photo-${photo.id}`}
+                    className="media-card"
+                  >
+                    <img
+                      src={photo.thumbnailUrl}
+                      alt={photo.category || '精华照片'}
+                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {tierPhotos.length === 0 && !tierSlideshowUrl && (
+            <div className="empty-state" style={{ padding: '32px' }}>
+              <p>暂无精华照片</p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Original gallery content — show when not in public mode or when "全部" tab is active as fallback */}
+      {(data.trip.visibility !== 'public' || (galleryTab === 'all' && highlightPhotos.length === 0)) && (
+        <>
+          {tierSlideshowUrl && (
+            <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
+              <h2>精华视频</h2>
+              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+                <video
+                  src={tierSlideshowUrl}
+                  controls
+                  data-testid="tier-slideshow-video"
+                  style={{ width: '100%', borderRadius: '8px', background: '#000' }}
+                  aria-label="精华幻灯片视频"
+                />
+              </div>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Image and video grid — show when: not public, or "全部" tab is active */}
+      {(data.trip.visibility !== 'public' || galleryTab === 'all') && images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
           <div data-testid="category-tabs" className="pill-tabs">
@@ -284,7 +406,7 @@ export default function GalleryPage() {
         </section>
       )}
 
-      {videos.length > 0 && (
+      {(data.trip.visibility !== 'public' || galleryTab === 'all') && videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
           <div
@@ -417,7 +539,7 @@ export default function GalleryPage() {
         );
       })()}
 
-      {images.length === 0 && videos.length === 0 && (
+      {(data.trip.visibility !== 'public' || galleryTab === 'all') && images.length === 0 && videos.length === 0 && (
         <div aria-label="空状态" className="empty-state">
           <p>这次旅行还没有素材，快去上传吧！</p>
         </div>

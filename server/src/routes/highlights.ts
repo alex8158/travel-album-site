@@ -332,6 +332,65 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/trips/:id/highlight-photos — Public endpoint for all highlight photos
+// Returns all photos with is_highlight = 1 and status = 'active' for the trip.
+// Auth optional; non-owners can only see public trips.
+// Requirements: 6.3, 6.5
+// ---------------------------------------------------------------------------
+router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+
+  // Verify trip exists
+  const trip = db
+    .prepare('SELECT id, user_id, visibility FROM trips WHERE id = ?')
+    .get(tripId) as { id: string; user_id: string; visibility: string } | undefined;
+
+  if (!trip) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Check if requester is owner or admin (they can always access)
+  const isOwnerOrAdmin =
+    req.user != null &&
+    (req.user.role === 'admin' || req.user.userId === trip.user_id);
+
+  // Public endpoint: non-owners can only see public trips
+  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Query all highlight photos (is_highlight = 1, status = 'active')
+  const rows = db
+    .prepare(
+      `SELECT mi.id, mi.file_path, mi.category, hr.reason
+       FROM highlight_results hr
+       INNER JOIN media_items mi ON mi.id = hr.photo_id
+       WHERE hr.trip_id = ?
+         AND hr.is_highlight = 1
+         AND mi.status = 'active'
+       ORDER BY mi.category, mi.created_at ASC`
+    )
+    .all(tripId) as Array<{
+    id: string;
+    file_path: string;
+    category: string | null;
+    reason: string | null;
+  }>;
+
+  const photos: TierPhotoItem[] = rows.map((row) => ({
+    id: row.id,
+    filePath: row.file_path,
+    thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    originalUrl: `/api/media/${row.id}/original`,
+    category: row.category,
+    reason: row.reason,
+  }));
+
+  return res.json({ photos });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/trips/:id/tier-slideshow/:filename — Serve tier slideshow video file
 // ---------------------------------------------------------------------------
 router.get('/:id/tier-slideshow/:filename', authMiddleware, (req: Request, res: Response) => {

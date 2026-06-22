@@ -5,6 +5,7 @@ import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import { TripRow } from '../helpers/tripRow';
 import { getStorageProvider } from '../storage/factory';
+import { clearHighlightTierForPhotos } from '../services/highlightService';
 
 const router = Router();
 
@@ -53,9 +54,7 @@ router.put('/trips/:id/media/trash', authMiddleware, requireAuth, (req: Request,
 
     // Cascade: clear highlight tier flag for trashed photos
     if (result.changes > 0) {
-      db.prepare(
-        `UPDATE highlight_results SET is_highlight_tier = 0 WHERE photo_id IN (${placeholders})`
-      ).run(...mediaIds);
+      clearHighlightTierForPhotos(mediaIds);
     }
 
     return res.json({ trashedCount: result.changes });

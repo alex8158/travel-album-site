@@ -1,11 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import axios from 'axios';
 import GalleryPage, { GalleryData } from './GalleryPage';
 
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios, true);
+
+// Mock the api module for getHighlightPhotos and getTierPhotos
+vi.mock('../api', async () => {
+  const actual = await vi.importActual('../api');
+  return {
+    ...actual,
+    getTierPhotos: vi.fn().mockRejectedValue(new Error('not found')),
+    getHighlightPhotos: vi.fn().mockRejectedValue(new Error('not found')),
+  };
+});
+
+import { getTierPhotos, getHighlightPhotos } from '../api';
+const mockedGetTierPhotos = vi.mocked(getTierPhotos);
+const mockedGetHighlightPhotos = vi.mocked(getHighlightPhotos);
 
 function renderGalleryPage(tripId = 'trip-1') {
   return render(
@@ -258,5 +272,143 @@ describe('GalleryPage', () => {
     expect(screen.queryByTestId('append-media-btn')).toBeNull();
     expect(screen.queryByTestId('change-cover-btn')).toBeNull();
     expect(screen.queryByTestId('trash-zone')).toBeNull();
+  });
+
+  describe('Gallery Mode Tabs (全部/精华)', () => {
+    const publicTripData: GalleryData = {
+      trip: {
+        ...sampleData.trip,
+        visibility: 'public',
+      },
+      images: sampleData.images,
+      videos: sampleData.videos,
+    };
+
+    const highlightPhotosMock = [
+      { id: 'hl-1', filePath: '/path/hl-1.jpg', thumbnailUrl: '/api/media/hl-1/thumbnail', originalUrl: '/api/media/hl-1/original', category: 'animal', reason: 'nice' },
+      { id: 'hl-2', filePath: '/path/hl-2.jpg', thumbnailUrl: '/api/media/hl-2/thumbnail', originalUrl: '/api/media/hl-2/original', category: 'landscape', reason: 'beautiful' },
+    ];
+
+    const tierPhotosMock = [
+      { id: 'tier-1', filePath: '/path/tier-1.jpg', thumbnailUrl: '/api/media/tier-1/thumbnail', originalUrl: '/api/media/tier-1/original', category: 'animal', reason: 'top' },
+    ];
+
+    it('shows gallery mode tabs for public trips', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      const tabs = screen.getByTestId('gallery-mode-tabs');
+      expect(tabs.querySelectorAll('button')).toHaveLength(2);
+      expect(screen.getByText('全部')).toBeDefined();
+      expect(screen.getByText('精华')).toBeDefined();
+    });
+
+    it('defaults to "全部" tab being active', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      const allTab = screen.getByText('全部');
+      expect(allTab.className).toContain('active');
+      const tierTab = screen.getByText('精华');
+      expect(tierTab.className).not.toContain('active');
+    });
+
+    it('does not show gallery mode tabs for unlisted trips', async () => {
+      const unlistedData: GalleryData = {
+        trip: { ...sampleData.trip, visibility: 'unlisted' },
+        images: sampleData.images,
+        videos: sampleData.videos,
+      };
+      mockedAxios.get.mockResolvedValueOnce({ data: unlistedData });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByText('该相册未公开')).toBeDefined();
+      });
+      expect(screen.queryByTestId('gallery-mode-tabs')).toBeNull();
+    });
+
+    it('shows highlight photos grid when "全部" tab is active', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('highlight-photos-grid')).toBeDefined();
+      });
+
+      expect(screen.getByTestId('highlight-photo-hl-1')).toBeDefined();
+      expect(screen.getByTestId('highlight-photo-hl-2')).toBeDefined();
+    });
+
+    it('shows tier photos and slideshow when "精华" tab is clicked', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: '/slideshow/test.mp4' });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      // Click "精华" tab
+      fireEvent.click(screen.getByText('精华'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tier-photos-grid')).toBeDefined();
+      });
+
+      expect(screen.getByTestId('tier-photo-tier-1')).toBeDefined();
+      expect(screen.getByTestId('tier-slideshow-video')).toBeDefined();
+    });
+
+    it('hides highlight grid and shows tier content when switching to "精华" tab', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('highlight-photos-grid')).toBeDefined();
+      });
+
+      // Switch to "精华" tab
+      fireEvent.click(screen.getByText('精华'));
+
+      expect(screen.queryByTestId('highlight-photos-grid')).toBeNull();
+      expect(screen.getByTestId('tier-photos-grid')).toBeDefined();
+    });
+
+    it('uses pill-tabs styling for gallery mode tabs', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      const tabBar = screen.getByTestId('gallery-mode-tabs');
+      expect(tabBar.className).toContain('pill-tabs');
+
+      const buttons = tabBar.querySelectorAll('button');
+      buttons.forEach(btn => {
+        expect(btn.className).toContain('pill-tab');
+      });
+    });
   });
 });
