@@ -150,11 +150,29 @@ export function groupCandidatesByCategory(
 function getBaseInstruction(category: TierCategory, quota: CategoryQuota): string {
   switch (category) {
     case 'animal':
-      return `Select ${quota.min} to ${quota.max} photos where each shows a completely different animal subject. Each photo must be sharp with good focus on the animal. None should be overexposed. Prioritize diversity of species/subjects over quantity.`;
+      return `Select EXACTLY ${quota.max} photos (or all available if fewer than ${quota.max}).
+
+CRITICAL RULE: Each selected photo MUST show a DIFFERENT animal species or individual. 
+- NEVER select two photos of the same species (e.g., do NOT select two turtle photos, two clownfish photos, etc.)
+- If you see multiple photos of turtles, pick only the single best turtle photo.
+- If you see multiple photos of the same fish species, pick only one.
+- Prioritize MAXIMUM DIVERSITY of species/subjects.
+- Each photo must be sharp with good focus. None should be overexposed.
+- Divers/humans in the frame do NOT count as animal subjects — skip photos where the main subject is a diver.`;
     case 'people':
-      return `Select ${quota.min} to ${quota.max} photos where each shows a completely different scene or setting. Prioritize diversity in location, activity, and composition. Avoid multiple photos from the same moment or angle.`;
+      return `Select EXACTLY ${quota.max} photos (or all available if fewer than ${quota.max}).
+
+CRITICAL RULE: Each selected photo MUST show a completely different scene, setting, or activity.
+- NEVER select two photos from the same moment, angle, or location.
+- Prioritize diversity in location, activity, and composition.
+- Each photo must show people as the clear subject.`;
     case 'landscape':
-      return `Select ${quota.min} to ${quota.max} of the most visually distinct and compelling landscape photos. Prioritize variety in scenery, lighting conditions, and color palettes. Each selected photo should offer a unique visual perspective.`;
+      return `Select EXACTLY ${quota.max} photos (or all available if fewer than ${quota.max}).
+
+CRITICAL RULE: Each selected photo MUST offer a unique visual perspective.
+- NEVER select two photos of the same scene from similar angles.
+- Prioritize variety in scenery type, lighting conditions, and color palettes.
+- Each must be visually distinct and compelling.`;
   }
 }
 
@@ -365,20 +383,26 @@ async function invokeTierVLM(
     return null;
   }
 
-  // Resolve and resize images
+  // Resolve and resize images (parallel download + resize for speed)
   const storageProvider = getStorageProvider();
+  const results = await Promise.allSettled(
+    photos.map(async (photo) => {
+      const localPath = await storageProvider.downloadToTemp(photo.filePath);
+      const base64 = await resizeForAnalysis(localPath);
+      return { photo, base64 };
+    })
+  );
+
   const images: Array<{ base64: string; mediaType: 'image/jpeg' }> = [];
   const validPhotos: TierCandidate[] = [];
 
-  for (const photo of photos) {
-    try {
-      const localPath = await storageProvider.downloadToTemp(photo.filePath);
-      const base64 = await resizeForAnalysis(localPath);
-      images.push({ base64, mediaType: 'image/jpeg' });
-      validPhotos.push(photo);
-    } catch (err) {
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      images.push({ base64: result.value.base64, mediaType: 'image/jpeg' });
+      validPhotos.push(result.value.photo);
+    } else {
       console.warn(
-        `[tierSelector] Failed to process photo ${photo.id} (${photo.filePath}): ${err}`,
+        `[tierSelector] Failed to process a photo: ${result.reason}`,
       );
     }
   }
@@ -490,32 +514,36 @@ export async function runTierSelection(tripId: string): Promise<TierSelectionRes
   const categoryCounts: Record<string, number> = {};
   const categories: TierCategory[] = ['animal', 'landscape', 'people'];
 
-  for (const category of categories) {
-    const candidates = grouped.get(category);
-    if (!candidates || candidates.length === 0) {
-      continue; // Skip categories with no candidates
-    }
+  // Process all categories in parallel for speed
+  const categoryResults = await Promise.allSettled(
+    categories
+      .filter((category) => {
+        const candidates = grouped.get(category);
+        return candidates && candidates.length > 0;
+      })
+      .map(async (category) => {
+        const candidates = grouped.get(category)!;
+        console.log(
+          `[tierSelector] Processing category '${category}' with ${candidates.length} candidates`,
+        );
+        const categoryPicks = await processCategorySelection(
+          category,
+          candidates,
+          providerChain,
+        );
+        console.log(
+          `[tierSelector] Category '${category}': selected ${categoryPicks.length} tier photos`,
+        );
+        return { category, picks: categoryPicks };
+      })
+  );
 
-    console.log(
-      `[tierSelector] Processing category '${category}' with ${candidates.length} candidates`,
-    );
-
-    try {
-      const categoryPicks = await processCategorySelection(
-        category,
-        candidates,
-        providerChain,
-      );
-      allPicks.push(...categoryPicks);
-      categoryCounts[category] = categoryPicks.length;
-      console.log(
-        `[tierSelector] Category '${category}': selected ${categoryPicks.length} tier photos`,
-      );
-    } catch (err) {
-      console.error(
-        `[tierSelector] Category '${category}' processing failed: ${err}`,
-      );
-      categoryCounts[category] = 0;
+  for (const result of categoryResults) {
+    if (result.status === 'fulfilled') {
+      allPicks.push(...result.value.picks);
+      categoryCounts[result.value.category] = result.value.picks.length;
+    } else {
+      console.error(`[tierSelector] Category processing failed: ${result.reason}`);
     }
   }
 
