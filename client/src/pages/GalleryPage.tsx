@@ -328,8 +328,8 @@ export default function GalleryPage() {
         </>
       )}
 
-      {/* Original gallery content — show when not in public mode or when "全部" tab is active as fallback */}
-      {(data.trip.visibility !== 'public' || (galleryTab === 'all' && highlightPhotos.length === 0)) && (
+      {/* Original gallery content — only for non-public trips */}
+      {data.trip.visibility !== 'public' && (
         <>
           {tierSlideshowUrl && (
             <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
@@ -348,8 +348,8 @@ export default function GalleryPage() {
         </>
       )}
 
-      {/* Image and video grid — show when: not public, or "全部" tab is active */}
-      {(data.trip.visibility !== 'public' || galleryTab === 'all') && images.length > 0 && (
+      {/* Image and video grid — only show for non-public trips (public trips use highlight/tier tabs) */}
+      {data.trip.visibility !== 'public' && images.length > 0 && (
         <section aria-label="图片区域">
           <h2>图片 ({images.length})</h2>
           <div data-testid="category-tabs" className="pill-tabs">
@@ -406,7 +406,7 @@ export default function GalleryPage() {
         </section>
       )}
 
-      {(data.trip.visibility !== 'public' || galleryTab === 'all') && videos.length > 0 && (
+      {data.trip.visibility !== 'public' && videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
           <div
@@ -539,7 +539,7 @@ export default function GalleryPage() {
         );
       })()}
 
-      {(data.trip.visibility !== 'public' || galleryTab === 'all') && images.length === 0 && videos.length === 0 && (
+      {data.trip.visibility !== 'public' && images.length === 0 && videos.length === 0 && (
         <div aria-label="空状态" className="empty-state">
           <p>这次旅行还没有素材，快去上传吧！</p>
         </div>
