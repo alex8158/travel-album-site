@@ -235,13 +235,13 @@ export async function removeFromTier(tripId: string, photoId: string): Promise<v
  * Calls `POST /api/my/trips/:id/tier-slideshow/regenerate`. Returns the new slideshow URL.
  * Throws `HighlightsApiError` on non-2xx responses.
  */
-export async function regenerateTierSlideshow(tripId: string): Promise<{ slideshowUrl: string }> {
+export async function regenerateTierSlideshow(tripId: string): Promise<{ slideshowUrls: Record<string, string>; errors?: string[] }> {
   const res = await authFetch(`/api/my/trips/${tripId}/tier-slideshow/regenerate`, { method: 'POST' });
   if (!res.ok) {
     const { message, code } = await readErrorBody(res);
     throw new HighlightsApiError(message, res.status, code);
   }
-  return (await res.json()) as { slideshowUrl: string };
+  return (await res.json()) as { slideshowUrls: Record<string, string>; errors?: string[] };
 }
 
 /**

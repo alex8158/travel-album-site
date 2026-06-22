@@ -391,8 +391,75 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/trips/:id/tier-slideshow/:filename — Serve tier slideshow video file
+// GET /api/trips/:id/tier-slideshow/:filename — Serve tier slideshow video file (legacy)
+// GET /api/trips/:id/tier-slideshow/:category/:filename — Serve per-category tier video
 // ---------------------------------------------------------------------------
+router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, (req: Request, res: Response) => {
+  const tripId = req.params.id as string;
+  const category = req.params.category as string;
+  const filename = req.params.filename as string;
+
+  // Verify trip exists and check visibility
+  const db = getDb();
+  const trip = db
+    .prepare('SELECT id, user_id, visibility FROM trips WHERE id = ?')
+    .get(tripId) as { id: string; user_id: string; visibility: string } | undefined;
+
+  if (!trip) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  const isOwnerOrAdmin =
+    req.user != null &&
+    (req.user.role === 'admin' || req.user.userId === trip.user_id);
+
+  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  // Prevent path traversal
+  const safeCategory = path.basename(category);
+  const safeName = path.basename(filename);
+  if (!safeName.endsWith('.mp4')) {
+    return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: '无效文件名' } });
+  }
+
+  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
+  const videoPath = path.join(uploadsBase, tripId, 'tier-slideshow', safeCategory, safeName);
+
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '视频文件不存在' } });
+  }
+
+  const stat = fs.statSync(videoPath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunkSize = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': 'video/mp4',
+    });
+
+    return fs.createReadStream(videoPath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+      'Accept-Ranges': 'bytes',
+    });
+
+    return fs.createReadStream(videoPath).pipe(res);
+  }
+});
+
 router.get('/:id/tier-slideshow/:filename', authMiddleware, (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const filename = req.params.filename as string;

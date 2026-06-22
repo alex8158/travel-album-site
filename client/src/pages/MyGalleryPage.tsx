@@ -152,7 +152,7 @@ export default function MyGalleryPage() {
 
   // --- Highlight Tier (精华) state ---
   const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
-  const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
+  const [tierSlideshowUrls, setTierSlideshowUrls] = useState<Record<string, string>>({});
   const [tierLoading, setTierLoading] = useState(false);
   const [emptySlots, setEmptySlots] = useState<number>(0);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -215,10 +215,16 @@ export default function MyGalleryPage() {
     try {
       const result = await getMyTierPhotos(id);
       setTierPhotos(result.photos);
-      setTierSlideshowUrl(result.slideshowUrl);
+      // slideshowUrl from getMyTierPhotos is the legacy single-URL format
+      // Convert to per-category format for display
+      if (result.slideshowUrl) {
+        setTierSlideshowUrls({ all: result.slideshowUrl });
+      } else {
+        setTierSlideshowUrls({});
+      }
     } catch {
       setTierPhotos([]);
-      setTierSlideshowUrl(null);
+      setTierSlideshowUrls({});
     } finally {
       setTierLoading(false);
     }
@@ -1127,16 +1133,22 @@ export default function MyGalleryPage() {
                     </div>
                   )}
 
-                  {/* Slideshow video */}
-                  {tierSlideshowUrl && (
+                  {/* Slideshow videos per category */}
+                  {Object.keys(tierSlideshowUrls).length > 0 && (
                     <div data-testid="tier-slideshow" style={{ marginBottom: '16px' }}>
-                      <video
-                        src={tierSlideshowUrl}
-                        controls
-                        style={{ width: '100%', maxHeight: '400px', borderRadius: '8px', background: '#000' }}
-                      >
-                        您的浏览器不支持视频播放
-                      </video>
+                      {Object.entries(tierSlideshowUrls).map(([cat, url]) => (
+                        <div key={cat} style={{ marginBottom: '12px' }}>
+                          {cat !== 'all' && <h4 style={{ margin: '0 0 4px 0', color: '#666' }}>{cat === 'animal' ? '🐾 动物' : cat === 'landscape' ? '🏞️ 风景' : cat === 'people' ? '👤 人物' : cat}</h4>}
+                          <video
+                            src={url}
+                            controls
+                            style={{ width: '100%', maxHeight: '400px', borderRadius: '8px', background: '#000' }}
+                            aria-label={`精华视频 - ${cat}`}
+                          >
+                            您的浏览器不支持视频播放
+                          </video>
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -1151,7 +1163,7 @@ export default function MyGalleryPage() {
                         setTierError(null);
                         try {
                           const result = await regenerateTierSlideshow(id);
-                          setTierSlideshowUrl(result.slideshowUrl);
+                          setTierSlideshowUrls(result.slideshowUrls);
                         } catch (err) {
                           const msg = err instanceof HighlightsApiError ? err.message : '视频生成失败，请重试';
                           setTierError(msg);

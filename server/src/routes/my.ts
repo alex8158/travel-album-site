@@ -395,8 +395,8 @@ router.delete('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) =
 
 // ---------------------------------------------------------------------------
 // POST /api/my/trips/:id/tier-slideshow/regenerate — Regenerate tier slideshow
+// Generates per-category videos (animal/people/landscape), minimum 6 photos per category
 // Auth: Required (owner or admin)
-// Requirements: 5.2, 5.6, 9.1–9.6
 // ---------------------------------------------------------------------------
 router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Response) => {
   const db = getDb();
@@ -414,70 +414,92 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
-  // Query current tier photos
+  // Query current tier photos grouped by category
   const tierPhotos = db.prepare(
-    `SELECT mi.id, mi.file_path
+    `SELECT mi.id, mi.file_path, mi.category
      FROM highlight_results hr
      INNER JOIN media_items mi ON mi.id = hr.photo_id
      WHERE hr.trip_id = ?
        AND hr.is_highlight_tier = 1
-       AND mi.status = 'active'`
-  ).all(tripId) as Array<{ id: string; file_path: string }>;
+       AND mi.status = 'active'
+     ORDER BY mi.category, mi.created_at ASC`
+  ).all(tripId) as Array<{ id: string; file_path: string; category: string | null }>;
 
-  // If no tier photos, return 400
   if (tierPhotos.length === 0) {
     return res.status(400).json({
       error: { code: 'NO_TIER_PHOTOS', message: '没有精华照片可用于生成视频' },
     });
   }
 
-  // Download photos to temp via storage provider
-  const storageProvider = getStorageProvider();
-  const photoPaths: string[] = [];
-
+  // Group by category
+  const grouped: Record<string, Array<{ id: string; file_path: string }>> = {};
   for (const photo of tierPhotos) {
-    try {
-      const localPath = await storageProvider.downloadToTemp(photo.file_path);
-      photoPaths.push(localPath);
-    } catch (err) {
-      console.warn(`[regenerate] Failed to download photo ${photo.id}: ${err}`);
-    }
+    const cat = photo.category || 'other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(photo);
   }
 
-  if (photoPaths.length === 0) {
-    return res.status(500).json({
-      error: { code: 'GENERATION_FAILED', message: '无法下载精华照片' },
-    });
-  }
-
-  // Generate slideshow
+  // Generate per-category videos (minimum 6 photos required)
+  const MIN_PHOTOS_FOR_VIDEO = 6;
+  const storageProvider = getStorageProvider();
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
-  const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow');
+  const slideshowUrls: Record<string, string> = {};
+  const errors: string[] = [];
 
-  try {
-    const result = await generateSlideshow({
-      photoPaths,
-      audioPath: null,
-      outputDir,
-      photoDuration: 3,
-    });
-
-    if (result.success && result.outputPath) {
-      const filename = path.basename(result.outputPath);
-      const slideshowUrl = `/api/trips/${tripId}/tier-slideshow/${filename}`;
-      return res.json({ slideshowUrl });
+  for (const [category, photos] of Object.entries(grouped)) {
+    if (photos.length < MIN_PHOTOS_FOR_VIDEO) {
+      console.log(`[regenerate] Skipping category '${category}': only ${photos.length} photos (need ${MIN_PHOTOS_FOR_VIDEO})`);
+      continue;
     }
 
-    return res.status(500).json({
-      error: { code: 'GENERATION_FAILED', message: result.error || '视频生成失败' },
-    });
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error(`[regenerate] Slideshow generation error for trip ${tripId}: ${errorMessage}`);
-    return res.status(500).json({
-      error: { code: 'GENERATION_FAILED', message: errorMessage },
+    // Download photos to temp
+    const photoPaths: string[] = [];
+    for (const photo of photos) {
+      try {
+        const localPath = await storageProvider.downloadToTemp(photo.file_path);
+        photoPaths.push(localPath);
+      } catch (err) {
+        console.warn(`[regenerate] Failed to download photo ${photo.id}: ${err}`);
+      }
+    }
+
+    if (photoPaths.length < MIN_PHOTOS_FOR_VIDEO) {
+      console.warn(`[regenerate] Category '${category}': only ${photoPaths.length} downloadable photos, skipping`);
+      continue;
+    }
+
+    const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow', category);
+
+    try {
+      const result = await generateSlideshow({
+        photoPaths,
+        audioPath: null,
+        outputDir,
+        photoDuration: 3,
+      });
+
+      if (result.success && result.outputPath) {
+        const filename = path.basename(result.outputPath);
+        slideshowUrls[category] = `/api/trips/${tripId}/tier-slideshow/${category}/${filename}`;
+        console.log(`[regenerate] Category '${category}': video generated (${result.totalDuration}s)`);
+      } else {
+        errors.push(`${category}: ${result.error || '生成失败'}`);
+      }
+    } catch (err) {
+      errors.push(`${category}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (Object.keys(slideshowUrls).length === 0) {
+    return res.status(400).json({
+      error: {
+        code: 'NO_ELIGIBLE_CATEGORIES',
+        message: `没有类别达到最少${MIN_PHOTOS_FOR_VIDEO}张照片的要求` + (errors.length > 0 ? ` (${errors.join('; ')})` : ''),
+      },
     });
   }
+
+  return res.json({ slideshowUrls, errors: errors.length > 0 ? errors : undefined });
 });
 
 export default router;
