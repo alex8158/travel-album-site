@@ -223,6 +223,55 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/my/trips/:id/highlight-pool — Get available photos for picker
+// Returns highlight photos NOT already in tier (eligible for adding)
+// Requirements: 2.2, 2.6, 3.3
+// ---------------------------------------------------------------------------
+router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
+  const db = getDb();
+  const tripId = req.params.id as string;
+  const userId = req.user!.userId;
+
+  const tripRow = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as TripRow | undefined;
+  if (!tripRow) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+
+  if (req.user!.role !== 'admin' && tripRow.user_id !== userId) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
+  }
+
+  const photos = db
+    .prepare(
+      `SELECT mi.id, mi.file_path, mi.category, hr.reason
+       FROM highlight_results hr
+       INNER JOIN media_items mi ON mi.id = hr.photo_id
+       WHERE hr.trip_id = ?
+         AND hr.is_highlight = 1
+         AND mi.status = 'active'
+         AND hr.is_highlight_tier = 0
+       ORDER BY mi.category, mi.created_at ASC`
+    )
+    .all(tripId) as Array<{
+    id: string;
+    file_path: string;
+    category: string | null;
+    reason: string | null;
+  }>;
+
+  const poolPhotos = photos.map((row) => ({
+    id: row.id,
+    filePath: row.file_path,
+    thumbnailUrl: `/api/media/${row.id}/thumbnail`,
+    originalUrl: `/api/media/${row.id}/original`,
+    category: row.category,
+    reason: row.reason,
+  }));
+
+  return res.json({ photos: poolPhotos });
+});
+
+// ---------------------------------------------------------------------------
 // PUT /api/my/trips/:id/tier-photos/:photoId — Add photo to tier
 // Auth: Required (owner or admin)
 // Requirements: 2.3, 2.5, 3.1, 3.2, 7.1–7.6, 10.1
