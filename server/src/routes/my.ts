@@ -224,8 +224,8 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/my/trips/:id/highlight-pool — Get available photos for picker
-// Returns highlight photos NOT already in tier (eligible for adding)
-// Requirements: 2.2, 2.6, 3.3
+// Returns active photos NOT already in tier (eligible for adding to tier)
+// Includes both highlighted and non-highlighted active photos
 // ---------------------------------------------------------------------------
 router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
   const db = getDb();
@@ -241,15 +241,17 @@ router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
+  // Return all active photos for this trip that are NOT already in tier
+  // Uses LEFT JOIN so photos without highlight_results rows are also included
   const photos = db
     .prepare(
       `SELECT mi.id, mi.file_path, mi.category, hr.reason
-       FROM highlight_results hr
-       INNER JOIN media_items mi ON mi.id = hr.photo_id
-       WHERE hr.trip_id = ?
-         AND hr.is_highlight = 1
+       FROM media_items mi
+       LEFT JOIN highlight_results hr ON hr.photo_id = mi.id AND hr.trip_id = mi.trip_id
+       WHERE mi.trip_id = ?
          AND mi.status = 'active'
-         AND hr.is_highlight_tier = 0
+         AND mi.media_type = 'image'
+         AND (hr.is_highlight_tier IS NULL OR hr.is_highlight_tier = 0)
        ORDER BY mi.category, mi.created_at ASC`
     )
     .all(tripId) as Array<{
@@ -302,21 +304,31 @@ router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '照片不存在' } });
   }
 
-  // Check photo is active and in highlight pool
+  // Check photo is active
+  if (mediaRow.status !== 'active') {
+    return res.status(400).json({
+      error: { code: 'NOT_ELIGIBLE', message: '该照片已被删除，无法添加到精华' },
+    });
+  }
+
+  // Check if highlight_results row exists; if not, create one (for restored photos)
   const highlightRow = db.prepare(
     'SELECT * FROM highlight_results WHERE photo_id = ? AND trip_id = ?'
   ).get(photoId, tripId) as { photo_id: string; trip_id: string; is_highlight: number; is_highlight_tier: number; reason: string | null } | undefined;
 
-  if (!highlightRow || highlightRow.is_highlight !== 1 || mediaRow.status !== 'active') {
-    return res.status(400).json({
-      error: { code: 'NOT_ELIGIBLE', message: '该照片不在精选池中或已被删除，无法添加到精华' },
-    });
+  if (highlightRow) {
+    // Row exists — just set tier flag
+    db.prepare(
+      'UPDATE highlight_results SET is_highlight_tier = 1, is_highlight = 1 WHERE photo_id = ? AND trip_id = ?'
+    ).run(photoId, tripId);
+  } else {
+    // No highlight_results row — create one with both flags set
+    const { v4: uuidv4 } = require('uuid');
+    db.prepare(
+      `INSERT INTO highlight_results (id, trip_id, photo_id, is_highlight, is_highlight_tier, reason, batch_index, evaluated_at)
+       VALUES (?, ?, ?, 1, 1, '手动添加到精华', 0, ?)`
+    ).run(uuidv4(), tripId, photoId, new Date().toISOString());
   }
-
-  // Set is_highlight_tier = 1
-  db.prepare(
-    'UPDATE highlight_results SET is_highlight_tier = 1 WHERE photo_id = ? AND trip_id = ?'
-  ).run(photoId, tripId);
 
   // Return updated TierPhotoItem
   const photo = {
@@ -325,7 +337,7 @@ router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
     thumbnailUrl: `/api/media/${mediaRow.id}/thumbnail`,
     originalUrl: `/api/media/${mediaRow.id}/original`,
     category: mediaRow.category,
-    reason: highlightRow.reason,
+    reason: highlightRow?.reason || '手动添加到精华',
   };
 
   return res.json({ photo });
