@@ -258,11 +258,16 @@ export default function GalleryPage() {
               gap: '12px',
             }}
           >
-            {highlightPhotos.map((photo) => (
+            {highlightPhotos.map((photo, idx) => (
               <div
                 key={photo.id}
                 data-testid={`highlight-photo-${photo.id}`}
                 className="media-card"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setLightboxIndex(idx)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
               >
                 <img
                   src={photo.thumbnailUrl}
@@ -304,11 +309,16 @@ export default function GalleryPage() {
                   gap: '12px',
                 }}
               >
-                {tierPhotos.map((photo) => (
+                {tierPhotos.map((photo, idx) => (
                   <div
                     key={photo.id}
                     data-testid={`tier-photo-${photo.id}`}
                     className="media-card"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setLightboxIndex(idx)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
                   >
                     <img
                       src={photo.thumbnailUrl}
@@ -545,20 +555,24 @@ export default function GalleryPage() {
         </div>
       )}
 
-      {lightboxIndex !== null && !editingMediaId && (
-        <Lightbox
-          images={filteredImages.map((img) => ({
-            originalUrl: img.originalUrl,
-            mediaId: img.item.id,
-            alt: img.item.originalFilename,
-          }))}
-          currentIndex={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
-          onPrev={() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
-          onNext={() => setLightboxIndex((i) => (i !== null && i < filteredImages.length - 1 ? i + 1 : i))}
-          onEdit={(mediaId) => setEditingMediaId(mediaId)}
-        />
-      )}
+      {lightboxIndex !== null && !editingMediaId && (() => {
+        // Determine which photo list to use for lightbox based on active tab
+        const lightboxImages = data.trip.visibility === 'public'
+          ? galleryTab === 'tier'
+            ? tierPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精华照片' }))
+            : highlightPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精选照片' }))
+          : filteredImages.map((img) => ({ originalUrl: img.originalUrl, mediaId: img.item.id, alt: img.item.originalFilename }));
+        return (
+          <Lightbox
+            images={lightboxImages}
+            currentIndex={lightboxIndex}
+            onClose={() => setLightboxIndex(null)}
+            onPrev={() => setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))}
+            onNext={() => setLightboxIndex((i) => (i !== null && i < lightboxImages.length - 1 ? i + 1 : i))}
+            onEdit={(mediaId) => setEditingMediaId(mediaId)}
+          />
+        );
+      })()}
 
       {editingMediaId && (
         <ImageEditor
