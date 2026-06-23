@@ -789,52 +789,77 @@ async function triggerTierSlideshow(
 ): Promise<boolean> {
   if (picks.length === 0) return false;
 
+  const MIN_PHOTOS_FOR_VIDEO = 6;
   const db = getDb();
   const storageProvider = getStorageProvider();
 
-  // Resolve file paths for the tier photos
-  const photoPaths: string[] = [];
+  // Group picks by category
+  const picksByCategory: Record<string, TierPick[]> = {};
   for (const pick of picks) {
     const row = db
-      .prepare('SELECT file_path FROM media_items WHERE id = ?')
-      .get(pick.photoId) as { file_path: string } | undefined;
-
-    if (!row) {
-      console.warn(`[tierSelector] Photo ${pick.photoId} not found in media_items, skipping for slideshow`);
-      continue;
-    }
-
-    try {
-      const localPath = await storageProvider.downloadToTemp(row.file_path);
-      photoPaths.push(localPath);
-    } catch (err) {
-      console.warn(`[tierSelector] Failed to resolve path for photo ${pick.photoId}: ${err}`);
-    }
+      .prepare('SELECT category FROM media_items WHERE id = ?')
+      .get(pick.photoId) as { category: string | null } | undefined;
+    const cat = row?.category || 'other';
+    if (!picksByCategory[cat]) picksByCategory[cat] = [];
+    picksByCategory[cat].push(pick);
   }
 
-  if (photoPaths.length < 2) {
-    console.warn('[tierSelector] Not enough photos for slideshow (need at least 2)');
-    return false;
-  }
-
-  // Generate the slideshow
+  let anyGenerated = false;
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
-  const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow');
 
-  const result = await generateSlideshow({
-    photoPaths,
-    audioPath: null,
-    outputDir,
-    photoDuration: 3,
-  });
+  // Generate per-category videos in parallel
+  const categoryJobs = Object.entries(picksByCategory)
+    .filter(([cat, catPicks]) => {
+      if (catPicks.length < MIN_PHOTOS_FOR_VIDEO) {
+        console.log(`[tierSelector] Skipping slideshow for '${cat}': only ${catPicks.length} photos (need ${MIN_PHOTOS_FOR_VIDEO})`);
+        return false;
+      }
+      return true;
+    })
+    .map(async ([cat, catPicks]) => {
+      // Download photos in parallel
+      const downloadResults = await Promise.allSettled(
+        catPicks.map(async (pick) => {
+          const row = db
+            .prepare('SELECT file_path FROM media_items WHERE id = ?')
+            .get(pick.photoId) as { file_path: string } | undefined;
+          if (!row) return null;
+          return storageProvider.downloadToTemp(row.file_path);
+        })
+      );
 
-  if (result.success && result.outputPath) {
-    console.log(
-      `[tierSelector] Tier slideshow generated: ${result.outputPath} (${result.totalDuration}s)`,
-    );
-    return true;
+      const photoPaths = downloadResults
+        .filter((r): r is PromiseFulfilledResult<string | null> => r.status === 'fulfilled')
+        .map((r) => r.value)
+        .filter((p): p is string => p !== null);
+
+      if (photoPaths.length < MIN_PHOTOS_FOR_VIDEO) {
+        console.warn(`[tierSelector] Category '${cat}': only ${photoPaths.length} downloadable photos, skipping slideshow`);
+        return false;
+      }
+
+      const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow', cat);
+
+      const result = await generateSlideshow({
+        photoPaths,
+        audioPath: null,
+        outputDir,
+        photoDuration: 3,
+      });
+
+      if (result.success && result.outputPath) {
+        console.log(`[tierSelector] Tier slideshow for '${cat}' generated: ${result.outputPath} (${result.totalDuration}s)`);
+        return true;
+      }
+
+      console.error(`[tierSelector] Slideshow for '${cat}' failed: ${result.error}`);
+      return false;
+    });
+
+  const results = await Promise.allSettled(categoryJobs);
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value === true) anyGenerated = true;
   }
 
-  console.error(`[tierSelector] Slideshow generation failed: ${result.error}`);
-  return false;
+  return anyGenerated;
 }

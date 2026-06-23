@@ -311,6 +311,21 @@ router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
     });
   }
 
+  // Enforce 9 photos per category limit
+  const MAX_TIER_PER_CATEGORY = 9;
+  const photoCategory = mediaRow.category || 'other';
+  const currentCategoryCount = (db.prepare(
+    `SELECT COUNT(*) as cnt FROM highlight_results hr
+     INNER JOIN media_items mi ON mi.id = hr.photo_id
+     WHERE hr.trip_id = ? AND hr.is_highlight_tier = 1 AND mi.status = 'active' AND mi.category = ?`
+  ).get(tripId, photoCategory) as { cnt: number }).cnt;
+
+  if (currentCategoryCount >= MAX_TIER_PER_CATEGORY) {
+    return res.status(400).json({
+      error: { code: 'CATEGORY_FULL', message: `该类别（${photoCategory}）精华已达上限${MAX_TIER_PER_CATEGORY}张` },
+    });
+  }
+
   // Check if highlight_results row exists; if not, create one (for restored photos)
   const highlightRow = db.prepare(
     'SELECT * FROM highlight_results WHERE photo_id = ? AND trip_id = ?'
