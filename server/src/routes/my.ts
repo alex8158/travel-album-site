@@ -202,24 +202,34 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
     reason: row.reason,
   }));
 
-  // Check for tier slideshow video
+  // Check for tier slideshow videos (per-category subdirectories)
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
   const tierSlideshowDir = path.join(uploadsBase, tripId, 'tier-slideshow');
-  let slideshowUrl: string | null = null;
+  const slideshowUrls: Record<string, string> = {};
 
   if (fs.existsSync(tierSlideshowDir)) {
     try {
-      const files = fs.readdirSync(tierSlideshowDir);
-      const mp4File = files.find((f) => f.endsWith('.mp4'));
-      if (mp4File) {
-        slideshowUrl = `/api/trips/${tripId}/tier-slideshow/${mp4File}`;
+      const entries = fs.readdirSync(tierSlideshowDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          // Per-category subdirectory (e.g., animal/, landscape/, people/)
+          const catDir = path.join(tierSlideshowDir, entry.name);
+          const catFiles = fs.readdirSync(catDir);
+          const mp4File = catFiles.find((f) => f.endsWith('.mp4'));
+          if (mp4File) {
+            slideshowUrls[entry.name] = `/api/trips/${tripId}/tier-slideshow/${entry.name}/${mp4File}`;
+          }
+        } else if (entry.isFile() && entry.name.endsWith('.mp4')) {
+          // Legacy: mp4 directly in tier-slideshow/ (old format)
+          slideshowUrls['all'] = `/api/trips/${tripId}/tier-slideshow/${entry.name}`;
+        }
       }
     } catch {
       // Directory not readable
     }
   }
 
-  return res.json({ photos: tierPhotos, slideshowUrl });
+  return res.json({ photos: tierPhotos, slideshowUrls });
 });
 
 // ---------------------------------------------------------------------------

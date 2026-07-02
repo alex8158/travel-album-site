@@ -215,9 +215,10 @@ export default function MyGalleryPage() {
     try {
       const result = await getMyTierPhotos(id);
       setTierPhotos(result.photos);
-      // slideshowUrl from getMyTierPhotos is the legacy single-URL format
-      // Convert to per-category format for display
-      if (result.slideshowUrl) {
+      // Use per-category slideshowUrls if available, fall back to legacy slideshowUrl
+      if (result.slideshowUrls && Object.keys(result.slideshowUrls).length > 0) {
+        setTierSlideshowUrls(result.slideshowUrls);
+      } else if (result.slideshowUrl) {
         setTierSlideshowUrls({ all: result.slideshowUrl });
       } else {
         setTierSlideshowUrls({});

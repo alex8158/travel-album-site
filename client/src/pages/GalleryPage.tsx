@@ -166,7 +166,7 @@ export default function GalleryPage() {
       try {
         const tierData = await getTierPhotos(id);
         if (!cancelled) {
-          setTierSlideshowUrl(tierData.slideshowUrl);
+          setTierSlideshowUrl(tierData.slideshowUrl ?? null);
           setTierPhotos(tierData.photos);
         }
       } catch {

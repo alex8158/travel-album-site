@@ -18,7 +18,8 @@ export interface TierPhotoItem {
 /** Response shape for tier photos endpoints. */
 export interface TierPhotosResponse {
   photos: TierPhotoItem[];
-  slideshowUrl: string | null;
+  slideshowUrl?: string | null;
+  slideshowUrls?: Record<string, string>;
 }
 
 export function apiPost<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
