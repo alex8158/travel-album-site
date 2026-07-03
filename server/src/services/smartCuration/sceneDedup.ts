@@ -831,14 +831,15 @@ export async function runSceneDedup(
   let vlmCallsFailed = 0;
   const decisions: CurationDecision[] = [];
 
-  // Sequential over batches — each batch is large, so parallelism would
-  // exhaust the VLM rate limit fast. One at a time is safer.
-  for (let b = 0; b < batches.length; b++) {
+  // Process batches with concurrency (3 at a time) for speed.
+  // VLM rate limit is handled by provider-level retry; 3 concurrent is safe for dashscope.
+  const SCENE_DEDUP_CONCURRENCY = 3;
+
+  async function processSingleBatch(b: number): Promise<void> {
     const batch = batches[b];
 
     let batchDecisions: BatchDecision[];
     if (batch.length < 2) {
-      // Single-photo batch (degenerate) — auto-keep without spending a VLM call.
       batchDecisions = batch.map((_, i) => ({
         candidateIndex: i,
         decision: 'keep' as const,
@@ -852,7 +853,6 @@ export async function runSceneDedup(
       } catch (err) {
         vlmCallsFailed++;
         const msg = err instanceof Error ? err.message : String(err);
-        // Categorize failure for the shared tracker
         if (vlmTracker) {
           const lower = msg.toLowerCase();
           if (lower.includes('parse') || lower.includes('failed to parse')) {
@@ -892,11 +892,18 @@ export async function runSceneDedup(
         similarityScore: null,
       });
     }
+  }
 
+  // Process in waves of SCENE_DEDUP_CONCURRENCY
+  for (let waveStart = 0; waveStart < batches.length; waveStart += SCENE_DEDUP_CONCURRENCY) {
+    const waveEnd = Math.min(waveStart + SCENE_DEDUP_CONCURRENCY, batches.length);
+    const waveIndices = Array.from({ length: waveEnd - waveStart }, (_, i) => waveStart + i);
+    console.log(`[sceneDedup] Processing wave ${Math.floor(waveStart / SCENE_DEDUP_CONCURRENCY) + 1}: batches ${waveStart + 1}-${waveEnd}/${batches.length}`);
+    await Promise.allSettled(waveIndices.map((idx) => processSingleBatch(idx)));
     onProgress(
       'sceneDedup',
       'progress',
-      `${b + 1}/${batches.length} batches (size=${batch.length})`
+      `${waveEnd}/${batches.length} batches processed`
     );
   }
 

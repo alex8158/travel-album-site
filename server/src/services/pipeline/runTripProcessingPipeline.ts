@@ -88,36 +88,39 @@ async function collectInputs(
      WHERE trip_id = ? AND media_type = 'image' AND status = 'active'`
   ).all(tripId) as CollectRow[];
 
-  const contexts: ImageProcessContext[] = [];
+  // Download all images concurrently (10 at a time) for speed
+  const DOWNLOAD_CONCURRENCY = 10;
+  const contexts: ImageProcessContext[] = rows.map((row, i) => ({
+    mediaId: row.id,
+    tripId,
+    filePath: row.file_path,
+    localPath: null,
+    downloadOk: false,
+    downloadError: null,
+    processingErrors: [],
+    index: i,
+    classification: null,
+    blur: null,
+    overexposure: null,
+  }));
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const ctx: ImageProcessContext = {
-      mediaId: row.id,
-      tripId,
-      filePath: row.file_path,
-      localPath: null,
-      downloadOk: false,
-      downloadError: null,
-      processingErrors: [],
-      index: i,
-      classification: null,
-      blur: null,
-      overexposure: null,
-    };
-
-    try {
-      const localPath = await tempCache.get(row.file_path);
-      ctx.localPath = localPath;
-      ctx.downloadOk = true;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.downloadOk = false;
-      ctx.downloadError = msg;
-      ctx.processingErrors.push(`[download] ${msg}`);
-    }
-
-    contexts.push(ctx);
+  // Process in waves of DOWNLOAD_CONCURRENCY
+  for (let waveStart = 0; waveStart < contexts.length; waveStart += DOWNLOAD_CONCURRENCY) {
+    const waveEnd = Math.min(waveStart + DOWNLOAD_CONCURRENCY, contexts.length);
+    await Promise.allSettled(
+      contexts.slice(waveStart, waveEnd).map(async (ctx) => {
+        try {
+          const localPath = await tempCache.get(ctx.filePath);
+          ctx.localPath = localPath;
+          ctx.downloadOk = true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.downloadOk = false;
+          ctx.downloadError = msg;
+          ctx.processingErrors.push(`[download] ${msg}`);
+        }
+      })
+    );
   }
 
   return contexts;
