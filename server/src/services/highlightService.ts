@@ -1257,26 +1257,21 @@ export async function runHighlightEvaluation(
       'UPDATE highlight_jobs SET failed_batches = failed_batches + 1 WHERE id = ?',
     );
 
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    // 7b) Process batches with concurrency (3 at a time) for speed
+    const BATCH_CONCURRENCY = 3;
+
+    async function processSingleBatch(batchIndex: number): Promise<void> {
       const batch = batches[batchIndex];
       let result: BatchResult | null = null;
       try {
         result = await evaluateBatch(batch, providerChain);
       } catch (err) {
-        // evaluateBatch is designed to swallow provider errors and return
-        // null on total failure; an uncaught throw here is unexpected, but
-        // we still treat the batch as failed and continue.
         console.error(
           `[highlightService] Unexpected error from evaluateBatch (batch ${batchIndex}): ${err}`,
         );
         result = null;
       }
 
-      // Always record every photo in this batch as "evaluated" so that
-      // non-highlight rows (is_highlight = 0) are persisted. Failed batches
-      // contribute their photos as evaluated-but-not-highlight as well; this
-      // matches the design's expectation that re-evaluation REPLACES prior
-      // results without losing track of which photos were considered.
       for (const p of batch) {
         allEvaluatedPhotos.push({ photoId: p.id, batchIndex });
       }
@@ -1304,14 +1299,20 @@ export async function runHighlightEvaluation(
 
       batchesProcessed += 1;
       incrementProcessed.run(jobId);
+    }
+
+    // Process in waves of BATCH_CONCURRENCY
+    for (let waveStart = 0; waveStart < batches.length; waveStart += BATCH_CONCURRENCY) {
+      const waveEnd = Math.min(waveStart + BATCH_CONCURRENCY, batches.length);
+      const waveIndices = Array.from({ length: waveEnd - waveStart }, (_, i) => waveStart + i);
+      console.log(`[highlightService] Processing batch wave ${waveStart / BATCH_CONCURRENCY + 1}: batches ${waveStart + 1}-${waveEnd}/${totalBatches}`);
+      await Promise.allSettled(waveIndices.map((idx) => processSingleBatch(idx)));
 
       if (typeof options.onProgress === 'function') {
         try {
-          options.onProgress(batchIndex + 1, totalBatches);
+          options.onProgress(waveEnd, totalBatches);
         } catch (cbErr) {
-          console.warn(
-            `[highlightService] onProgress callback threw: ${cbErr}`,
-          );
+          console.warn(`[highlightService] onProgress callback threw: ${cbErr}`);
         }
       }
     }
