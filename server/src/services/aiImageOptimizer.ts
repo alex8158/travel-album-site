@@ -460,11 +460,12 @@ export async function applyAdjustments(
  */
 export async function runAiRefinement(
   tripId: string,
-  options?: { vlmCallStats?: VLMCallStats },
+  options?: { vlmCallStats?: VLMCallStats; tempCache?: import('../helpers/tempPathCache').TempPathCache },
 ): Promise<AiOptimizeBatchResult> {
   const db = getDb();
   const storageProvider = getStorageProvider();
   const vlmTracker = options?.vlmCallStats ?? null;
+  const sharedTempCache = options?.tempCache ?? undefined;
 
   // Query active images for this trip
   const activeImages = db.prepare(
@@ -520,7 +521,9 @@ export async function runAiRefinement(
     const promises = chunk.map(async (image) => {
       try {
         // Download image and resize for analysis
-        const localPath = await storageProvider.downloadToTemp(image.file_path);
+        const localPath = sharedTempCache
+          ? await sharedTempCache.get(image.file_path)
+          : await storageProvider.downloadToTemp(image.file_path);
         const base64 = await resizeForAnalysis(localPath);
 
         // Provider-agnostic VLM call.

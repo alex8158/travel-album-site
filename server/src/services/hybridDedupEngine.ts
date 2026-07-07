@@ -161,34 +161,38 @@ export async function runLayer0(
   const tempCache = options?.tempCache;
   const n = rows.length;
 
-  // Compute hashes for all images
+  // Compute hashes for all images (parallel, 10 at a time)
   const fileMD5s: (string | null)[] = new Array(n).fill(null);
   const pHashes: (string | null)[] = new Array(n).fill(null);
   const dHashes: (string | null)[] = new Array(n).fill(null);
 
-  for (let i = 0; i < n; i++) {
-    try {
-      const localPath = tempCache
-        ? await tempCache.get(rows[i].file_path)
-        : await storageProvider.downloadToTemp(rows[i].file_path);
-      try {
-        fileMD5s[i] = computeFileMD5(localPath);
-        const [pHash, dHash] = await Promise.all([
-          computePHash(localPath),
-          computeHash(localPath),
-        ]);
-        pHashes[i] = pHash;
-        dHashes[i] = dHash;
-      } finally {
-        // Only clean up if not using cache (cache handles cleanup)
-        if (!tempCache) {
-          try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+  const HASH_CONCURRENCY = 10;
+  for (let waveStart = 0; waveStart < n; waveStart += HASH_CONCURRENCY) {
+    const waveEnd = Math.min(waveStart + HASH_CONCURRENCY, n);
+    await Promise.allSettled(
+      Array.from({ length: waveEnd - waveStart }, (_, k) => waveStart + k).map(async (i) => {
+        try {
+          const localPath = tempCache
+            ? await tempCache.get(rows[i].file_path)
+            : await storageProvider.downloadToTemp(rows[i].file_path);
+          try {
+            fileMD5s[i] = computeFileMD5(localPath);
+            const [pHash, dHash] = await Promise.all([
+              computePHash(localPath),
+              computeHash(localPath),
+            ]);
+            pHashes[i] = pHash;
+            dHashes[i] = dHash;
+          } finally {
+            if (!tempCache) {
+              try { fs.unlinkSync(localPath); } catch { /* ignore */ }
+            }
+          }
+        } catch (err) {
+          console.warn(`[hybridDedup] Layer 0: hash computation failed for ${rows[i].id}: ${err}`);
         }
-      }
-    } catch (err) {
-      console.warn(`[hybridDedup] Layer 0: hash computation failed for ${rows[i].id}: ${err}`);
-      // Leave all hashes as null — this image will pass through to Layer 1
-    }
+      })
+    );
   }
 
   const confirmedPairs: Array<{ i: number; j: number }> = [];

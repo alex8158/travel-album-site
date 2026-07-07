@@ -213,22 +213,26 @@ async function runBlurStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  for (const ctx of contexts) {
-    if (!ctx.downloadOk || !ctx.localPath) continue;
+  // Process blur assessment in parallel (10 at a time) — CPU-bound sharp operations
+  const BLUR_CONCURRENCY = 10;
+  const eligible = contexts.filter(c => c.downloadOk && c.localPath);
 
-    try {
-      // Use full dual-condition detection (Laplacian + MUSIQ) via assessBlur
-      const assessment = await assessBlur(ctx.localPath);
-      ctx.blur = {
-        sharpnessScore: assessment.sharpnessScore,
-        blurStatus: assessment.blurStatus,
-        musiqScore: assessment.musiqScore,
-        source: assessment.source,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node', error: msg };
-    }
+  for (let i = 0; i < eligible.length; i += BLUR_CONCURRENCY) {
+    const chunk = eligible.slice(i, i + BLUR_CONCURRENCY);
+    await Promise.allSettled(chunk.map(async (ctx) => {
+      try {
+        const assessment = await assessBlur(ctx.localPath!);
+        ctx.blur = {
+          sharpnessScore: assessment.sharpnessScore,
+          blurStatus: assessment.blurStatus,
+          musiqScore: assessment.musiqScore,
+          source: assessment.source,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.blur = { blurStatus: 'suspect', sharpnessScore: null, source: 'node', error: msg };
+      }
+    }));
   }
 
   const blurry = contexts.filter(c => c.blur?.blurStatus === 'blurry').length;
@@ -245,86 +249,59 @@ async function runOverexposureStage(
   contexts: ImageProcessContext[],
   pythonResults: PythonResultsMap,
 ): Promise<void> {
-  for (const ctx of contexts) {
-    if (!ctx.downloadOk || !ctx.localPath) continue;
+  // Process overexposure in parallel (10 at a time)
+  const OVEREXPOSURE_CONCURRENCY = 10;
+  const eligible = contexts.filter(c => c.downloadOk && c.localPath);
 
-    // Use Python result if available
-    const pyResult = pythonResults.get(ctx.mediaId);
-    if (pyResult && !pyResult.overexposureError && pyResult.overexposureStatus !== 'unknown') {
-      // First check global overexposure (>40% pixels above 240)
-      if (pyResult.overexposureStatus === 'overexposed') {
-        ctx.overexposure = {
-          overexposureStatus: 'overexposed',
-          overexposureRatio: pyResult.overexposureRatio,
-          qualityPenalty: 0,
-        };
-        continue;
-      }
-
-      // Now check subject-level overexposure
-      if (pyResult.subjectOverexposure) {
-        const { severity, qualityPenalty, largestRegionRatio } = pyResult.subjectOverexposure;
-        if (severity === 'severe') {
-          ctx.overexposure = {
-            overexposureStatus: 'overexposed',
-            overexposureRatio: largestRegionRatio,
-            qualityPenalty: 0,
-          };
-        } else if (severity === 'mild') {
-          ctx.overexposure = {
-            overexposureStatus: 'normal',
-            overexposureRatio: largestRegionRatio,
-            qualityPenalty: qualityPenalty,
-          };
-        } else {
-          // severity === 'none'
-          ctx.overexposure = {
-            overexposureStatus: 'normal',
-            overexposureRatio: pyResult.overexposureRatio,
-            qualityPenalty: 0,
-          };
+  for (let i = 0; i < eligible.length; i += OVEREXPOSURE_CONCURRENCY) {
+    const chunk = eligible.slice(i, i + OVEREXPOSURE_CONCURRENCY);
+    await Promise.allSettled(chunk.map(async (ctx) => {
+      // Use Python result if available
+      const pyResult = pythonResults.get(ctx.mediaId);
+      if (pyResult && !pyResult.overexposureError && pyResult.overexposureStatus !== 'unknown') {
+        if (pyResult.overexposureStatus === 'overexposed') {
+          ctx.overexposure = { overexposureStatus: 'overexposed', overexposureRatio: pyResult.overexposureRatio, qualityPenalty: 0 };
+          return;
         }
-        continue;
+        if (pyResult.subjectOverexposure) {
+          const { severity, qualityPenalty, largestRegionRatio } = pyResult.subjectOverexposure;
+          if (severity === 'severe') {
+            ctx.overexposure = { overexposureStatus: 'overexposed', overexposureRatio: largestRegionRatio, qualityPenalty: 0 };
+          } else if (severity === 'mild') {
+            ctx.overexposure = { overexposureStatus: 'normal', overexposureRatio: largestRegionRatio, qualityPenalty };
+          } else {
+            ctx.overexposure = { overexposureStatus: 'normal', overexposureRatio: pyResult.overexposureRatio, qualityPenalty: 0 };
+          }
+          return;
+        }
+        ctx.overexposure = { overexposureStatus: pyResult.overexposureStatus, overexposureRatio: pyResult.overexposureRatio, qualityPenalty: 0 };
+        return;
       }
 
-      // Subject detection was not available but global check passed
-      ctx.overexposure = {
-        overexposureStatus: pyResult.overexposureStatus,
-        overexposureRatio: pyResult.overexposureRatio,
-        qualityPenalty: 0,
-      };
-      continue;
-    }
-
-    // Python unavailable or failed — do a quick Node.js fallback using sharp
-    // (global pixel brightness check using overexposureGlobalRatio from PROCESS_THRESHOLDS)
-    if (pyResult?.overexposureError || pyResult?.subjectOverexposure === null) {
-      console.warn(`[overexposure] OpenCV/decode failure for ${ctx.mediaId}, falling back to sharp global brightness check`);
-    }
-    try {
-      const sharp = (await import('sharp')).default;
-      const { data, info } = await sharp(ctx.localPath)
-        .grayscale()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      const totalPixels = info.width * info.height;
-      let overexposedPixels = 0;
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] > 240) overexposedPixels++;
+      // Node.js fallback using sharp
+      if (pyResult?.overexposureError || pyResult?.subjectOverexposure === null) {
+        console.warn(`[overexposure] OpenCV/decode failure for ${ctx.mediaId}, falling back to sharp`);
       }
-      const ratio = totalPixels > 0 ? overexposedPixels / totalPixels : 0;
-      const THRESHOLD = PROCESS_THRESHOLDS.overexposureGlobalRatio;
+      try {
+        const sharp = (await import('sharp')).default;
+        const { data, info } = await sharp(ctx.localPath!)
+          .grayscale()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
 
-      ctx.overexposure = {
-        overexposureStatus: ratio >= THRESHOLD ? 'overexposed' : 'normal',
-        overexposureRatio: Math.round(ratio * 10000) / 10000,
-        qualityPenalty: 0,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ctx.overexposure = { overexposureStatus: 'unknown', overexposureRatio: null, qualityPenalty: 0, error: msg };
-    }
+        const totalPixels = info.width * info.height;
+        let overexposedPixels = 0;
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] > 240) overexposedPixels++;
+        }
+        const ratio = totalPixels > 0 ? overexposedPixels / totalPixels : 0;
+        const THRESHOLD = PROCESS_THRESHOLDS.overexposureGlobalRatio;
+        ctx.overexposure = { overexposureStatus: ratio >= THRESHOLD ? 'overexposed' : 'normal', overexposureRatio: Math.round(ratio * 10000) / 10000, qualityPenalty: 0 };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.overexposure = { overexposureStatus: 'unknown', overexposureRatio: null, qualityPenalty: 0, error: msg };
+      }
+    }));
   }
 
   const overexposed = contexts.filter(c => c.overexposure?.overexposureStatus === 'overexposed').length;
@@ -774,7 +751,7 @@ export async function runTripProcessingPipeline(
       onProgress('aiRefinement', 'start');
       t0 = Date.now();
       try {
-        const refinementResult = await runAiRefinement(tripId, { vlmCallStats });
+        const refinementResult = await runAiRefinement(tripId, { vlmCallStats, tempCache });
         aiRefinementTrashedCount = refinementResult.trashedCount;
         console.log(
           `[pipeline] aiRefinement: ${refinementResult.optimizedCount} optimized, ` +
