@@ -62,6 +62,8 @@ export interface AIReviewOptions {
   ) => void;
   /** Shared VLM call stats tracker — incremented in real-time during VLM calls. */
   vlmCallStats?: VLMCallStats;
+  /** Shared temp path cache to avoid re-downloading images from storage. */
+  tempCache?: import('../../helpers/tempPathCache').TempPathCache;
 }
 
 /** Trash reasons the VLM is allowed to emit during the review pass. */
@@ -374,14 +376,16 @@ export function parseReviewResponse(
  * unparseable response) the function throws — the caller turns that into the
  * conservative "keep all in this batch" outcome.
  */
-async function evaluateBatch(batch: CurationCandidate[]): Promise<BatchDecision[]> {
+async function evaluateBatch(batch: CurationCandidate[], tempCache?: import('../../helpers/tempPathCache').TempPathCache): Promise<BatchDecision[]> {
   const storageProvider = getStorageProvider();
 
   const images = await mapInParallel(
     batch,
     PER_BATCH_IMAGE_CONCURRENCY,
     async (c) => {
-      const localPath = await storageProvider.downloadToTemp(c.filePath);
+      const localPath = tempCache
+        ? await tempCache.get(c.filePath)
+        : await storageProvider.downloadToTemp(c.filePath);
       const base64 = await resizeForAnalysis(localPath);
       return { base64, mediaType: 'image/jpeg' as const };
     }
@@ -429,6 +433,7 @@ export async function runAIReview(
 ): Promise<AIReviewResult> {
   const onProgress = options?.onProgress ?? (() => {});
   const vlmTracker = options?.vlmCallStats ?? null;
+  const sharedTempCache = options?.tempCache ?? undefined;
 
   onProgress('aiReview', 'start');
 
@@ -480,7 +485,7 @@ export async function runAIReview(
   // Run the batches with concurrency limit. Each settled result is either a
   // BatchDecision[] (success) or an error reason (fallback to keep all).
   const settled = await processInBatches(batches, VLM_CONCURRENCY, async (batch) => {
-    const result = await evaluateBatch(batch);
+    const result = await evaluateBatch(batch, sharedTempCache);
     return result;
   });
 

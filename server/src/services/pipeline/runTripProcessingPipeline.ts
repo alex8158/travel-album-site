@@ -702,6 +702,7 @@ export async function runTripProcessingPipeline(
           onProgress('aiReview', status, detail);
         },
         vlmCallStats,
+        tempCache,
       });
       aiReviewTrashedCount = reviewResult.totalTrashed;
       console.log(
@@ -739,6 +740,7 @@ export async function runTripProcessingPipeline(
           onProgress('sceneDedup', status, detail);
         },
         vlmCallStats,
+        tempCache,
       });
       sceneDedupTrashedCount = sceneResult.totalTrashed;
       console.log(

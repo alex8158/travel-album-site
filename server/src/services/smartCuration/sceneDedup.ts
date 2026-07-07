@@ -91,6 +91,8 @@ export interface SceneDedupOptions {
   ) => void;
   /** Shared VLM call stats tracker — incremented in real-time during VLM calls. */
   vlmCallStats?: VLMCallStats;
+  /** Shared temp path cache to avoid re-downloading images from storage. */
+  tempCache?: import('../../helpers/tempPathCache').TempPathCache;
 }
 
 /** Trash reasons accepted from the VLM in this stage. */
@@ -687,11 +689,13 @@ export function parseSceneDedupResponse(
 // One-batch evaluation
 // ---------------------------------------------------------------------------
 
-async function evaluateBatch(batch: CurationCandidate[]): Promise<BatchDecision[]> {
+async function evaluateBatch(batch: CurationCandidate[], tempCache?: import('../../helpers/tempPathCache').TempPathCache): Promise<BatchDecision[]> {
   const storageProvider = getStorageProvider();
 
   const images = await mapInParallel(batch, PER_BATCH_IMAGE_CONCURRENCY, async (c) => {
-    const localPath = await storageProvider.downloadToTemp(c.filePath);
+    const localPath = tempCache
+      ? await tempCache.get(c.filePath)
+      : await storageProvider.downloadToTemp(c.filePath);
     const base64 = await resizeForAnalysis(localPath);
     return { base64, mediaType: 'image/jpeg' as const };
   });
@@ -730,6 +734,7 @@ export async function runSceneDedup(
 ): Promise<SceneDedupResult> {
   const onProgress = options?.onProgress ?? (() => {});
   const vlmTracker = options?.vlmCallStats ?? null;
+  const sharedTempCache = options?.tempCache ?? null;
 
   onProgress('sceneDedup', 'start');
 
@@ -847,7 +852,7 @@ export async function runSceneDedup(
       }));
     } else {
       try {
-        batchDecisions = await evaluateBatch(batch);
+        batchDecisions = await evaluateBatch(batch, sharedTempCache ?? undefined);
         vlmCallsMade++;
         if (vlmTracker) recordVLMSuccess(vlmTracker, 'sceneDedup');
       } catch (err) {
