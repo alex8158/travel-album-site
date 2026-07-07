@@ -242,26 +242,36 @@ interface TierPhotoItem {
  * Find the tier slideshow video file for a trip.
  * Returns a URL path if a slideshow exists, or null otherwise.
  */
-function getTierSlideshowUrl(tripId: string): string | null {
+function getTierSlideshowUrls(tripId: string): Record<string, string> {
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
   const tierSlideshowDir = path.join(uploadsBase, tripId, 'tier-slideshow');
+  const urls: Record<string, string> = {};
 
   if (!fs.existsSync(tierSlideshowDir)) {
-    return null;
+    return urls;
   }
 
-  // Look for mp4 files in the tier-slideshow directory
   try {
-    const files = fs.readdirSync(tierSlideshowDir);
-    const mp4File = files.find((f) => f.endsWith('.mp4'));
-    if (mp4File) {
-      return `/api/trips/${tripId}/tier-slideshow/${mp4File}`;
+    const entries = fs.readdirSync(tierSlideshowDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        // Per-category subdirectory (animal/, landscape/, people/)
+        const catDir = path.join(tierSlideshowDir, entry.name);
+        const catFiles = fs.readdirSync(catDir);
+        const mp4File = catFiles.find((f) => f.endsWith('.mp4'));
+        if (mp4File) {
+          urls[entry.name] = `/api/trips/${tripId}/tier-slideshow/${entry.name}/${mp4File}`;
+        }
+      } else if (entry.isFile() && entry.name.endsWith('.mp4')) {
+        // Legacy: mp4 directly in tier-slideshow/ root
+        urls['all'] = `/api/trips/${tripId}/tier-slideshow/${entry.name}`;
+      }
     }
   } catch {
     // Directory not readable
   }
 
-  return null;
+  return urls;
 }
 
 /**
@@ -326,9 +336,9 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
   }
 
   const photos = queryTierPhotos(tripId);
-  const slideshowUrl = getTierSlideshowUrl(tripId);
+  const slideshowUrls = getTierSlideshowUrls(tripId);
 
-  return res.json({ photos, slideshowUrl });
+  return res.json({ photos, slideshowUrls });
 });
 
 // ---------------------------------------------------------------------------

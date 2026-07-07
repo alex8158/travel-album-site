@@ -108,7 +108,7 @@ export default function GalleryPage() {
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
-  const [tierSlideshowUrl, setTierSlideshowUrl] = useState<string | null>(null);
+  const [tierSlideshowUrls, setTierSlideshowUrls] = useState<Record<string, string>>({});
   const [galleryTab, setGalleryTab] = useState<'all' | 'tier'>('all');
   const [highlightPhotos, setHighlightPhotos] = useState<TierPhotoItem[]>([]);
   const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
@@ -166,7 +166,7 @@ export default function GalleryPage() {
       try {
         const tierData = await getTierPhotos(id);
         if (!cancelled) {
-          setTierSlideshowUrl(tierData.slideshowUrl ?? null);
+          setTierSlideshowUrls(tierData.slideshowUrls ?? {});
           setTierPhotos(tierData.photos);
         }
       } catch {
@@ -283,18 +283,21 @@ export default function GalleryPage() {
       {/* "精华" tab: show tier photos + slideshow */}
       {galleryTab === 'tier' && data.trip.visibility === 'public' && (
         <>
-          {tierSlideshowUrl && (
+          {Object.keys(tierSlideshowUrls).length > 0 && (
             <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
               <h2>精华视频</h2>
-              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <video
-                  src={tierSlideshowUrl}
-                  controls
-                  data-testid="tier-slideshow-video"
-                  style={{ width: '100%', borderRadius: '8px', background: '#000' }}
-                  aria-label="精华幻灯片视频"
-                />
-              </div>
+              {Object.entries(tierSlideshowUrls).map(([cat, url]) => (
+                <div key={cat} style={{ maxWidth: '800px', margin: '0 auto 16px' }}>
+                  {cat !== 'all' && <h3 style={{ margin: '0 0 8px 0', color: '#666' }}>{cat === 'animal' ? '🐾 动物' : cat === 'landscape' ? '🏞️ 风景' : cat === 'people' ? '👤 人物' : cat}</h3>}
+                  <video
+                    src={url}
+                    controls
+                    data-testid="tier-slideshow-video"
+                    style={{ width: '100%', borderRadius: '8px', background: '#000' }}
+                    aria-label={`精华视频 - ${cat}`}
+                  />
+                </div>
+              ))}
             </section>
           )}
           {tierPhotos.length > 0 && (
@@ -330,7 +333,7 @@ export default function GalleryPage() {
               </div>
             </section>
           )}
-          {tierPhotos.length === 0 && !tierSlideshowUrl && (
+          {tierPhotos.length === 0 && Object.keys(tierSlideshowUrls).length === 0 && (
             <div className="empty-state" style={{ padding: '32px' }}>
               <p>暂无精华照片</p>
             </div>
@@ -341,20 +344,6 @@ export default function GalleryPage() {
       {/* Original gallery content — only for non-public trips */}
       {data.trip.visibility !== 'public' && (
         <>
-          {tierSlideshowUrl && (
-            <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
-              <h2>精华视频</h2>
-              <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-                <video
-                  src={tierSlideshowUrl}
-                  controls
-                  data-testid="tier-slideshow-video"
-                  style={{ width: '100%', borderRadius: '8px', background: '#000' }}
-                  aria-label="精华幻灯片视频"
-                />
-              </div>
-            </section>
-          )}
         </>
       )}
 
