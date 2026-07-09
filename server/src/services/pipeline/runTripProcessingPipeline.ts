@@ -739,7 +739,8 @@ export async function runTripProcessingPipeline(
     // as a final keep/trash check). Needs a VLM provider; the gate
     // accepts any of dashscope / anthropic / bedrock that vlmClient supports.
     // Runs AFTER sceneDedup per design: writeDecisions → aiReview → sceneDedup → aiRefinement
-    const aiRefinementEnabled = process.env.AI_REVIEW_ENABLED === 'true';
+    // Controlled by AI_REFINEMENT_ENABLED (defaults to AI_REVIEW_ENABLED for backward compat)
+    const aiRefinementEnabled = (process.env.AI_REFINEMENT_ENABLED ?? process.env.AI_REVIEW_ENABLED) === 'true';
     const vlmConfiguredForRefinement =
       !!process.env.DASHSCOPE_API_KEY ||
       !!process.env.ANTHROPIC_API_KEY ||
