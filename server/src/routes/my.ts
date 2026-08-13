@@ -234,8 +234,13 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/my/trips/:id/highlight-pool — Get available photos for picker
-// Returns active photos NOT already in tier (eligible for adding to tier)
-// Includes both highlighted and non-highlighted active photos
+//
+// Returns exactly the Highlight_Pool subset that is eligible to be added to the
+// tier: active highlight photos that are not already Tier_Photos. Photos that
+// are not highlights — including photos with no `highlight_results` row at all
+// (never evaluated) — are NOT candidates and must not appear here.
+//
+// Requirements: 2.2, 2.6, 3.3 (and design.md Property 2)
 // ---------------------------------------------------------------------------
 router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
   const db = getDb();
@@ -251,8 +256,12 @@ router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
-  // Return all active photos for this trip that are NOT already in tier
-  // Uses LEFT JOIN so photos without highlight_results rows are also included
+  // Eligibility: trip match AND image AND active AND is_highlight = 1 AND not
+  // already in tier.
+  //
+  // `hr.is_highlight = 1` also excludes photos with no highlight_results row:
+  // the LEFT JOIN yields NULL for those, and `NULL = 1` evaluates to NULL (not
+  // true), so the row is filtered out. The JOIN is therefore left as-is.
   const photos = db
     .prepare(
       `SELECT mi.id, mi.file_path, mi.category, hr.reason
@@ -261,6 +270,7 @@ router.get('/trips/:id/highlight-pool', (req: Request, res: Response) => {
        WHERE mi.trip_id = ?
          AND mi.status = 'active'
          AND mi.media_type = 'image'
+         AND hr.is_highlight = 1
          AND (hr.is_highlight_tier IS NULL OR hr.is_highlight_tier = 0)
        ORDER BY mi.category, mi.created_at ASC`
     )
@@ -321,39 +331,42 @@ router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
     });
   }
 
-  // Enforce 9 photos per category limit
-  const MAX_TIER_PER_CATEGORY = 9;
-  const photoCategory = mediaRow.category || 'other';
-  const currentCategoryCount = (db.prepare(
-    `SELECT COUNT(*) as cnt FROM highlight_results hr
-     INNER JOIN media_items mi ON mi.id = hr.photo_id
-     WHERE hr.trip_id = ? AND hr.is_highlight_tier = 1 AND mi.status = 'active' AND mi.category = ?`
-  ).get(tripId, photoCategory) as { cnt: number }).cnt;
+  // No category quota gate here by design. Category quotas are SOFT quotas:
+  // requirements.md Requirement 4.1 states the API must allow adding a photo
+  // "even if the photo's category already has the maximum quota number of
+  // Tier_Photos", and design.md Key Design Decision 2 / Property 4 both require
+  // that quotas never block add/remove. Quota counts are advisory labels shown
+  // in My Gallery only.
+  //
+  // The 6–9 per-category range in the highlight-tier spec constrains the AI
+  // Highlight_Tier_Selector, not this manual endpoint.
 
-  if (currentCategoryCount >= MAX_TIER_PER_CATEGORY) {
-    return res.status(400).json({
-      error: { code: 'CATEGORY_FULL', message: `该类别（${photoCategory}）精华已达上限${MAX_TIER_PER_CATEGORY}张` },
-    });
-  }
-
-  // Check if highlight_results row exists; if not, create one (for restored photos)
+  // Membership in the Highlight_Pool is a PRECONDITION, not something this
+  // endpoint may bring about. Requirements 2.5, 3.1, 7.2, 7.5 and 10.1 all
+  // require verifying `is_highlight = 1` and rejecting otherwise, and Property 3
+  // states the add succeeds "if and only if" the photo already satisfies
+  // `is_highlight = 1` AND `status = 'active'` AND belongs to the trip.
+  //
+  // `is_highlight` is owned by the AI evaluation flow (`highlightService.ts`),
+  // which rebuilds every `highlight_results` row for a trip per run. Therefore:
+  //   - no row            → the photo has not been evaluated yet → not eligible
+  //   - row, is_highlight=0 → evaluated and judged NOT a highlight → not eligible
+  // In neither case may this endpoint create a row or flip `is_highlight`.
   const highlightRow = db.prepare(
     'SELECT * FROM highlight_results WHERE photo_id = ? AND trip_id = ?'
   ).get(photoId, tripId) as { photo_id: string; trip_id: string; is_highlight: number; is_highlight_tier: number; reason: string | null } | undefined;
 
-  if (highlightRow) {
-    // Row exists — just set tier flag
-    db.prepare(
-      'UPDATE highlight_results SET is_highlight_tier = 1, is_highlight = 1 WHERE photo_id = ? AND trip_id = ?'
-    ).run(photoId, tripId);
-  } else {
-    // No highlight_results row — create one with both flags set
-    const { v4: uuidv4 } = require('uuid');
-    db.prepare(
-      `INSERT INTO highlight_results (id, trip_id, photo_id, is_highlight, is_highlight_tier, reason, batch_index, evaluated_at)
-       VALUES (?, ?, ?, 1, 1, '手动添加到精华', 0, ?)`
-    ).run(uuidv4(), tripId, photoId, new Date().toISOString());
+  if (!highlightRow || highlightRow.is_highlight !== 1) {
+    return res.status(400).json({
+      error: { code: 'NOT_ELIGIBLE', message: '该照片不在精选池中，无法添加到精华' },
+    });
   }
+
+  // Eligible — set the tier flag only. `is_highlight`, `reason`, `batch_index`
+  // and `evaluated_at` are evaluation metadata and must not be written here.
+  db.prepare(
+    'UPDATE highlight_results SET is_highlight_tier = 1 WHERE photo_id = ? AND trip_id = ?'
+  ).run(photoId, tripId);
 
   // Return updated TierPhotoItem
   const photo = {
@@ -362,7 +375,7 @@ router.put('/trips/:id/tier-photos/:photoId', (req: Request, res: Response) => {
     thumbnailUrl: `/api/media/${mediaRow.id}/thumbnail`,
     originalUrl: `/api/media/${mediaRow.id}/original`,
     category: mediaRow.category,
-    reason: highlightRow?.reason || '手动添加到精华',
+    reason: highlightRow.reason,
   };
 
   return res.json({ photo });
@@ -470,12 +483,24 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
   const slideshowUrls: Record<string, string> = {};
   const errors: string[] = [];
+  // Eligibility is decided *before* any generation attempt, purely on the
+  // Tier_Photo count (Requirement 9.7 / highlight-tier 6.3). It must never be
+  // inferred from download results, generator success or `slideshowUrls` size,
+  // because the terminal state depends on eligibility and success being counted
+  // independently (Requirements 9.3 / 9.6 / 9.7).
+  let eligibleCategories = 0;
 
   for (const [category, photos] of Object.entries(grouped)) {
     if (photos.length < MIN_PHOTOS_FOR_VIDEO) {
+      // highlight-tier 6.3: skip and log the category with its photo count.
+      // Not an Eligible_Category, so this is NOT recorded in `errors[]`.
       console.log(`[regenerate] Skipping category '${category}': only ${photos.length} photos (need ${MIN_PHOTOS_FOR_VIDEO})`);
       continue;
     }
+
+    // From here on the category IS an Eligible_Category: any subsequent failure
+    // is a generation-attempt failure (highlight-tier 6.7), not an eligibility skip.
+    eligibleCategories++;
 
     // Download photos to temp
     const photoPaths: string[] = [];
@@ -489,7 +514,13 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
     }
 
     if (photoPaths.length < MIN_PHOTOS_FOR_VIDEO) {
-      console.warn(`[regenerate] Category '${category}': only ${photoPaths.length} downloadable photos, skipping`);
+      // The category cleared the Tier_Photo eligibility threshold, so falling
+      // below it after download failures is a failed generation attempt — it is
+      // recorded in `errors[]` rather than silently skipped (Requirement 9.3).
+      console.warn(`[regenerate] Category '${category}': only ${photoPaths.length} of ${photos.length} photos downloadable (need ${MIN_PHOTOS_FOR_VIDEO})`);
+      errors.push(
+        `${category}: 素材准备失败，仅 ${photoPaths.length}/${photos.length} 张照片可用（需 ${MIN_PHOTOS_FOR_VIDEO} 张）`
+      );
       continue;
     }
 
@@ -515,15 +546,45 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
     }
   }
 
-  if (Object.keys(slideshowUrls).length === 0) {
+  // ---------------------------------------------------------------------------
+  // Terminal state — decided only after every Eligible_Category was attempted.
+  // See the truth table in `.kiro/specs/manual-photo-management/design.md`
+  // §Components 3:
+  //
+  //   eligible | successful | result
+  //   ---------|------------|--------------------------------
+  //          0 |          0 | 400 NO_ELIGIBLE_CATEGORIES
+  //       >= 1 |       >= 1 | 200 { slideshowUrls, errors? }
+  //       >= 1 |          0 | 500 GENERATION_FAILED
+  // ---------------------------------------------------------------------------
+  const successfulGenerations = Object.keys(slideshowUrls).length;
+
+  // Requirement 9.7: eligibility precondition failure. This is NOT a generation
+  // failure, so the message describes only the photo-count shortfall and must
+  // not splice in generator/download error detail.
+  if (eligibleCategories === 0) {
     return res.status(400).json({
       error: {
         code: 'NO_ELIGIBLE_CATEGORIES',
-        message: `没有类别达到最少${MIN_PHOTOS_FOR_VIDEO}张照片的要求` + (errors.length > 0 ? ` (${errors.join('; ')})` : ''),
+        message: `没有类别达到最少${MIN_PHOTOS_FOR_VIDEO}张照片的要求`,
       },
     });
   }
 
+  // Requirement 9.6: at least one Eligible_Category existed, but none produced a
+  // video. Every eligible category was already attempted and its error recorded.
+  if (successfulGenerations === 0) {
+    return res.status(500).json({
+      error: {
+        code: 'GENERATION_FAILED',
+        message:
+          errors.length > 0 ? `视频生成失败：${errors.join('; ')}` : '视频生成失败',
+      },
+    });
+  }
+
+  // Requirement 9.3: partial success — per-category failures do not fail the
+  // whole request; `errors` is omitted when no eligible category failed.
   return res.json({ slideshowUrls, errors: errors.length > 0 ? errors : undefined });
 });
 

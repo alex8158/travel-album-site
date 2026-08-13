@@ -6,7 +6,7 @@ This feature extends the existing highlight-tier (精华) system to support manu
 
 1. **Manual remove/add operations** — Users can remove photos from the tier and add replacements from the highlight pool via a Photo Picker dialog in My Gallery.
 2. **Slideshow regeneration** — A "重新生成视频" button triggers re-creation of the tier slideshow video using the current (manually curated) tier photos.
-3. **Public Gallery tabs** — Visitors see "全部" (all highlights) and "精华" (tier photos + slideshow) tabs in the Public Gallery.
+3. **Public Gallery tabs** — Visitors see "精选" (all highlights; an earlier draft of this document called it "全部" — see the Correction Note in `requirements.md` Requirement 6) and "精华" (tier photos + slideshow) tabs in the Public Gallery.
 
 The design preserves the existing subset invariant (`is_highlight_tier = 1` ⟹ `is_highlight = 1` AND `status = 'active'`) and treats category quotas as advisory.
 
@@ -17,7 +17,7 @@ flowchart TD
     subgraph Frontend
         MG["MyGalleryPage (精华 tab)"]
         PP["PhotoPicker Dialog"]
-        PG["GalleryPage (全部/精华 tabs)"]
+        PG["GalleryPage (精选/精华 tabs)"]
     end
 
     subgraph Backend["Server API Layer"]
@@ -40,7 +40,7 @@ flowchart TD
     PP -->|"Load candidates"| GET_MY_POOL
     PP -->|"Select photo"| PUT_ADD
     MG -->|"重新生成视频"| POST_REGEN
-    PG -->|"全部 tab"| GET_HL
+    PG -->|"精选 tab"| GET_HL
     PG -->|"精华 tab"| GET_TIER
 
     PUT_ADD --> DB
@@ -57,7 +57,7 @@ flowchart TD
 1. **Optimistic UI with server validation** — The frontend updates the UI optimistically on remove/add, rolling back on API failure. The server is the source of truth for invariant enforcement.
 2. **Soft quotas** — Category quotas are displayed as informational labels (`"动物: 7/6-9"`) but never block add/remove operations. This gives users full creative control.
 3. **Synchronous regeneration** — The `POST /regenerate` endpoint runs slideshow generation inline and returns the new URL on success. This simplifies the frontend (no polling needed) at the cost of a longer request duration (~10-30s depending on photo count). A loading indicator communicates progress.
-4. **New highlight-photos endpoint** — A new `GET /api/trips/:id/highlight-photos` endpoint serves all highlight photos (not just tier) for the Public Gallery "全部" tab, keeping it decoupled from the existing `/gallery` endpoint logic.
+4. **New highlight-photos endpoint** — A new `GET /api/trips/:id/highlight-photos` endpoint serves all highlight photos (not just tier) for the Public Gallery "精选" tab, keeping it decoupled from the existing `/gallery` endpoint logic.
 
 ## Components and Interfaces
 
@@ -118,22 +118,49 @@ flowchart TD
 
 **Auth:** Required (owner or admin)
 
-**Action:** Queries current tier photos, generates a new slideshow video, replaces existing file.
+**Action:** Queries current tier photos, groups them by category, and generates one slideshow video **per category** (`MIN_PHOTOS_FOR_VIDEO` = 6 photos required per category), replacing existing files.
 
 **Response:**
 ```typescript
-// 200 OK
-{ slideshowUrl: string }
+// 200 OK — keyed by category; categories skipped or failed are absent.
+// `errors` is omitted entirely when no category failed.
+{ slideshowUrls: Record<string, string>; errors?: string[] }
 
-// 400 Bad Request
+// 400 Bad Request — no tier photos at all
 { error: { code: 'NO_TIER_PHOTOS', message: '没有精华照片可用于生成视频' } }
+
+// 400 Bad Request — tier photos exist, but no category reaches MIN_PHOTOS_FOR_VIDEO
+// (no Eligible_Category). Message MUST NOT splice in generator error detail.
+{ error: { code: 'NO_ELIGIBLE_CATEGORIES', message: '没有类别达到最少6张照片的要求' } }
 
 // 403 Forbidden
 { error: { code: 'FORBIDDEN', message: '无权操作此资源' } }
 
-// 500 Internal Server Error
+// 404 Not Found — trip does not exist
+{ error: { code: 'NOT_FOUND', message: '旅行不存在' } }
+
+// 500 Internal Server Error — every Eligible_Category failed to generate
 { error: { code: 'GENERATION_FAILED', message: string } }
 ```
+
+**Terminal-state truth table** (authority: Requirements 9.3 / 9.6 / 9.7, `highlight-tier` 6.3 / 6.7)
+
+An **Eligible_Category** is a category whose Tier_Photo count reaches `MIN_PHOTOS_FOR_VIDEO` (6). Categories below that threshold are skipped per `highlight-tier` 6.3 and are *not* generation failures.
+
+| Eligible categories | Successful generations | Result |
+|---|---:|---|
+| 0 | 0 | 400 `NO_ELIGIBLE_CATEGORIES` |
+| >= 1 | >= 1 | 200 `{ slideshowUrls, errors? }` |
+| >= 1 | 0 | 500 `GENERATION_FAILED` |
+
+Rules that hold across all three rows:
+
+- Zero Tier_Photos is handled earlier and returns 400 `NO_TIER_PHOTOS` (Requirement 9.4); it never reaches this table.
+- Every Eligible_Category is attempted before responding. Returning 500 after a complete traversal is **not** aborting the regeneration (`highlight-tier` 6.7).
+- A category skipped for `< MIN_PHOTOS_FOR_VIDEO` is logged with its photo count (`highlight-tier` 6.3) and **SHALL NOT** be added to `errors[]`.
+- A failed Eligible_Category has its error recorded in `errors[]` (`highlight-tier` 6.7) and is absent from `slideshowUrls`.
+- `errors` is omitted entirely when no Eligible_Category failed.
+- No third failure taxonomy ("other internal error") is defined; do not invent one.
 
 #### 4. `GET /api/my/trips/:id/highlight-pool` — Get available highlight photos for picker
 
@@ -147,7 +174,7 @@ flowchart TD
 { photos: TierPhotoItem[] }
 ```
 
-#### 5. `GET /api/trips/:id/highlight-photos` — Public highlight photos (全部 tab)
+#### 5. `GET /api/trips/:id/highlight-photos` — Public highlight photos (精选 tab)
 
 **Auth:** Optional (public for public trips, owner/admin for any)
 
@@ -192,7 +219,7 @@ Changes to the existing tier tab:
 #### 3. Public Gallery Tabs (GalleryPage)
 
 New tab bar added to GalleryPage:
-- "全部" tab (default): shows all highlight photos in the existing image grid
+- "精选" tab (default): shows all highlight photos in the existing image grid
 - "精华" tab: shows tier photos + tier slideshow video
 - Tab bar uses the same `pill-tabs` styling as category tabs
 
@@ -206,7 +233,9 @@ export async function addToTier(tripId: string, photoId: string): Promise<TierPh
 export async function removeFromTier(tripId: string, photoId: string): Promise<void>;
 
 /** Regenerate tier slideshow */
-export async function regenerateTierSlideshow(tripId: string): Promise<{ slideshowUrl: string }>;
+export async function regenerateTierSlideshow(
+  tripId: string
+): Promise<{ slideshowUrls: Record<string, string>; errors?: string[] }>;
 
 /** Get highlight pool (available photos for picker) */
 export async function getHighlightPool(tripId: string): Promise<{ photos: TierPhotoItem[] }>;
@@ -303,6 +332,27 @@ Highlight Pool photo (is_highlight=1, is_highlight_tier=0)
 
 **Validates: Requirements 10.3**
 
+> **Dormant invariant — no user-facing "unhighlight" operation is required.**
+>
+> Requirement 10.3 is a *mutation invariant*, not a capability requirement: it constrains
+> what any future `is_highlight` 1 → 0 write must do. It does **not** ask the system to
+> expose an unhighlight / 取消精选 endpoint or UI control, and no requirement in this spec
+> or in `highlight-tier` asks for one. Note the contrast in grammar — capability criteria in
+> this spec read `THE Tier_API SHALL expose …` (7.1, 8.1, 9.1) or `THE My_Gallery SHALL
+> display …` (1.1, 5.1), whereas 10.3 reads `WHEN … THEN THE system SHALL …`. The state
+> diagram above likewise draws only the `PUT add` / `DELETE remove` transitions.
+>
+> As of 2026-08-07 **no production path performs `is_highlight` 1 → 0 on an existing row**,
+> so this property is dormant: it cannot currently be violated, and its absence of a trigger
+> is not a defect. AI re-evaluation deletes and rebuilds `highlight_results` per trip, which
+> cannot leave `is_highlight = 0 AND is_highlight_tier = 1` behind.
+>
+> The designated owner for any future such write is
+> `clearHighlightWithCascade()` (`server/src/services/highlightService.ts`), which clears
+> `is_highlight` and `is_highlight_tier` in one atomic `UPDATE`. Do **not** add a second
+> cascade implementation, and do **not** fabricate a caller or entry point merely to give
+> that helper a call site — a real unhighlight capability requires its own requirement first.
+
 ## Error Handling
 
 | Scenario | HTTP Code | Error Code | Message |
@@ -311,9 +361,12 @@ Highlight Pool photo (is_highlight=1, is_highlight_tier=0)
 | Photo not eligible for tier (not highlight or trashed) | 400 | `NOT_ELIGIBLE` | 该照片不在精选池中或已被删除，无法添加到精华 |
 | Photo not currently in tier (on remove) | 400 | `NOT_IN_TIER` | 该照片当前不在精华中 |
 | No tier photos for regeneration | 400 | `NO_TIER_PHOTOS` | 没有精华照片可用于生成视频 |
+| Tier photos exist, but no Eligible_Category (all below `MIN_PHOTOS_FOR_VIDEO`) | 400 | `NO_ELIGIBLE_CATEGORIES` | 没有类别达到最少6张照片的要求 |
 | User not owner/admin | 403 | `FORBIDDEN` | 无权操作此资源 |
-| Slideshow generation failure | 500 | `GENERATION_FAILED` | (dynamic error detail) |
-| Unauthenticated request | 401 | `UNAUTHORIZED` | 未登录 |
+| Every Eligible_Category failed to generate (zero successful videos) | 500 | `GENERATION_FAILED` | (dynamic error detail) |
+| Unauthenticated request | 401 | `TOKEN_INVALID` | 请先登录 |
+
+> 401 由共享的 `requireAuth` 中间件（`server/src/middleware/auth.ts`）统一返回，不由本 spec 的路由处理器产生；wire error code 为 `TOKEN_INVALID`。
 
 **Frontend error handling:**
 - On API failure during remove: show toast/error, keep photo in place (no optimistic removal)
@@ -355,3 +408,19 @@ Tag format: `Feature: manual-photo-management, Property {N}: {title}`
 - Remove photo → verify removed from tier queries
 - Public gallery: verify correct data in both tabs
 - Cascade: trash a tier photo → verify auto-removal from tier
+
+## Contract Decisions
+
+### 2026-08-07: regenerate 终态语义已裁决（原 Open Authority Gap 关闭）
+
+Requirement 9.3 与 9.6 曾在「生成失败」情形上给出互斥状态码（200 vs 500），且实现引入了 requirements 未定义的 `400 NO_ELIGIBLE_CATEGORIES`。已按 eligibility 与 generation 两个阶段拆分终态，冲突关闭：
+
+- **9.3** 收窄为 partial-success（至少一个 Eligible_Category 成功）→ 200
+- **9.6** 收窄为 eligible-but-zero-success → 500 `GENERATION_FAILED`
+- **9.7**（新增）定义 zero-eligible → 400 `NO_ELIGIBLE_CATEGORIES`，明确为 eligibility 前置条件失败而非生成失败
+- **5.5** 澄清为「非 2xx 才向用户报错」，partial success 不作为失败呈现
+- `highlight-tier` 6.3 / 6.7 的日志与错误记录义务保持不变
+
+唯一契约见上文 §Components 3 的 terminal-state truth table。
+
+实现已于 2026-08-07 对齐该 truth table，并由 `server/src/routes/myRegenerate.test.ts` 的 20 个 route-level 测试锁定（见 `tasks.md` 任务 1.4 的完成记录）。

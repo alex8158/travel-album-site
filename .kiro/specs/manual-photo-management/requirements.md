@@ -12,7 +12,8 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 - **Highlight_Pool**: All photos with `is_highlight = 1` and `media_items.status = 'active'` — the set of eligible photos for tier inclusion
 - **Tier_API**: The backend API endpoints for manual tier management under `/api/my/trips/:id/tier-photos`
 - **Photo_Picker**: A dialog UI component that displays available photos from the Highlight_Pool for selection
-- **Tier_Slideshow**: The generated slideshow video composed from the current set of Tier_Photos for a trip
+- **Tier_Slideshow**: The generated slideshow video(s) composed from the current set of Tier_Photos for a trip. Generation is **per category** — see `highlight-tier` Requirement 6. APIs return a `slideshowUrls` object keyed by category, not a single URL string.
+- **Eligible_Category**: A category whose Tier_Photo count reaches `MIN_PHOTOS_FOR_VIDEO` (6), i.e. a category that is *not* skipped by `highlight-tier` Requirement 6.3. Eligibility is a precondition evaluated **before** generation is attempted; failing it is not a generation failure.
 - **Empty_Slot**: A placeholder in the tier photo grid that appears when a photo is removed, showing a `+` icon to trigger the Photo_Picker
 - **Category_Quota**: Soft limits on tier photos per category (animal: 6–9, landscape: 3–9, people: 3–9) — advisory rather than enforced
 - **Trashed_Photo**: A photo with `media_items.status = 'trashed'`, residing in the "待删除" tab
@@ -72,8 +73,8 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 1. WHILE the user views the "精华" tab in My_Gallery, THE My_Gallery SHALL display a "重新生成视频" button.
 2. WHEN the user clicks the "重新生成视频" button, THE Tier_API SHALL trigger regeneration of the Tier_Slideshow using the current set of Tier_Photos for the trip.
 3. WHILE the Tier_Slideshow is being generated, THE My_Gallery SHALL display a loading indicator on the "重新生成视频" button.
-4. WHEN the Tier_Slideshow generation completes successfully, THE My_Gallery SHALL update the displayed video to show the new Tier_Slideshow.
-5. IF the Tier_Slideshow generation fails, THEN THE My_Gallery SHALL display an error message and restore the "重新生成视频" button to its idle state.
+4. WHEN the Tier_Slideshow generation completes successfully, THE My_Gallery SHALL update the displayed videos to show the newly generated per-category videos.
+5. IF the regeneration request returns a non-2xx response — including the zero-success generation failure of Requirement 9.6 and the no-eligible-category rejection of Requirement 9.7 — THEN THE My_Gallery SHALL display an error message and restore the "重新生成视频" button to its idle state. A partial success under Requirement 9.3 (at least one category generated) is a successful response and SHALL NOT be surfaced as a failure.
 6. IF there are zero Tier_Photos for the trip, THEN THE Tier_API SHALL reject the regeneration request with a 400 error indicating no tier photos are available for slideshow generation.
 
 ### Requirement 6: Public Gallery Tabs
@@ -82,11 +83,17 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 
 #### Acceptance Criteria
 
-1. THE Public_Gallery SHALL display two tabs: "全部" (all highlights) and "精华" (tier photos).
-2. THE Public_Gallery SHALL display the "全部" tab as the default active tab.
-3. WHEN the "全部" tab is active, THE Public_Gallery SHALL show all photos where `is_highlight = 1` for the trip.
-4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus the Tier_Slideshow video.
+1. THE Public_Gallery SHALL display two tabs: "精选" (all highlights) and "精华" (tier photos).
+2. THE Public_Gallery SHALL display the "精选" tab as the default active tab.
+3. WHEN the "精选" tab is active, THE Public_Gallery SHALL show all photos where `is_highlight = 1` for the trip.
+4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus every available per-category Tier_Slideshow video.
 5. THE Public_Gallery tabs SHALL only be visible for trips with `visibility = 'public'`.
+
+#### Correction Note
+
+Criteria 1–3 previously named the first tab "全部". The shipped UI labels it **"精选"** — see `client/src/pages/GalleryPage.tsx` L243, and the existing test `defaults to "全部" tab being active` which asserts on `screen.getByText('精选')`. The wording was corrected to match the implemented and test-covered label; the tab's internal state value remains `'all'`.
+
+Only the label is corrected here. Requirement numbering is unchanged, and no other criteria were rewritten. The same "全部" wording still appears in this spec's `design.md` and in tasks 8.1 / 8.2, which were outside the scope of this correction.
 
 ### Requirement 7: API — Add Photo to Tier
 
@@ -122,10 +129,11 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 
 1. THE Tier_API SHALL expose `POST /api/my/trips/:id/tier-slideshow/regenerate` as an authenticated endpoint.
 2. WHEN the endpoint receives a valid request, THE Tier_API SHALL query all current Tier_Photos for the trip and trigger the Slideshow_Generator with those photos.
-3. WHEN the Tier_Slideshow generation completes, THE Tier_API SHALL return HTTP 200 with the new slideshow URL.
+3. WHEN at least one Eligible_Category successfully generates a video, THE Tier_API SHALL return HTTP 200 with a `slideshowUrls` object keyed by category. Categories skipped for having fewer than `MIN_PHOTOS_FOR_VIDEO` (6) photos, and Eligible_Categories whose generation failed, SHALL be absent from that object. The errors of failed Eligible_Categories SHALL be reported in `errors[]`; categories skipped for insufficient photos SHALL NOT be added to `errors[]` and are instead logged per `highlight-tier` Requirement 6.3. Per-category failures SHALL NOT fail the whole request. This criterion governs the partial-success case only — the zero-success case is governed by Requirement 9.6.
 4. IF no Tier_Photos exist for the trip, THEN THE Tier_API SHALL return HTTP 400 with error code `NO_TIER_PHOTOS` and a message indicating tier photos are required.
 5. IF the user does not own the trip and is not an admin, THEN THE Tier_API SHALL return HTTP 403 with error code `FORBIDDEN`.
-6. IF the Slideshow_Generator encounters an error during generation, THEN THE Tier_API SHALL return HTTP 500 with error code `GENERATION_FAILED` and a descriptive error message.
+6. IF at least one Eligible_Category exists but every Eligible_Category's generation fails, so that zero videos are produced, THEN THE Tier_API SHALL return HTTP 500 with error code `GENERATION_FAILED` and a descriptive error message. THE Tier_API SHALL attempt every Eligible_Category and record each failure before responding, per `highlight-tier` Requirement 6.7; returning 500 after a complete traversal does not constitute aborting the regeneration. Categories skipped for insufficient photos SHALL NOT be counted as generation failures.
+7. IF Tier_Photos exist but no category reaches `MIN_PHOTOS_FOR_VIDEO` (6) photos — that is, there is no Eligible_Category — THEN THE Tier_API SHALL return HTTP 400 with error code `NO_ELIGIBLE_CATEGORIES`. This is an eligibility precondition failure, not a generation failure: THE Tier_API SHALL NOT use `GENERATION_FAILED` for this case, and SHALL NOT splice Slideshow_Generator error detail into the `NO_ELIGIBLE_CATEGORIES` message.
 
 ### Requirement 10: Subset Invariant Preservation
 

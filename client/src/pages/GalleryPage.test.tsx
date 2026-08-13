@@ -296,7 +296,7 @@ describe('GalleryPage', () => {
     it('shows gallery mode tabs for public trips', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
@@ -312,7 +312,7 @@ describe('GalleryPage', () => {
     it('defaults to "全部" tab being active', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
@@ -343,7 +343,7 @@ describe('GalleryPage', () => {
     it('shows highlight photos grid when "全部" tab is active', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
@@ -354,15 +354,49 @@ describe('GalleryPage', () => {
       expect(screen.getByTestId('highlight-photo-hl-2')).toBeDefined();
     });
 
-    it('shows tier photos and slideshow when "精华" tab is clicked', async () => {
+    it('fetches both tabs\' data once trip data resolves, independent of which tab is active', async () => {
+      // Production behaviour (GalleryPage.tsx): getHighlightPhotos and getTierPhotos
+      // are both fired from useEffects keyed on [id, data] — neither depends on
+      // galleryTab. This is an eager prefetch of both tabs, not a lazy per-tab fetch.
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: '/slideshow/test.mp4' });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
+      renderGalleryPage('trip-1');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      // Each API must be called — and each exactly once, since visibility only
+      // resolves to 'public' a single time for this render.
+      await waitFor(() => {
+        expect(mockedGetHighlightPhotos).toHaveBeenCalledTimes(1);
+        expect(mockedGetTierPhotos).toHaveBeenCalledTimes(1);
+      });
+
+      // Distinguish the two calls explicitly — asserting on call count alone
+      // would pass even if the wrong function were wired to the wrong tab.
+      expect(mockedGetHighlightPhotos).toHaveBeenCalledWith('trip-1');
+      expect(mockedGetTierPhotos).toHaveBeenCalledWith('trip-1');
+    });
+
+    it('shows tier photos and slideshow when "精华" tab is clicked, without re-fetching either API', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: { all: '/slideshow/test.mp4' } });
       renderGalleryPage();
 
       await waitFor(() => {
         expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
       });
+
+      // Both tabs' data is prefetched on mount, before any tab click.
+      await waitFor(() => {
+        expect(mockedGetHighlightPhotos).toHaveBeenCalledTimes(1);
+        expect(mockedGetTierPhotos).toHaveBeenCalledTimes(1);
+      });
+      const highlightCallsBeforeSwitch = mockedGetHighlightPhotos.mock.calls.length;
+      const tierCallsBeforeSwitch = mockedGetTierPhotos.mock.calls.length;
 
       // Click "精华" tab
       fireEvent.click(screen.getByText('精华'));
@@ -371,14 +405,135 @@ describe('GalleryPage', () => {
         expect(screen.getByTestId('tier-photos-grid')).toBeDefined();
       });
 
+      // Switching tabs only changes which already-fetched data is displayed —
+      // it must not trigger any additional request to either API.
+      expect(mockedGetHighlightPhotos).toHaveBeenCalledTimes(highlightCallsBeforeSwitch);
+      expect(mockedGetTierPhotos).toHaveBeenCalledTimes(tierCallsBeforeSwitch);
+
       expect(screen.getByTestId('tier-photo-tier-1')).toBeDefined();
       expect(screen.getByTestId('tier-slideshow-video')).toBeDefined();
+    });
+
+    it('renders one slideshow video per category when several categories have videos', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({
+        photos: tierPhotosMock,
+        slideshowUrls: {
+          animal: '/slideshow/animal.mp4',
+          landscape: '/slideshow/landscape.mp4',
+          people: '/slideshow/people.mp4',
+        },
+      });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByText('精华'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tier-slideshow-section')).toBeDefined();
+      });
+
+      // Every category must get its own <video>, not just the first one.
+      const videos = screen.getAllByTestId('tier-slideshow-video');
+      expect(videos).toHaveLength(3);
+
+      // Each video must carry its own category's URL. Looked up by aria-label
+      // rather than by index so the assertion does not depend on entry order.
+      const byCategory = (cat: string) =>
+        videos.find((v) => v.getAttribute('aria-label') === `精华视频 - ${cat}`);
+
+      expect(byCategory('animal')?.getAttribute('src')).toBe('/slideshow/animal.mp4');
+      expect(byCategory('landscape')?.getAttribute('src')).toBe('/slideshow/landscape.mp4');
+      expect(byCategory('people')?.getAttribute('src')).toBe('/slideshow/people.mp4');
+
+      // Category headings as currently rendered by GalleryPage.
+      expect(screen.getByText('🐾 动物')).toBeDefined();
+      expect(screen.getByText('🏞️ 风景')).toBeDefined();
+      expect(screen.getByText('👤 人物')).toBeDefined();
+    });
+
+    it('renders an unknown category key verbatim as its heading', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({
+        photos: tierPhotosMock,
+        slideshowUrls: { other: '/slideshow/other.mp4' },
+      });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByText('精华'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tier-slideshow-section')).toBeDefined();
+      });
+
+      expect(screen.getByText('other')).toBeDefined();
+      expect(screen.getByTestId('tier-slideshow-video').getAttribute('src')).toBe('/slideshow/other.mp4');
+    });
+
+    it('renders no category heading for the legacy "all" key', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({
+        photos: tierPhotosMock,
+        slideshowUrls: { all: '/slideshow/legacy.mp4' },
+      });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByText('精华'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tier-slideshow-section')).toBeDefined();
+      });
+
+      const videos = screen.getAllByTestId('tier-slideshow-video');
+      expect(videos).toHaveLength(1);
+      expect(videos[0].getAttribute('src')).toBe('/slideshow/legacy.mp4');
+      expect(videos[0].getAttribute('aria-label')).toBe('精华视频 - all');
+
+      // The 'all' key is a legacy aggregate, so no category heading is shown.
+      expect(screen.queryByText('all')).toBeNull();
+      expect(screen.queryByText('🐾 动物')).toBeNull();
+      expect(screen.queryByText('🏞️ 风景')).toBeNull();
+      expect(screen.queryByText('👤 人物')).toBeNull();
+    });
+
+    it('does not render the slideshow section when slideshowUrls is empty', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByText('精华'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tier-photos-grid')).toBeDefined();
+      });
+
+      expect(screen.queryByTestId('tier-slideshow-section')).toBeNull();
+      expect(screen.queryByTestId('tier-slideshow-video')).toBeNull();
     });
 
     it('hides highlight grid and shows tier content when switching to "精华" tab', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
@@ -395,7 +550,7 @@ describe('GalleryPage', () => {
     it('uses pill-tabs styling for gallery mode tabs', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
-      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrl: null });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
