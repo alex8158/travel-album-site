@@ -108,16 +108,39 @@ If a broader change seems necessary, agents must explain why and wait for approv
 
 Agents should consult relevant documents before coding.
 
-Important document locations include:
+### 5.0 Read Before Any Change
 
-* `README.md`
-* `docs/`
-* `.kiro/specs/*/requirements.md`
-* `.kiro/specs/*/design.md`
-* `.kiro/specs/*/tasks.md`
-* `docs/agent/verify-commands.md`
+**Before modifying anything, read `docs/agent/change-boundaries.md`.**
 
-When requirements, design, and code disagree, agents must prioritize the current code as the source of implementation truth, then report the mismatch.
+It defines the change boundaries (what may be changed directly, what requires approval), the recording obligations (which documents must be updated after each type of change), and a list of mistakes this project has actually made. Reading it first is the cheapest way to avoid repeating them.
+
+### 5.1 Document Authority Order
+
+This repository contains three generations of requirement documents. They are **not** equally authoritative. Use this order when they disagree:
+
+| Rank | Source | Role | Trust for |
+| --- | --- | --- | --- |
+| 1 | Current source code | Implementation truth | What the system actually does |
+| 2 | `.kiro/specs/<feature>/` | **Authoritative requirement contract** | What a feature is supposed to do; acceptance criteria |
+| 3 | `docs/agent/*.md` | Working rules for agents | Verify commands, known issues, task format |
+| 4 | `requirements.md` (root, Part 2) | Index of iteration specs | Locating the right spec |
+| 5 | `requirements.md` / `design.md` / `tasks.md` (root, v1) | **Historical baseline, archived** | Original MVP intent only |
+| 6 | `docs/requirements-v2.md` / `docs/design-v2.md` | **Product vision, not a contract** | Direction and rationale only |
+
+### 5.2 Timeline Behind the Order
+
+* **2026-03-31** — root `requirements.md` / `design.md` / `tasks.md` were written and completed as the v1 MVP. All tasks in root `tasks.md` are done. These are archived history.
+* **2026-04-09 onward** — real development moved to `.kiro/specs/<feature>/`, one spec per iteration. This is where current requirements live.
+* **2026-05-06** — `docs/requirements-v2.md` and `docs/design-v2.md` were added mid-stream as a forward-looking vision for a layered image/video processing system. Iterations both predate and postdate them, and were never re-derived from them. They describe intent, not delivered behavior.
+
+### 5.3 Rules
+
+1. For any implementation task, agents SHALL locate the relevant `.kiro/specs/<feature>/` spec first, and treat its requirements as the contract.
+2. Agents SHALL NOT implement requirements taken from `docs/requirements-v2.md`, `docs/design-v2.md`, or the root v1 documents unless the user explicitly asks for that specific item.
+3. When a `.kiro/specs` requirement disagrees with current code, agents SHALL treat the code as implementation truth, report the mismatch, and ask before changing behavior to match the document.
+4. When the root v1 documents or the v2 vision documents disagree with a `.kiro/specs` requirement, the `.kiro/specs` requirement wins and no report is needed — the older documents are expected to be stale.
+5. When a feature exists in code but has no spec, agents SHALL say so rather than inferring requirements from the v2 vision documents. An as-built spec may be written on request (see `.kiro/specs/multi-user-system/` for the pattern).
+6. Agents SHALL NOT rewrite the root v1 documents or the v2 vision documents to match current code. They are kept as-is on purpose.
 
 Agents must not silently implement outdated requirements from old documents.
 
