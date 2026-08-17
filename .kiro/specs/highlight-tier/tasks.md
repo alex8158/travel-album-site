@@ -91,9 +91,11 @@ Implement a second curation pass that selects the absolute best photos per categ
 - [x] 5. Add slideshow generation trigger
   - [x] 5.1 Wire slideshow generation after tier persistence
     - After `persistTierResults` succeeds with ≥1 picks, collect file paths and call existing `generateSlideshow` service
-    - Store the resulting video associated with the trip (tier slideshow)
-    - Skip if zero tier photos selected
-    - _Requirements: 6.1, 6.2, 6.3_
+    - Group tier photos by category and generate one video per category (min 6 photos per category)
+    - Write each category's video to `uploads/{tripId}/tier-slideshow/{category}/`
+    - Skip categories below the minimum photo count; a per-category failure must not abort the rest
+    - Skip entirely if zero tier photos selected
+    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.7, 6.8_
 
 - [x] 6. Implement API endpoints for tier photos
   - [x] 6.1 Add tier photos route in `server/src/routes/highlights.ts` (or new file)

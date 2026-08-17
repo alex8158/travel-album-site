@@ -28,7 +28,7 @@
 - **Candidate_Pair**: 候选重复对，Layer 1 CLIP 粗筛阶段输出的图片对（含相似度分值和所属档位）
 - **Gray_Zone_Pair**: 灰区候选对，CLIP 相似度处于中间档位、需要 LLM 进一步判断的候选对
 - **Confirmed_Pair**: 确认重复对，经过任意层级确认为重复的图片对
-- **Strict_Threshold**: CLIP 严格阈值，固定为 0.955，在无已配置 LLM provider 或所有 provider 均失败时用于灰区候选对的最终判定
+- **Strict_Threshold**: CLIP 严格阈值，默认 0.92（`PROCESS_THRESHOLDS.clipStrictThreshold`，可用环境变量 `CLIP_STRICT_THRESHOLD` 覆盖），在无已配置 LLM provider 或所有 provider 均失败时用于灰区候选对的最终判定
 - **Provider_Chain**: LLM provider 级联链，按优先级排序的已配置 provider 列表（默认顺序：OpenAI → Bedrock → DashScope），首选 provider 排在最前，失败时依次尝试下一个
 - **pHash**: 感知哈希（Perceptual Hash），基于图片低频特征的 64 位哈希值
 - **dHash**: 差异哈希（Difference Hash），基于相邻像素差异的 64 位哈希值
@@ -55,11 +55,11 @@
 #### 验收标准
 
 1. WHEN Layer 0 完成后，THE CLIP_Coarse_Filter SHALL 对剩余图片提取 CLIP 嵌入向量
-2. THE CLIP_Coarse_Filter SHALL 使用 top-k 近邻搜索（k 值范围 3~5）查找每张图片的最近邻，而非全量两两比较
-3. WHEN 两张图片的 CLIP 余弦相似度 ≥ 0.94 时，THE CLIP_Coarse_Filter SHALL 将该对直接标记为 Confirmed_Pair（高置信度，直接进入确认池）
-4. WHEN 两张图片的 CLIP 余弦相似度在 [0.90, 0.94) 区间且该图片的 top-k 邻居数 ≤ 5 时，THE CLIP_Coarse_Filter SHALL 将该对标记为 Gray_Zone_Pair（进入候选池）
-5. WHEN 两张图片的 CLIP 余弦相似度在 [0.85, 0.90) 区间时，THE CLIP_Coarse_Filter SHALL 仅在同时满足以下两个条件时将该对标记为 Gray_Zone_Pair：序列位置差 abs(i - j) ≤ 12，且 pHash 汉明距离 ≤ 16 或 dHash 汉明距离 ≤ 16
-6. WHEN 两张图片的 CLIP 余弦相似度 < 0.85 时，THE CLIP_Coarse_Filter SHALL 跳过该对，不进入任何候选池
+2. THE CLIP_Coarse_Filter SHALL 使用 top-k 近邻搜索查找每张图片的最近邻，而非全量两两比较；k 默认为 50（`PROCESS_THRESHOLDS.clipTopK`，可用环境变量 `CLIP_TOP_K` 覆盖，也可由调用方通过 `options.clipTopK` 传入）
+3. WHEN 两张图片的 CLIP 余弦相似度 ≥ `clipConfirmedThreshold`（默认 0.93）时，THE CLIP_Coarse_Filter SHALL 将该对直接标记为 Confirmed_Pair（高置信度，直接进入确认池）
+4. WHEN 两张图片的 CLIP 余弦相似度处于 [`clipGrayHighThreshold`, `clipConfirmedThreshold`) 区间（默认 [0.90, 0.93)）时，THE CLIP_Coarse_Filter SHALL 将该对标记为 Gray_Zone_Pair（进入候选池）
+5. WHEN 两张图片的 CLIP 余弦相似度处于 [`clipGrayLowThreshold`, `clipGrayHighThreshold`) 区间（默认 [0.86, 0.90)）时，THE CLIP_Coarse_Filter SHALL 仅在同时满足以下两个条件时将该对标记为 Gray_Zone_Pair：序列位置差 abs(i - j) ≤ `grayLowSeqDistance`（默认 6），且 pHash 汉明距离 ≤ `grayLowHashDistance`（默认 8）或 dHash 汉明距离 ≤ `grayLowHashDistance`（默认 8）
+6. WHEN 两张图片的 CLIP 余弦相似度 < `clipGrayLowThreshold`（默认 0.86）时，THE CLIP_Coarse_Filter SHALL 跳过该对，不进入任何候选池
 7. THE CLIP_Coarse_Filter SHALL 仅输出 Candidate_Pair 列表（含 Confirmed_Pair 和 Gray_Zone_Pair），不执行分组操作
 8. IF 某张图片的 CLIP 嵌入提取失败，THEN THE CLIP_Coarse_Filter SHALL 跳过该图片的配对，并在 stderr 输出错误日志
 
@@ -74,7 +74,7 @@
 3. WHEN 视觉模型返回 `is_duplicate` 为 true 时，THE LLM_Pair_Reviewer SHALL 将该 Gray_Zone_Pair 标记为 Confirmed_Pair
 4. WHEN 视觉模型返回 `is_duplicate` 为 false 时，THE LLM_Pair_Reviewer SHALL 保留两张图片不做去重处理
 5. IF 当前 provider 的视觉模型调用失败，THEN THE LLM_Pair_Reviewer SHALL 记录错误日志，并尝试下一个已配置的 provider（级联回退）
-6. IF 所有已配置的 LLM provider 对某个 Gray_Zone_Pair 均调用失败，THEN THE LLM_Pair_Reviewer SHALL 放弃该对的 LLM 判定，记录通知日志，并对该对回退到 Strict_Threshold（0.955）判定
+6. IF 所有已配置的 LLM provider 对某个 Gray_Zone_Pair 均调用失败，THEN THE LLM_Pair_Reviewer SHALL 放弃该对的 LLM 判定，记录通知日志，并对该对回退到 Strict_Threshold（默认 0.92）判定
 7. IF 所有 Gray_Zone_Pair 的 LLM 调用均失败，THEN THE Hybrid_Dedup_Engine SHALL 输出初步 CLIP 结果（使用 Strict_Threshold 判定所有灰区对），并附带通知说明 LLM 不可用
 8. THE LLM_Pair_Reviewer SHALL 按以下优先级选择视觉模型：GPT-4.1 mini（最佳性价比）→ GPT-4.1（困难边界案例）→ Claude Sonnet 4.6（需要详细推理的边界案例）→ Gemini 2.5 Flash（高吞吐批量审查）
 9. THE LLM_Pair_Reviewer SHALL 复用已有的 Bedrock_Client（`createAIClient()`）创建视觉模型客户端，根据 provider 链中的当前 provider 选择对应客户端
@@ -85,7 +85,7 @@
 
 #### 验收标准
 
-1. WHEN 没有检测到任何已配置的 LLM provider 且存在 Gray_Zone_Pair 时，THE Hybrid_Dedup_Engine SHALL 对所有 Gray_Zone_Pair 应用 Strict_Threshold（0.955）进行最终判定
+1. WHEN 没有检测到任何已配置的 LLM provider 且存在 Gray_Zone_Pair 时，THE Hybrid_Dedup_Engine SHALL 对所有 Gray_Zone_Pair 应用 Strict_Threshold（默认 0.92）进行最终判定
 2. WHEN Gray_Zone_Pair 的 CLIP 余弦相似度 ≥ Strict_Threshold 时，THE Hybrid_Dedup_Engine SHALL 将该对标记为 Confirmed_Pair
 3. WHEN Gray_Zone_Pair 的 CLIP 余弦相似度 < Strict_Threshold 时，THE Hybrid_Dedup_Engine SHALL 保留两张图片不做去重处理
 
@@ -117,7 +117,7 @@
 6. WHEN 首选 provider 调用失败时，THE LLM_Pair_Reviewer SHALL 按级联顺序尝试下一个已配置的 provider，直到成功或所有 provider 均失败
 7. THE 默认级联顺序 SHALL 为：OpenAI → Bedrock → DashScope（当未指定 `LLM_DEDUP_PROVIDER` 时）
 8. WHEN 没有任何 provider 的环境变量被配置时，THE Hybrid_Dedup_Engine SHALL 跳过 Layer 2，对灰区候选对使用 Strict_Threshold 回退判定
-9. IF 所有已配置的 LLM provider 对某个 Gray_Zone_Pair 均调用失败，THEN THE LLM_Pair_Reviewer SHALL 放弃该对的 LLM 判定，记录通知日志，并对该对回退到 Strict_Threshold（0.955）判定
+9. IF 所有已配置的 LLM provider 对某个 Gray_Zone_Pair 均调用失败，THEN THE LLM_Pair_Reviewer SHALL 放弃该对的 LLM 判定，记录通知日志，并对该对回退到 Strict_Threshold（默认 0.92）判定
 10. IF 所有 Gray_Zone_Pair 的 LLM 调用均失败（即所有 provider 对所有对均失败），THEN THE Hybrid_Dedup_Engine SHALL 直接输出基于 Strict_Threshold 的初步 CLIP 结果，并附带通知说明 LLM 不可用
 11. THE `.env.example` 文件 SHALL 包含所有三种 provider 的环境变量说明和示例，每个变量附带中文注释
 

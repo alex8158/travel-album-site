@@ -82,9 +82,20 @@ Highlight Tier (精华) adds a second curation layer on top of the existing high
 
 #### Acceptance Criteria
 
-1. WHEN the Highlight_Tier_Selector completes and at least one photo is marked as highlight tier, THE system SHALL automatically trigger the Slideshow_Generator using all highlight tier photos for the trip.
-2. THE system SHALL store the resulting slideshow video as the highlight tier video associated with the trip.
-3. IF the Highlight_Tier_Selector completes with zero photos selected, THEN THE system SHALL skip slideshow generation.
+1. WHEN the Highlight_Tier_Selector completes and at least one photo is marked as highlight tier, THE system SHALL automatically trigger the Slideshow_Generator for the trip's highlight tier photos.
+2. THE system SHALL group highlight tier photos by `media_items.category` and generate **one slideshow video per category** rather than a single combined video.
+3. THE system SHALL skip any category whose highlight tier photo count is below `MIN_PHOTOS_FOR_VIDEO` (6) and SHALL log the skipped category together with its photo count.
+4. THE system SHALL write each category's video to `uploads/{tripId}/tier-slideshow/{category}/` and expose it at `/api/trips/{tripId}/tier-slideshow/{category}/{filename}`.
+5. THE Tier_API SHALL return the generated videos as a `slideshowUrls` object keyed by category (for example `{ "animal": "...", "landscape": "..." }`), NOT as a single `slideshowUrl` string.
+6. WHEN an mp4 file exists directly under `uploads/{tripId}/tier-slideshow/` rather than in a category subdirectory, THE Tier_API SHALL expose it under the reserved key `all` for backward compatibility with trips whose videos were produced before per-category generation existed.
+7. WHEN a category's video generation fails, THE system SHALL record that category's error, continue generating the remaining categories, and SHALL NOT abort the whole regeneration.
+8. IF the Highlight_Tier_Selector completes with zero photos selected, THEN THE system SHALL skip slideshow generation entirely.
+
+#### Correction Note
+
+Criteria 1–3 previously described a **single** highlight tier video ("store the resulting slideshow video as the highlight tier video"). The implementation generates one video per category and returns a `slideshowUrls` map — see `getTierSlideshowUrls()` in `server/src/routes/highlights.ts` (L245) and the regeneration path in `server/src/routes/my.ts` (L460 onward).
+
+This divergence went unnoticed because no spec covered per-category slideshows and the only test touching this area (`client/src/pages/GalleryPage.test.tsx`) still mocked the old singular `slideshowUrl` field. The test was corrected on 2026-08-05; this requirement was rewritten at the same time to match the implementation.
 
 ### Requirement 7: My Gallery — Highlight Tier Tab
 
@@ -94,7 +105,7 @@ Highlight Tier (精华) adds a second curation layer on top of the existing high
 
 1. THE My_Gallery SHALL display a "精华" tab alongside existing filter modes.
 2. WHEN the user selects the "精华" tab, THE My_Gallery SHALL show only photos where `is_highlight_tier = 1` for the current trip.
-3. WHEN the user selects the "精华" tab, THE My_Gallery SHALL display the highlight tier slideshow video above or alongside the photos.
+3. WHEN the user selects the "精华" tab, THE My_Gallery SHALL display the available per-category highlight tier slideshow videos above or alongside the photos.
 4. IF no highlight tier photos exist for the trip, THEN THE My_Gallery SHALL display a message indicating that highlight tier selection has not been performed.
 
 ### Requirement 8: Public Gallery — Highlight Tier Display
@@ -104,7 +115,7 @@ Highlight Tier (精华) adds a second curation layer on top of the existing high
 #### Acceptance Criteria
 
 1. THE Public_Gallery SHALL display 精选 photos (all `is_highlight = 1` photos) as the default photo view.
-2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow video prominently within the gallery.
+2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category.
 3. THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`.
 
 ### Requirement 9: Subset Invariant Enforcement

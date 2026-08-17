@@ -33,9 +33,9 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 #### Acceptance Criteria
 
 1. WHEN processing a trip's active images, THE Similarity_Grouper SHALL compute DINOv2 embeddings for all eligible photos and group them using Union-Find with cosine similarity
-2. WHEN two photos have cosine similarity >= 0.94, THE Similarity_Grouper SHALL assign them to the same Curation_Group with type `exact_duplicate`
-3. WHEN two photos have cosine similarity >= 0.86 and < 0.94, THE Similarity_Grouper SHALL assign them to the same Curation_Group with type `near_duplicate_candidate`
-4. WHEN two photos have cosine similarity < 0.86, THE Similarity_Grouper SHALL treat them as unrelated and not group them together
+2. WHEN two photos have cosine similarity >= `EXACT_DUPLICATE_THRESHOLD` (default 0.98), THE Similarity_Grouper SHALL assign them to the same Curation_Group with type `exact_duplicate`
+3. WHEN two photos have cosine similarity >= `NEAR_DUPLICATE_THRESHOLD` (default 0.80) and < `EXACT_DUPLICATE_THRESHOLD` (default 0.98), THE Similarity_Grouper SHALL assign them to the same Curation_Group with type `near_duplicate_candidate`
+4. WHEN two photos have cosine similarity < `NEAR_DUPLICATE_THRESHOLD` (default 0.80), THE Similarity_Grouper SHALL treat them as unrelated and not group them together
 5. IF the DINOv2 ML service is unavailable, THEN THE Similarity_Grouper SHALL fall back to pHash/dHash hamming distance for grouping and log a warning
 6. THE Similarity_Grouper SHALL also use pHash and dHash as supplementary signals to confirm exact duplicates detected by embedding similarity
 
@@ -68,7 +68,7 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 
 #### Acceptance Criteria
 
-1. WHEN a photo is trashed due to being in an exact duplicate group (similarity >= 0.94) and not selected as best, THE Smart_Curation_Engine SHALL set the trash reason to `exact_duplicate`
+1. WHEN a photo is trashed due to being in an exact duplicate group (similarity >= `EXACT_DUPLICATE_THRESHOLD`) and not selected as best, THE Smart_Curation_Engine SHALL set the trash reason to `exact_duplicate`
 2. WHEN a photo is trashed due to being in a near-duplicate group and the VLM determines it is worse, THE Smart_Curation_Engine SHALL set the trash reason to `near_duplicate_worse`
 3. WHEN a photo is trashed because the VLM determines the scene is redundant with other kept photos, THE Smart_Curation_Engine SHALL set the trash reason to `scene_redundant`
 4. WHEN a photo is trashed because the VLM determines it is blurry or out of focus, THE Smart_Curation_Engine SHALL set the trash reason to `blurry`
@@ -118,7 +118,7 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 
 1. THE Smart_Curation_Engine SHALL invoke the VLM_Selector only for Curation_Groups containing 2 or more photos
 2. THE Smart_Curation_Engine SHALL send at most 5 candidate images per VLM call
-3. WHEN a Curation_Group is classified as `exact_duplicate` (similarity >= 0.94), THE Smart_Curation_Engine SHALL select the best photo using technical quality scoring without invoking the VLM_Selector
+3. WHEN a Curation_Group is classified as `exact_duplicate` (similarity >= `EXACT_DUPLICATE_THRESHOLD`), THE Smart_Curation_Engine SHALL select the best photo using technical quality scoring without invoking the VLM_Selector
 4. THE Smart_Curation_Engine SHALL process VLM calls with a concurrency limit of 3 parallel requests
 5. WHEN all photos in a trip are ungrouped (no similar pairs found), THE Smart_Curation_Engine SHALL complete without making any VLM calls
 
@@ -162,6 +162,14 @@ The system targets underwater/diving photography where blue-tinted, low-contrast
 
 1. THE Similarity_Grouper SHALL use an `EXACT_DUPLICATE_THRESHOLD` default of 0.98 (raised from the original 0.94) so that DINOv2-similar burst shots in the 0.94–0.98 range are routed to the near-duplicate tier and evaluated by the VLM.
 2. THE Similarity_Grouper SHALL allow operators to override the threshold via the `SMART_CURATION_EXACT_THRESHOLD` environment variable for trips where a stricter or looser policy is desired.
+3. THE Similarity_Grouper SHALL use a `NEAR_DUPLICATE_THRESHOLD` default of 0.80 (lowered from the original 0.86) because DINOv2-small underrates near-duplicates in low-contrast underwater / diving photos.
+4. THE Similarity_Grouper SHALL allow operators to override the near-duplicate threshold via the `SMART_CURATION_NEAR_THRESHOLD` environment variable.
+5. WHEN `NEAR_DUPLICATE_THRESHOLD` is configured greater than `EXACT_DUPLICATE_THRESHOLD`, THE Similarity_Grouper SHALL log a warning stating that the near-duplicate tier will be empty, and SHALL NOT abort startup.
+6. THE thresholds in this requirement are the authoritative values; the tier boundaries referenced in Requirement 1, Requirement 4 and Requirement 8 SHALL be read as `EXACT_DUPLICATE_THRESHOLD` and `NEAR_DUPLICATE_THRESHOLD` rather than as literal numbers.
+
+#### Implementation Note
+
+These two thresholds are defined in `server/src/services/smartCuration/similarityGrouper.ts` via its own `readThresholdEnv()` helper, **not** in `PROCESS_THRESHOLDS` (`dedupThresholds.ts`). This placement is explicitly permitted — see the Permitted Secondary Locations table in `photo-curation-fix` Requirement 5, which records this requirement as the authoritative owner of both values.
 
 
 ### Requirement 12: AI Cross-Photo Dedup (Phase 3)

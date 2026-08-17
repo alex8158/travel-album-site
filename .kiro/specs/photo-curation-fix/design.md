@@ -372,19 +372,19 @@ export interface PipelineResult {
 
 *For any* image region where HSV V ≥ 245 AND S ≤ 45 AND local Sobel gradient std < 5.0 AND connected component area ≥ 300 pixels, it SHALL be counted as a qualifying bright region. *For any* image where the total qualifying bright area ratio (with center 1.5x weighting) ≥ `overexposureSubjectSevereTotalAreaRatio` (default 0.012) OR any single component ratio > `overexposureSubjectMaxAreaRatio` (default 0.015), the severity SHALL be `severe`. Between `overexposureSubjectMinAreaRatio` (default 0.006) and `overexposureSubjectSevereTotalAreaRatio`, severity SHALL be `mild`. Below `overexposureSubjectMinAreaRatio`, severity SHALL be `none`. All thresholds are configurable via `PROCESS_THRESHOLDS`.
 
-**Validates: Requirements 1.1, 1.4**
+**Validates: Requirements 1.Q1–1.Q4, 1.3, 1.4, 1.5**
 
 ### Property 2: Anti-false-positive for textured bright regions
 
 *For any* bright region (V ≥ 245) where the local Sobel gradient std ≥ 5.0 (has texture), that region SHALL NOT be counted as a qualifying overexposed region regardless of saturation or area.
 
-**Validates: Requirement 1.3 (normal classification for textured bright areas like sand)**
+**Validates: Requirements 1.Q3, 1.5 (textured bright areas like sand stay `none`)**
 
 ### Property 3: Result reducer completeness and ordering
 
 *For any* `ImageProcessContext` with a combination of blur, overexposure (severity=severe), dedup removal, and global similarity trash, the result reducer SHALL produce `trashedReasons` containing exactly the applicable reasons in priority order: `blur` > `overexposure` > `duplicate` > `global_similarity`. The `finalStatus` SHALL be `trashed` if and only if `trashedReasons.length > 0`.
 
-**Validates: Requirements 2.1-2.5**
+**Validates: Requirements 2.1–2.9**
 
 ### Property 4: Global similarity tiered resolution
 
@@ -396,25 +396,25 @@ export interface PipelineResult {
 
 *For any* pair of DINOv2 embeddings with cosine similarity S: if S ≥ `dinov2ConfirmedThreshold` → confirmed; if `dinov2GrayLowThreshold` ≤ S < `dinov2ConfirmedThreshold` → gray-zone; if S < `dinov2GrayLowThreshold` → skip. No pair below `dinov2GrayLowThreshold` SHALL ever enter a cluster.
 
-**Validates: Requirements 3.3, 3.4**
+**Validates: Requirements 3.3, 3.4, 3.5**
 
 ### Property 6: Union-Find clustering with chain-merge safeguards
 
 *For any* set of candidate pairs: (a) confirmed pairs form clusters via standard transitivity; (b) gray-zone pairs do NOT bridge two different confirmed clusters — they are flagged for VLM review; (c) any cluster exceeding 8 members SHALL be split at the weakest intra-cluster edge; (d) a candidate SHALL only be trashed if it has a direct confirmed edge (similarity ≥ `dinov2ConfirmedThreshold`) to the selectedMediaId or cluster medoid.
 
-**Validates: Requirement 3.5 + Implementation Constraint 2**
+**Validates: Requirements 3.6–3.9 + Implementation Constraint 2**
 
 ### Property 7: VLM status derivation
 
 *For any* combination of `vlmEnabled`, `vlmAvailable`, and `VLMCallStats`: `disabled` when vlmEnabled=false; `not_configured` when vlmAvailable=false; `skipped` when totalCalls=0; `success` when failed=0 and calls>0; `partial_failure` when 0<failed<total and successes>0; `failed` when failed>0 and successes=0. Priority: disabled > not_configured > skipped > success/partial_failure/failed.
 
-**Validates: Requirements 4.2-4.5 + Implementation Constraint 5**
+**Validates: Requirements 4.2–4.6 + Implementation Constraint 5**
 
 ### Property 8: Threshold log consistency
 
 *For any* threshold configuration, logged values at pipeline start SHALL exactly match `PROCESS_THRESHOLDS` runtime values.
 
-**Validates: Requirements 5.2**
+**Validates: Requirement 5.4**
 
 ### Property 9: Overexposure error labeling
 
