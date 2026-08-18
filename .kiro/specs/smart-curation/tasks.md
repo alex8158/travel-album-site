@@ -138,9 +138,87 @@ Replace the existing `aiScreening` pipeline stage with a two-phase Smart Curatio
 - [x] 10. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+---
+
+## 补录任务（需求 10 / 11 / 12）
+
+> **【待验证】补录说明**
+>
+> 任务 1–10 只覆盖需求 1–9（Phase 1）。需求 10（Phase 2 AI Review）、需求 11（阈值校准）、需求 12（Phase 3 AI Cross-Photo Dedup）是后续追加到 `requirements.md` 的，**代码已实现但从未建立任务**，因此也从未经过本 spec 的检查点验证。
+>
+> 以下任务为事后补录，用于恢复需求↔任务追溯。它们**保持未勾选状态**，标记为【待验证】：代码存在，但「是否完整满足需求」未经核对确认。勾选前需逐条比对验收标准。
+>
+> 补录依据：`aiReview.ts`、`aiFinalDedup.ts`、`similarityGrouper.ts`、`runTripProcessingPipeline.ts` 的当前实现。
+
+- [ ] 11. 【待验证】Phase 2 — AI per-photo review
+  - [ ] 11.1 【待验证】实现 `runAIReview`（`server/src/services/smartCuration/aiReview.ts`）
+    - 加载 trip 内全部 `status = 'active'` 照片，按固定批次大小切分（`BATCH_SIZE = 5`）
+    - 每批一次 VLM 调用，逐张独立 keep/trash 判断（无组上下文、不做组内择优）
+    - trash 原因限定为 `blurry` / `low_subject_quality` / `low_aesthetic_quality` / `low_video_value`
+    - 提示词保留水下照片说明（蓝色调不视为缺陷）
+    - 单批调用失败或响应无法解析时保留该批全部照片，并递增 `vlmCallsFailed`
+    - 未配置 `DASHSCOPE_API_KEY` 时整阶段跳过，不 trash 任何照片
+    - 仅软删除：写 `status` 与 `trashed_reason`，`file_path` 不变
+    - 调试报告写入 `data/debug/ai-review-{tripId}-{timestamp}.json`
+    - VLM 批次并发上限 `VLM_CONCURRENCY = 3`，批内取图并发 `PER_BATCH_IMAGE_CONCURRENCY = 5`
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13_
+
+  - [ ] 11.2 【待验证】将 `aiReview` 接入流水线为独立阶段
+    - 在 `runTripProcessingPipeline.ts` 中于 `smartCuration` 之后、`analyze` 之前执行（约 L673–695）
+    - 独立的 `onProgress('aiReview', ...)` 进度回调
+    - 阶段级错误隔离：失败时记入 `stageErrors` 并继续后续阶段
+    - 共享 `vlmCallStats` tracker
+    - _Requirements: 10.14_
+
+  - [ ]* 11.3 为 `runAIReview` 补测试
+    - 批次切分、保守回退（批失败保留全部）、无 API key 跳过、软删除不变式
+    - _Requirements: 10.1, 10.9, 10.10, 10.11_
+
+- [ ] 12. 【待验证】需求 11 — 连拍场景的相似度阈值校准
+  - [ ] 12.1 【待验证】校准 `similarityGrouper.ts` 的两档阈值
+    - `EXACT_DUPLICATE_THRESHOLD` 默认 0.98（自 0.94 上调），使 0.94–0.98 区间的人物连拍进入近似重复档交由 VLM 评估
+    - `NEAR_DUPLICATE_THRESHOLD` 默认 0.80（自 0.86 下调），因 DINOv2-small 低估水下低对比度照片的近似度
+    - 两者分别支持 `SMART_CURATION_EXACT_THRESHOLD` / `SMART_CURATION_NEAR_THRESHOLD` 环境变量覆盖
+    - NEAR > EXACT 时输出告警且不中断启动
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6_
+
+- [ ] 13. 【待验证】需求 12 — Phase 3 AI Cross-Photo Dedup（**已被 sceneDedup 取代**）
+  > **⚠️ 需求与实现已分叉，勾选前必须先决策**
+  >
+  > 需求 12 描述的 `runAIFinalDedup`（`aiFinalDedup.ts`）**已不再被流水线调用**。
+  > `runTripProcessingPipeline.ts` L707–709 明确注释其「preserved for rollback but no longer invoked」，
+  > 并以 `void runAIFinalDedup;` 保持 import 存活。
+  >
+  > 当前实际运行的是 `runSceneDedup`（`sceneDedup.ts`），它用 DINOv2 余弦相似度做跨批次边界合并，
+  > 修掉了需求 12 自己承认的局限（「落在批次边界两侧的近似重复会同时保留」）。
+  > `sceneDedup` 的规格定义在 `photo-curation-fix` spec（术语表 Scene_Dedup 与 Boundary_Merging）。
+  >
+  > 因此需求 12 目前处于**描述了一个已停用实现**的状态。三种处理方式待你选择：
+  > 1. 保留需求 12 并标注「已被 sceneDedup 取代，实现保留作回滚」
+  > 2. 改写需求 12 使其描述 sceneDedup 的实际行为
+  > 3. 废止需求 12，把跨照片去重的规格完全交给 `photo-curation-fix`
+  >
+  > 在做出决策前，本任务不应勾选。
+
+  - [ ] 13.1 【待验证】`runAIFinalDedup` 实现现状（已停用）
+    - `aiFinalDedup.ts` 已实现：按 `created_at` 升序分批、批次默认 12（`SMART_CURATION_DEDUP_BATCH_SIZE`，有效范围 2–12）
+    - trash 原因限定 `scene_redundant`；批次不足 2 张时跳过 VLM 调用
+    - 批失败保守保留全部并递增 `vlmCallsFailed`；无 API key 整阶段跳过
+    - 调试报告 `data/debug/ai-final-dedup-{tripId}-{timestamp}.json`；并发上限 3
+    - **但该函数未被流水线调用**，故需求 12.14（作为独立 `aiFinalDedup` 阶段接入）当前不成立
+    - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9, 12.10, 12.11, 12.12, 12.13, 12.15_
+
+  - [ ] 13.2 【待验证】决定需求 12 的归属并同步文档
+    - 按上方三个选项之一处理需求 12
+    - 若选项 2 或 3，需同步更新 `photo-curation-fix` 中 Scene_Dedup 的规格归属
+    - _Requirements: 12.14_
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
+- Tasks marked 【待验证】are back-filled records of already-written code (see 补录任务 above). They are intentionally left unchecked: the implementation exists but has not been verified against its acceptance criteria. Do not tick them without a criterion-by-criterion comparison.
+- 任务 1–10 覆盖需求 1–9；补录任务 11–13 覆盖需求 10–12。任务编号与需求编号**不对应**，映射见每个任务标题与 `traceability.md`
+- 补录任务未纳入下方 Task Dependency Graph（该图仅描述 Phase 1 的原始实施顺序）
 - Each task references specific requirements for traceability
 - Checkpoints ensure incremental validation
 - Property tests validate universal correctness properties from the design document
