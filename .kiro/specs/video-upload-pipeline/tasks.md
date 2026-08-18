@@ -105,6 +105,8 @@ Incrementally build the video upload pipeline: extend StorageProvider with multi
     - _Requirements: R4-AC1, R4-AC2, R4-AC3, R18-AC4_
 
   - [ ] 5.3b Create `PUT /api/uploads/:mediaId/simple` endpoint (local storage simple relay)
+    > **【先保留】** 经用户确认暂不推进，也不关闭。本 spec 唯一未完成的必做任务。详见文末「当前状态」。
+
     - Stream complete file to target path via StorageProvider.save()
     - Return ETag on success
     - _Requirements: R8-AC6_
@@ -238,6 +240,18 @@ Incrementally build the video upload pipeline: extend StorageProvider with multi
 
 - [x] 12. Final checkpoint — All components wired together
   - Ensure all tests pass, ask the user if questions arise.
+
+## 当前状态
+
+必做任务 29 / 30 完成，唯一未完成项是 **5.3b**。
+
+| 任务 | 状态 | 说明 |
+| --- | --- | --- |
+| **5.3b** | 🔒 **先保留** | `PUT /api/uploads/:mediaId/simple` 端点（需求 R8-AC6）未实现 |
+
+**「先保留」的含义**：经用户明确决定，该任务**既不继续推进，也不关闭**。保持未勾选状态，不要自动开工，也不要当作已放弃而删除。
+
+**保留的影响**：该端点属于本地存储的 simple 中继上传路径。分片上传路径（5.3、5.4、5.5）已完成，因此大文件上传能力不受影响；受影响的是本地存储下走 simple 模式的场景。推进前需先确认前端是否真的会调用该路径 —— 若不会，更合适的处理是关闭该任务并同步删除需求 R8-AC6，而不是补实现。
 
 ## Notes
 
