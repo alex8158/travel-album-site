@@ -19,3 +19,9 @@ server/data/*
 server/data/.jwt-secret
 .claude/
 *.tsbuildinfo
+
+# Auto-generated spec traceability matrices. Regenerate locally with
+# .kiro/specs/_gen_traceability.py; the source of truth is each spec's
+# requirements.md / design.md / tasks.md. Hand-verified matrices use the
+# traceability-verified.md name instead and are tracked.
+.kiro/specs/*/traceability.md
