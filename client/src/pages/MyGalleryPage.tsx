@@ -1833,7 +1833,7 @@ export default function MyGalleryPage() {
                           e.stopPropagation();
                           try {
                             const endpoint = video.compiledPath
-                              ? `/api/media/${video.id}/compiled`
+                              ? `/api/media/${video.id}/download-compiled`
                               : `/api/media/${video.id}/raw`;
                             const res = await authFetch(endpoint);
                             if (!res.ok) throw new Error('下载失败');

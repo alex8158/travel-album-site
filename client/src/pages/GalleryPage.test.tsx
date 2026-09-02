@@ -38,6 +38,10 @@ const sampleData: GalleryData = {
     description: '樱花季的美好回忆',
     coverImageId: 'img-1',
     userId: 'user-owner-1',
+    // Explicit and production-legal. trips.visibility is NOT NULL DEFAULT 'public'
+    // server-side, so an undefined value cannot occur; relying on that used to mask
+    // the inverted gate on the video section.
+    visibility: 'public',
     createdAt: '2024-03-15T10:00:00.000Z',
     updatedAt: '2024-03-15T10:00:00.000Z',
   },
@@ -92,6 +96,10 @@ const sampleData: GalleryData = {
       originalFilename: 'sunset.mp4',
       fileSize: 52428800,
       thumbnailUrl: '/api/media/vid-1/thumbnail',
+      // The public gallery query only returns videos with compiled_path or
+      // media_source='merged' (multi-user-system 需求 9 AC 6), so a bare upload
+      // would not be a legal fixture here.
+      compiledPath: '/uploads/trip-1/compiled/vid-1_compiled.mp4',
     },
   ],
 };
@@ -126,24 +134,25 @@ describe('GalleryPage', () => {
     expect(screen.getByText('樱花季的美好回忆')).toBeDefined();
   });
 
-  it('renders images in a grid layout', async () => {
+  // Replaces an earlier test that asserted a raw `image-grid` of every active
+  // photo. That grid was gated on `visibility !== 'public'` and therefore could
+  // never render: 'unlisted' returns early above it, and those are the only two
+  // legal values. The public photo view is the 精选 / 精华 grids
+  // (highlight-tier Requirement 8 AC 1); the unfiltered grid lives in
+  // MyGalleryPage, where owners are routed (multi-user-system 需求 11 AC 11).
+  it('does not render the legacy raw image grid on the public gallery', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId('image-grid')).toBeDefined();
+      expect(screen.getByTestId('video-grid')).toBeDefined();
     });
 
-    const grid = screen.getByTestId('image-grid');
-    expect(grid.style.display).toBe('grid');
-    expect(grid.style.gridTemplateColumns).toContain('repeat');
-
-    const images = screen.getAllByRole('img');
-    const thumbnails = images.filter(img => img.getAttribute('src')?.includes('/thumbnail'));
-    expect(thumbnails).toHaveLength(3);
-    expect(thumbnails[0]).toHaveAttribute('src', '/api/media/img-1/thumbnail');
-    expect(thumbnails[1]).toHaveAttribute('src', '/api/media/img-2/thumbnail');
-    expect(thumbnails[2]).toHaveAttribute('src', '/api/media/vid-1/thumbnail');
+    expect(screen.queryByTestId('image-grid')).toBeNull();
+    expect(screen.queryByLabelText('图片区域')).toBeNull();
+    expect(screen.queryByTestId('category-tabs')).toBeNull();
+    expect(screen.queryByTestId('image-img-1')).toBeNull();
+    expect(screen.queryByTestId('image-img-2')).toBeNull();
   });
 
   it('renders videos in a grid layout', async () => {
@@ -162,6 +171,77 @@ describe('GalleryPage', () => {
     expect(screen.getByTestId('play-icon-vid-1')).toBeDefined();
   });
 
+  describe('public gallery compiled video section', () => {
+    // T1 — the section must render for a public trip. Guards against the
+    // `visibility !== 'public'` inversion that made it unreachable.
+    it('renders the video section for a public trip with a compiled video', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('视频区域')).toBeDefined();
+      });
+      expect(screen.getByTestId('video-grid')).toBeDefined();
+      expect(screen.getByTestId('video-vid-1')).toBeDefined();
+      expect(screen.getByText('视频 (1)')).toBeDefined();
+    });
+
+    // T2 — playback source is the /original authority, which resolves to
+    // compiled_path for videos and streams inline with Range support.
+    it('plays the video from /api/media/:id/original', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('video-vid-1')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('video-vid-1'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('video-player-modal')).toBeDefined();
+      });
+      const source = document
+        .querySelector('[data-testid="video-player-modal"] video source');
+      expect(source).not.toBeNull();
+      expect(source).toHaveAttribute('src', '/api/media/vid-1/original');
+    });
+
+    it('never uses the non-existent /compiled or the attachment endpoint as a playback source', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('video-vid-1')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('video-vid-1'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('video-player-modal')).toBeDefined();
+      });
+      const html = document.body.innerHTML;
+      expect(html).not.toContain('/api/media/vid-1/compiled');
+      expect(html).not.toContain('/download-compiled');
+    });
+
+    // T3 — no anonymous compiled download is offered, and nothing requests one.
+    it('offers no compiled download control and issues no download request', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('video-grid')).toBeDefined();
+      });
+
+      expect(screen.queryByTestId('download-btn-vid-1')).toBeNull();
+      expect(screen.queryByTestId('download-compiled-btn-vid-1')).toBeNull();
+      expect(screen.queryByLabelText('下载 sunset.mp4')).toBeNull();
+
+      const requested = mockedAxios.get.mock.calls.map((c) => String(c[0]));
+      expect(requested.some((u) => u.includes('/download-compiled'))).toBe(false);
+      expect(requested.some((u) => u.endsWith('/compiled'))).toBe(false);
+    });
+  });
+
   it('shows error message when fetch fails', async () => {
     mockedAxios.get.mockRejectedValueOnce(new Error('Network Error'));
     renderGalleryPage();
@@ -172,7 +252,12 @@ describe('GalleryPage', () => {
     expect(screen.getByText(/加载相册数据失败/)).toBeDefined();
   });
 
-  it('shows empty state when no images or videos', async () => {
+  // Replaces an earlier test that expected the 空状态 block with the
+  // "快去上传吧" copy. That block was gated the same unreachable way, and its
+  // call to action addresses an uploader — visitors on this page cannot upload.
+  // No acceptance criterion defines a gallery-wide empty state for the public
+  // gallery, so the honest assertion is that no section renders.
+  it('renders no media sections and no legacy empty state when the trip has no media', async () => {
     const emptyData: GalleryData = {
       trip: { ...sampleData.trip },
       images: [],
@@ -182,18 +267,24 @@ describe('GalleryPage', () => {
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByLabelText('空状态')).toBeDefined();
+      expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
     });
-    expect(screen.getByText(/还没有素材/)).toBeDefined();
+    expect(screen.queryByLabelText('空状态')).toBeNull();
+    expect(screen.queryByText(/还没有素材/)).toBeNull();
+    expect(screen.queryByLabelText('图片区域')).toBeNull();
+    expect(screen.queryByLabelText('视频区域')).toBeNull();
   });
 
-  it('shows images section heading with count', async () => {
+  // Replaces an earlier test asserting a "图片 (2)" heading, which belonged to the
+  // same unreachable raw image section.
+  it('does not show a raw image section heading on the public gallery', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: sampleData });
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByText('图片 (2)')).toBeDefined();
+      expect(screen.getByText('视频 (1)')).toBeDefined();
     });
+    expect(screen.queryByText('图片 (2)')).toBeNull();
   });
 
   it('shows videos section heading with count', async () => {
@@ -205,7 +296,7 @@ describe('GalleryPage', () => {
     });
   });
 
-  it('hides images section when no images', async () => {
+  it('renders the video section without an image section when the trip has only videos', async () => {
     const noImagesData: GalleryData = {
       trip: { ...sampleData.trip },
       images: [],
@@ -220,6 +311,9 @@ describe('GalleryPage', () => {
     expect(screen.queryByLabelText('图片区域')).toBeNull();
   });
 
+  // Previously also asserted the raw `image-grid` was present; that half was
+  // removed along with the unreachable section. The video-absence half is the
+  // part that still describes real behavior.
   it('hides videos section when no videos', async () => {
     const noVideosData: GalleryData = {
       trip: { ...sampleData.trip },
@@ -230,7 +324,7 @@ describe('GalleryPage', () => {
     renderGalleryPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId('image-grid')).toBeDefined();
+      expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
     });
     expect(screen.queryByLabelText('视频区域')).toBeNull();
   });

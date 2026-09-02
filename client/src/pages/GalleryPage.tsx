@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import Lightbox from '../components/Lightbox';
@@ -6,24 +6,16 @@ import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 import { getTierPhotos, getHighlightPhotos, TierPhotoItem } from '../api';
 
-type CategoryTab = 'all' | 'landscape' | 'animal' | 'people' | 'other';
-
-const CATEGORY_LABELS: Record<CategoryTab, string> = {
-  all: '全部',
-  landscape: '风景',
-  animal: '动物',
-  people: '人物',
-  other: '其他',
-};
-
-const CATEGORY_TABS: CategoryTab[] = ['all', 'landscape', 'animal', 'people', 'other'];
-
 export interface GalleryTrip {
   id: string;
   title: string;
   description?: string;
   coverImageId?: string;
-  visibility?: 'public' | 'unlisted';
+  // Required, matching the server contract: trips.visibility is NOT NULL DEFAULT
+  // 'public' and the API only ever writes 'public' or 'unlisted'. Leaving this
+  // optional previously let fixtures fabricate an undefined state that production
+  // cannot produce, which is what hid the inverted video-section gate below.
+  visibility: 'public' | 'unlisted';
   userId?: string;
   createdAt: string;
   updatedAt: string;
@@ -72,7 +64,6 @@ export interface GalleryVideo {
   fileSize: number;
   thumbnailUrl: string;
   compiledPath?: string;
-  compiledUrl?: string;
   mediaSource?: 'upload' | 'merged';
   audioTrackId?: string;
 }
@@ -107,38 +98,14 @@ export default function GalleryPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
-  const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
   const [tierSlideshowUrls, setTierSlideshowUrls] = useState<Record<string, string>>({});
   const [galleryTab, setGalleryTab] = useState<'all' | 'tier'>('all');
   const [highlightPhotos, setHighlightPhotos] = useState<TierPhotoItem[]>([]);
   const [tierPhotos, setTierPhotos] = useState<TierPhotoItem[]>([]);
 
-  const images = data?.images ?? [];
+  // Photos on this page come from the 精选 / 精华 endpoints, not from data.images
+  // — the raw image grid it used to feed now lives only in MyGalleryPage.
   const videos = data?.videos ?? [];
-
-  const categoryCounts = useMemo(() => {
-    const counts: Record<CategoryTab, number> = { all: images.length, landscape: 0, animal: 0, people: 0, other: 0 };
-    for (const img of images) {
-      const cat = img.item.category as CategoryTab | undefined;
-      if (cat && cat in counts) {
-        counts[cat]++;
-      } else {
-        counts.other++;
-      }
-    }
-    return counts;
-  }, [images]);
-
-  const filteredImages = useMemo(() => {
-    if (activeCategory === 'all') return images;
-    return images.filter((img) => {
-      const cat = img.item.category;
-      if (activeCategory === 'other') {
-        return !cat || cat === 'other';
-      }
-      return cat === activeCategory;
-    });
-  }, [images, activeCategory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -341,71 +308,17 @@ export default function GalleryPage() {
         </>
       )}
 
-      {/* Original gallery content — only for non-public trips */}
-      {data.trip.visibility !== 'public' && (
-        <>
-        </>
-      )}
+      {/*
+        Public gallery video section. The server already restricts this payload to
+        compiled / merged videos, which is exactly what visitors are meant to see
+        (video-auto-compile-and-merge Requirement 3, multi-user-system 需求 9 AC 6).
 
-      {/* Image and video grid — only show for non-public trips (public trips use highlight/tier tabs) */}
-      {data.trip.visibility !== 'public' && images.length > 0 && (
-        <section aria-label="图片区域">
-          <h2>图片 ({images.length})</h2>
-          <div data-testid="category-tabs" className="pill-tabs">
-            {CATEGORY_TABS.map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveCategory(tab)}
-                data-testid={`category-tab-${tab}`}
-                className={`pill-tab${activeCategory === tab ? ' active' : ''}`}
-              >
-                {CATEGORY_LABELS[tab]} ({categoryCounts[tab]})
-              </button>
-            ))}
-          </div>
-          {filteredImages.length > 0 ? (
-            <div
-              data-testid="image-grid"
-              className="media-grid"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                gap: '12px',
-              }}
-            >
-              {filteredImages.map((img, idx) => (
-                <div
-                  key={img.item.id}
-                  data-testid={`image-${img.item.id}`}
-                  className="media-card"
-                  style={trip.coverImageId === img.item.id ? { border: '3px solid #4a90d9' } : undefined}
-                >
-                  <div
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => setLightboxIndex(idx)}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`查看 ${img.item.originalFilename}`}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
-                  >
-                    <img
-                      src={img.thumbnailUrl}
-                      alt={img.item.originalFilename}
-                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div data-testid="empty-category" className="empty-state" style={{ padding: '32px' }}>
-              <p>该分类下暂无图片</p>
-            </div>
-          )}
-        </section>
-      )}
-
-      {data.trip.visibility !== 'public' && videos.length > 0 && (
+        There is deliberately no raw image grid here. The public photo view is the
+        精选 / 精华 grids above (highlight-tier Requirement 8 AC 1); owners are
+        routed to /my/trips/:id instead (multi-user-system 需求 11 AC 11), which is
+        where the full unfiltered grid lives.
+      */}
+      {data.trip.visibility === 'public' && videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
           <div
@@ -469,42 +382,12 @@ export default function GalleryPage() {
                 >
                   ▶
                 </div>
-                <button
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    try {
-                      const downloadUrl = video.compiledUrl || `/api/media/${video.id}/raw`;
-                      const res = await fetch(downloadUrl);
-                      if (!res.ok) throw new Error('下载失败');
-                      const blob = await res.blob();
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = video.originalFilename || `video-${video.id}.mp4`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      URL.revokeObjectURL(url);
-                    } catch {
-                      alert('下载失败，请重试');
-                    }
-                  }}
-                  data-testid={`download-btn-${video.id}`}
-                  aria-label={`下载 ${video.originalFilename}`}
-                  style={{
-                    position: 'absolute',
-                    bottom: '4px',
-                    right: '4px',
-                    background: 'rgba(255,255,255,0.9)',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    padding: '2px 8px',
-                    fontSize: '0.75rem',
-                    cursor: 'pointer',
-                  }}
-                >
-                  ⬇️ 下载
-                </button>
+                {/*
+                  No download control on purpose: this gallery is anonymous, and
+                  every compiled-video download endpoint requires Bearer auth. No
+                  requirement grants visitors a compiled download, so none is
+                  offered here. Owner-side download lives in MyGalleryPage.
+                */}
               </div>
             ))}
           </div>
@@ -514,7 +397,10 @@ export default function GalleryPage() {
       {/* Video Player Modal */}
       {selectedVideoId && (() => {
         const selectedVideo = videos.find(v => v.id === selectedVideoId);
-        const videoUrl = selectedVideo?.compiledUrl || `/api/media/${selectedVideoId}/original`;
+        // /original is the playback authority: for videos it resolves to
+        // compiled_path when present, serves inline with Range support, and needs
+        // no auth. ?original=true is the only way to ask for the raw upload.
+        const videoUrl = `/api/media/${selectedVideoId}/original`;
         return (
           <div
             role="dialog"
@@ -538,19 +424,12 @@ export default function GalleryPage() {
         );
       })()}
 
-      {data.trip.visibility !== 'public' && images.length === 0 && videos.length === 0 && (
-        <div aria-label="空状态" className="empty-state">
-          <p>这次旅行还没有素材，快去上传吧！</p>
-        </div>
-      )}
-
       {lightboxIndex !== null && !editingMediaId && (() => {
-        // Determine which photo list to use for lightbox based on active tab
-        const lightboxImages = data.trip.visibility === 'public'
-          ? galleryTab === 'tier'
-            ? tierPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精华照片' }))
-            : highlightPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精选照片' }))
-          : filteredImages.map((img) => ({ originalUrl: img.originalUrl, mediaId: img.item.id, alt: img.item.originalFilename }));
+        // Only the 精选 / 精华 grids can open the lightbox on this page, and both
+        // exist only for public trips, so the tab decides the list outright.
+        const lightboxImages = galleryTab === 'tier'
+          ? tierPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精华照片' }))
+          : highlightPhotos.map((p) => ({ originalUrl: p.originalUrl, mediaId: p.id, alt: p.category || '精选照片' }));
         return (
           <Lightbox
             images={lightboxImages}

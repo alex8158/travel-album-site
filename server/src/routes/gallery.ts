@@ -123,10 +123,13 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
      ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...videoParams) as MediaItemRow[];
 
+  // No playback URL is emitted here. Clients use GET /api/media/:id/original,
+  // which already resolves to compiled_path for videos and serves it inline with
+  // Range support. A separate compiledUrl field used to point at
+  // /api/media/:id/compiled — a route that has never existed.
   const videos = videoRows.map((row) => ({
     ...rowToMediaItem(row),
     thumbnailUrl: `/api/media/${row.id}/thumbnail`,
-    ...(row.compiled_path ? { compiledUrl: `/api/media/${row.id}/compiled` } : {}),
   }));
 
   const galleryData: GalleryData = { trip, images, videos };

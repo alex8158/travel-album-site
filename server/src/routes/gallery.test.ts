@@ -218,6 +218,31 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
   });
 
+  // The payload used to carry compiledUrl: `/api/media/:id/compiled`, a route that
+  // has never been registered. Clients play compiled videos through
+  // GET /api/media/:id/original, which already resolves to compiled_path.
+  it('should not emit a compiledUrl field for videos that have a compiled_path', async () => {
+    const tripId = createTrip(owner.userId);
+    const vidId = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid.mp4` });
+
+    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    expect(res.status).toBe(200);
+    expect(res.body.videos).toHaveLength(1);
+    expect(res.body.videos[0]).not.toHaveProperty('compiledUrl');
+    expect(JSON.stringify(res.body)).not.toContain(`/api/media/${vidId}/compiled`);
+  });
+
+  it('should not emit a compiledUrl field for merged videos without a compiled_path', async () => {
+    const tripId = createTrip(owner.userId);
+    createMediaItem(tripId, 'video', { mediaSource: 'merged' });
+
+    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    expect(res.status).toBe(200);
+    expect(res.body.videos).toHaveLength(1);
+    expect(res.body.videos[0]).not.toHaveProperty('compiledUrl');
+    expect(JSON.stringify(res.body)).not.toContain('/compiled');
+  });
+
   describe('visibility filtering', () => {
     it('should only return public media items for unauthenticated access', async () => {
       const tripId = createTrip(owner.userId);
