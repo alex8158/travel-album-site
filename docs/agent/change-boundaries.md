@@ -123,7 +123,9 @@ python3 .kiro/specs/_gen_traceability.py
 
 它会重新生成 23 份 `traceability.md`，并报告需求覆盖缺口、越界引用。**有告警就说明记录没做完。**
 
-> **尚未入库：** `_gen_traceability.py` 与它生成的 23 份 `traceability.md` 目前都还没有提交，将随后续的追溯工具/产物批次一并闭合。在那批完成之前，本仓库**不具备**可执行的 traceability 重新生成流程，不要把上面这一步当成当前已可运行的校验。
+> **产物不入库：** `_gen_traceability.py` 已入库，上面这一步现在可以直接运行。但它生成的 23 份 `traceability.md` **不进版本控制**，由 `.gitignore` 管理 —— 它们可再生、无 provenance，且入库会带来 merge conflict。人工维护的 `.kiro/specs/photo-curation-fix/traceability-verified.md` 是另一回事，它入库，不属于 generator 的输出范围。
+>
+> 跑完请按 `docs/agent/verify-commands.md` 确认：exit 0、23 份产物、`.tmp` 残留 0，且连续两次生成 byte-identical。`_check_completed.py` 同理可直接运行。
 
 ### 状态标记约定
 

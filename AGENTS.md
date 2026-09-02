@@ -406,10 +406,12 @@ The project currently lacks:
 * A lint script
 * A smoke test script
 * A dedicated debugging playbook
-* A dedicated forbidden-changes document
-* A stable agent task template
 
 Agents should not pretend these files or commands exist.
+
+Two former gaps are now closed and must not be described as missing: change
+boundaries live in `docs/agent/change-boundaries.md` (see section 5.0) and the
+agent task format in `docs/agent/task-template.md`.
 
 ## 17. Important Reminder
 
