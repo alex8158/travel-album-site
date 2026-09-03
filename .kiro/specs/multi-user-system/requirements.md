@@ -39,6 +39,9 @@
 - **Admin_Scope**：`/api/admin/*` 前缀，仅管理员可访问
 - **Error_Envelope**：统一错误响应结构 `{ error: { code, message } }`
 - **Orphan_Data_Migration**：`migrateOrphanedData()`，启动时把 `user_id` 为 NULL 的 trips 与 media_items 归属给 Default_Admin
+- **Trip_Visibility**：`trips.visibility`，取值 `public` 或 `unlisted`。它是**可发现性（discovery）控制**，不是访问控制 —— 两个取值都允许持有直接链接的访问者访问，区别只在于是否出现在公开列表中。素材层面的访问控制由 `media_items.visibility` 独立负责（见需求 9 AC 4、AC 8），本术语不涉及其含义
+- **Public_Trip**：`visibility = 'public'` 的旅行。出现在公开列表，且可通过直接链接访问
+- **Unlisted_Trip**：`visibility = 'unlisted'` 的旅行。**不**出现在公开列表，但**仍可**通过直接链接访问。它不是 owner-only 或完全私有状态
 
 ---
 
@@ -185,6 +188,11 @@
 6. THE 系统 SHALL 在公开视频查询中额外要求 `compiled_path IS NOT NULL OR media_source = 'merged'`，即公开画廊只呈现剪辑后或合并后的视频
 7. THE 系统 SHALL 限定 `trips.visibility` 的可写取值为 `public` 与 `unlisted`，非法值返回 400，错误码 `INVALID_VISIBILITY`
 8. THE 系统 SHALL 限定 `media_items.visibility` 的可写取值为 `public` 与 `private`
+9. THE 系统 SHALL 把 Trip_Visibility 视为可发现性控制而非访问控制：Public_Trip 既可从公开列表发现也可通过直接链接访问；Unlisted_Trip 不可从公开列表发现但可通过直接链接访问。公开列表的过滤由 AC 1 实现
+10. WHEN 访问者持有 trip id 或直接链接时, THE 系统 SHALL 允许未认证访问该旅行的公开分享面，且 SHALL NOT 因 `trips.visibility = 'unlisted'` 而拒绝。公开分享面包含 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery`；后者对匿名与非所有者请求者暴露哪些素材，仍完全由 AC 4 与 AC 6 的既有策略决定，本条不改变之
+11. WHEN 旅行的 `visibility` 由 `public` 改为 `unlisted` 时, THE 系统 SHALL 使其从公开列表消失，且 SHALL NOT 使既有直接链接失效
+
+> **AC 9–11 的性质**：这三条是 2026-09-02 对 Trip_Visibility 语义的正式裁定，用于把既有实现固化为可测试契约，**不引入任何行为变更**。此前 `unlisted` 的访问语义在本文档中从未定义，只有 AC 7 约束了可写取值，导致 G-6 被误判为越权缺陷（见第二部分 G-6）。裁定依据是 AC 1、AC 3、AC 4 与 `routes/gallery.ts` 的既有行为：`GET /api/trips/:id/gallery` 一直对任意 trip 返回 trip metadata 并按素材可见性过滤素材，若 `unlisted` 意为完全私有，AC 3 这条 SHALL 将自相矛盾。
 
 ## 需求 10：密码与账户自服务
 
@@ -241,6 +249,7 @@
 4. THE 系统 SHALL 在 `server/src/routes/users.test.ts` 覆盖 `GET /api/users/me/trips`、`GET /api/users/me/trips/:id/gallery`、`GET /api/admin/users/:id/trips`
 5. THE 系统 SHALL 在 `routes/trips.test.ts`、`media.test.ts`、`trash.test.ts`、`gallery.test.ts` 中附带覆盖越权 403 行为
 6. THE 客户端 SHALL 目前**没有**针对 AuthContext 与 ProtectedRoute 的专门测试
+7. THE 系统 SHALL 在 `routes/trips.test.ts` 与 `routes/gallery.test.ts` 中覆盖需求 9 AC 9–11 的 Trip_Visibility 契约：Unlisted_Trip 对匿名访问者仍可经直接 id 读取元数据与画廊、公开列表不含 Unlisted_Trip、`public → unlisted` 切换后直链仍有效、且 Unlisted_Trip 的素材暴露仍只由素材可见性策略决定
 
 ---
 
@@ -265,14 +274,34 @@ JWT 有效期 7 天，没有刷新机制、黑名单或版本号。账户被 `di
 **G-5 登录无速率限制与失败锁定**
 `POST /api/auth/login` 没有任何节流、验证码或连续失败锁定，可被暴力枚举。
 
-**G-6 `GET /api/trips/:id` 完全没有鉴权**
-该路由既未挂载 `authMiddleware` 也不检查 `visibility`，任何人凭 id 就能读取任意旅行的元数据（含 `unlisted`）。
+**G-6 `GET /api/trips/:id` 完全没有鉴权 —— 已裁定：非缺陷（ADJUDICATED / NOT A DEFECT，2026-09-02）**
+
+**原观察（保留原文）**：该路由既未挂载 `authMiddleware` 也不检查 `visibility`，任何人凭 id 就能读取任意旅行的元数据（含 `unlisted`）。
+
+**为何此前看起来像风险**：本文档当时没有任何条款定义 `unlisted` 的访问语义（AC 7 只约束可写取值），而前端可见性开关的文案是「公开 / **不公开**」（`client/src/pages/UploadPage.tsx`），容易读成"仅自己可访问"。在这个空缺下，「匿名可读 unlisted 元数据」被记为越权读取，并列入 P0。
+
+**本次裁定**：`unlisted` 的正式语义是 **link-accessible** —— 不可从公开列表发现，但持有直接链接者可访问。据此，匿名读取 Unlisted_Trip 的元数据是**预期设计**，不是越权。裁定已固化为需求 9 AC 9–11 与术语表的 Trip_Visibility / Public_Trip / Unlisted_Trip 条目。
+
+**决定性依据**：`GET /api/trips/:id/gallery`（需求 9 AC 3 明文 SHALL 允许未登录调用）在 `routes/gallery.ts` 中对 trip visibility 零门槛，一直向匿名调用者返回与 `GET /api/trips/:id` **完全相同**的 `rowToTrip()` 字段集。因此单独给 `GET /api/trips/:id` 加鉴权既无法消除所谓泄露，又会与 AC 3 冲突；而"完全私有"解读会使 AC 3 自相矛盾。
+
+**当前状态**：无需修改生产代码。`GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 均**不应**因 `visibility = 'unlisted'` 拒绝匿名访问。已补契约测试防止未来误把 `unlisted` 当作私有（见需求 13 AC 7）。
+
+**衍生的独立事项**：本次审计中发现匿名响应包含 `userId`，超出 `GET /api/trips` 的 `TripSummary` 契约字段集。这与 `unlisted` 是否允许匿名访问是两个不同问题，单独登记为 G-18，未在本次处理。
 
 **G-7 `/settings` 前端路由未受保护**
 `App.tsx` 中 `/settings` 没有包在 ProtectedRoute 里，未登录也能进入 SettingsPage。
 
 **G-8 无管理操作审计日志**
 审批、拒绝、提权、重置密码、禁用账户都没有留痕记录。
+
+**G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
+`rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
+
+这与 G-6 是不同问题：G-6 问的是"匿名能否访问 unlisted trip"（已裁定：能），本条问的是"公开分享面应当暴露哪些字段"。
+
+裁定前需要回答：公开画廊/分享 UI 是否需要 owner identity；其他匿名端点是否已暴露 `userId`；是否存在正式的 response schema 可依；移除该字段是否破坏 `client/src/pages/LoginPage.tsx`（它读 `tripData.userId` 判断是否改跳 `/my/trips/:id`，实现需求 11 AC 11）或其他消费者。
+
+在有正式 authority 之前不改代码。
 
 ## 一致性与实现质量
 
@@ -310,7 +339,7 @@ JWT 有效期 7 天，没有刷新机制、黑名单或版本号。账户被 `di
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
-| P0 | G-6、G-7 | 越权读取与未保护路由，改动面小 |
+| P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
 | P1 | G-4 | 凭证进版本库，建议改为环境变量注入 + 首登强制改密 |
 | P1 | G-2、G-3 | 需要引入令牌版本或短期令牌 + 刷新，属于会话机制变更 |
 | P1 | G-5 | 登录节流 |
@@ -349,7 +378,7 @@ JWT 有效期 7 天，没有刷新机制、黑名单或版本号。账户被 `di
 | POST | `/api/my/trips/:id/tier-slideshow/regenerate` | 是 | 本人 |
 | POST | `/api/trips` | 是 | 任意登录用户 |
 | GET | `/api/trips` | 可选 | 公开（仅 `visibility = 'public'`） |
-| GET | `/api/trips/:id` | **无中间件** | 公开（无可见性检查，见 G-6） |
+| GET | `/api/trips/:id` | **无中间件** | 公开（`public` 与 `unlisted` 均可匿名访问，见需求 9 AC 9–11；G-6 已裁定为非缺陷） |
 | PUT | `/api/trips/:id` | 是 | 所有者或 admin |
 | PUT | `/api/trips/:id/visibility` | 是 | 所有者或 admin |
 | PUT | `/api/trips/:id/cover` | 是 | 所有者或 admin |

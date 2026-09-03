@@ -330,6 +330,57 @@ describe('GET /api/trips/:id/gallery', () => {
     });
   });
 
+  // Trip_Visibility is a discovery control, not an access control. An unlisted
+  // trip remains reachable by direct link, and media exposure stays governed by
+  // media_items.visibility alone. See multi-user-system 需求 9 AC 9/10.
+  describe('unlisted trips remain link-accessible', () => {
+    function makeUnlisted(tripId: string): void {
+      getDb().prepare("UPDATE trips SET visibility = 'unlisted' WHERE id = ?").run(tripId);
+    }
+
+    it('should serve the gallery of an unlisted trip to an anonymous visitor', async () => {
+      const tripId = createTrip(owner.userId);
+      makeUnlisted(tripId);
+      const img = createMediaItem(tripId, 'image', { visibility: 'public' });
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+      expect(res.body.trip.id).toBe(tripId);
+      expect(res.body.trip.visibility).toBe('unlisted');
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(img);
+    });
+
+    it('should still filter media by media visibility on an unlisted trip', async () => {
+      const tripId = createTrip(owner.userId);
+      makeUnlisted(tripId);
+      const publicImg = createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+      const publicVid = createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
+      createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.status).toBe(200);
+      expect(res.body.images).toHaveLength(1);
+      expect(res.body.images[0].item.id).toBe(publicImg);
+      expect(res.body.videos).toHaveLength(1);
+      expect(res.body.videos[0].id).toBe(publicVid);
+    });
+
+    it('should give the owner unfiltered access to their own unlisted trip', async () => {
+      const tripId = createTrip(owner.userId);
+      makeUnlisted(tripId);
+      createMediaItem(tripId, 'image', { visibility: 'public' });
+      createMediaItem(tripId, 'image', { visibility: 'private' });
+
+      const res = await request(app)
+        .get(`/api/trips/${tripId}/gallery`)
+        .set('Authorization', `Bearer ${owner.token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.images).toHaveLength(2);
+    });
+  });
+
   describe('category filtering', () => {
     function setCategory(mediaId: string, category: string): void {
       const db = getDb();

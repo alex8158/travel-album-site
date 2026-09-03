@@ -263,6 +263,53 @@ describe('Trips CRUD API', () => {
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
     });
+
+    // Trip_Visibility is a discovery control, not an access control: an unlisted
+    // trip stays reachable by direct id/link. See multi-user-system 需求 9 AC 9/10
+    // — do not "harden" this into an owner-only route.
+    it('should return an unlisted trip to an anonymous visitor holding its id', async () => {
+      const created = await request(app)
+        .post('/api/trips')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ title: 'Unlisted Berlin Trip' });
+
+      await request(app)
+        .put(`/api/trips/${created.body.id}/visibility`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ visibility: 'unlisted' });
+
+      const res = await request(app).get(`/api/trips/${created.body.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(created.body.id);
+      expect(res.body.title).toBe('Unlisted Berlin Trip');
+      expect(res.body.visibility).toBe('unlisted');
+    });
+
+    // 需求 9 AC 11: flipping public -> unlisted removes the trip from public
+    // discovery but must not invalidate a direct link.
+    it('should keep a direct link working after the trip is switched to unlisted', async () => {
+      const created = await request(app)
+        .post('/api/trips')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ title: 'Was Public' });
+
+      const before = await request(app).get(`/api/trips/${created.body.id}`);
+      expect(before.status).toBe(200);
+
+      await request(app)
+        .put(`/api/trips/${created.body.id}/visibility`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ visibility: 'unlisted' });
+
+      const after = await request(app).get(`/api/trips/${created.body.id}`);
+      expect(after.status).toBe(200);
+      expect(after.body.id).toBe(created.body.id);
+
+      // ...while public discovery no longer lists it (需求 9 AC 1).
+      const listed = await request(app).get('/api/trips');
+      expect(listed.status).toBe(200);
+      expect(listed.body.map((t: { id: string }) => t.id)).not.toContain(created.body.id);
+    });
   });
 
   describe('PUT /api/trips/:id', () => {
