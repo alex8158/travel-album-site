@@ -294,6 +294,16 @@ JWT 有效期 7 天，没有刷新机制、黑名单或版本号。账户被 `di
 **G-8 无管理操作审计日志**
 审批、拒绝、提权、重置密码、禁用账户都没有留痕记录。
 
+**G-19 精选/精华照片端点缺失 media-level visibility 过滤（安全缺陷，2026-09-04 已修复）**
+
+`GET /api/trips/:id/highlight-photos` 与 `GET /api/trips/:id/tier-photos` 当时的 SQL 仅过滤 highlight/tier membership 与 `mi.status='active'`，未按调用者身份执行 `media_items.visibility` 曝光策略。
+
+因此，当可匿名访问的 trip 中存在 `visibility='private'` 且同时属于 highlight/tier 的 media 时，匿名或非所有者调用者可从上述列表响应取得其 media id 及 mediaServing URL；而 mediaServing 不执行独立 visibility 鉴权，形成 private media 的实际暴露链。
+
+highlight/tier membership 不构成 visibility override。修复复用 `routes/gallery.ts` 已有的 owner/admin + `mi.visibility='public'` media-level policy，未创建第二套曝光规则 —— 见 `routes/highlights.ts` 的 `queryTierPhotos()` 与 highlight-photos 查询，回归测试见 `routes/highlights.test.ts`。owner/admin 的既有完整访问不变。
+
+本条只涉及**照片列表的 media 级曝光**。这两个端点的 trip-level gate 未在此修复中改动，tier slideshow 文件服务的 gate 亦未改动。
+
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
 

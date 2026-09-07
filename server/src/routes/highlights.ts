@@ -277,9 +277,15 @@ function getTierSlideshowUrls(tripId: string): Record<string, string> {
 /**
  * Query tier photos for a trip from the database.
  * Excludes trashed photos (only returns status = 'active').
+ *
+ * Tier membership is not a visibility override: for anyone other than the owner
+ * or an admin, `media_items.visibility` still decides exposure. The clause is the
+ * same one `routes/gallery.ts` uses, so both surfaces share one policy.
+ * See multi-user-system G-19.
  */
-function queryTierPhotos(tripId: string): TierPhotoItem[] {
+function queryTierPhotos(tripId: string, isOwnerOrAdmin: boolean): TierPhotoItem[] {
   const db = getDb();
+  const visibilityClause = isOwnerOrAdmin ? '' : "AND mi.visibility = 'public'";
   const rows = db
     .prepare(
       `SELECT mi.id, mi.file_path, mi.category, hr.reason
@@ -288,6 +294,7 @@ function queryTierPhotos(tripId: string): TierPhotoItem[] {
        WHERE hr.trip_id = ?
          AND hr.is_highlight_tier = 1
          AND mi.status = 'active'
+         ${visibilityClause}
        ORDER BY mi.category, mi.created_at ASC`
     )
     .all(tripId) as Array<{
@@ -335,7 +342,7 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
-  const photos = queryTierPhotos(tripId);
+  const photos = queryTierPhotos(tripId, isOwnerOrAdmin);
   const slideshowUrls = getTierSlideshowUrls(tripId);
 
   return res.json({ photos, slideshowUrls });
@@ -370,7 +377,11 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
-  // Query all highlight photos (is_highlight = 1, status = 'active')
+  // Query all highlight photos (is_highlight = 1, status = 'active').
+  // Highlight membership is not a visibility override — non-owners still only see
+  // what `media_items.visibility` permits, same clause as `routes/gallery.ts`.
+  // See multi-user-system G-19.
+  const highlightVisibilityClause = isOwnerOrAdmin ? '' : "AND mi.visibility = 'public'";
   const rows = db
     .prepare(
       `SELECT mi.id, mi.file_path, mi.category, hr.reason
@@ -379,6 +390,7 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
        WHERE hr.trip_id = ?
          AND hr.is_highlight = 1
          AND mi.status = 'active'
+         ${highlightVisibilityClause}
        ORDER BY mi.category, mi.created_at ASC`
     )
     .all(tripId) as Array<{
