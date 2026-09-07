@@ -178,7 +178,7 @@ Rules that hold across all three rows:
 
 **Auth:** Optional (public for public trips, owner/admin for any)
 
-**Returns:** All photos where `is_highlight = 1` and `status = 'active'` for the trip.
+**Returns:** Every photo where `is_highlight = 1` and `status = 'active'` for the trip that the media visibility policy exposes to the requester — owner and admin get all of them, any other caller only those with `media_items.visibility = 'public'`.
 
 **Response:**
 ```typescript
@@ -314,9 +314,15 @@ Highlight Pool photo (is_highlight=1, is_highlight_tier=0)
 
 **Validates: Requirements 5.2, 9.2**
 
-### Property 6: Public highlight query returns all active highlights
+### Property 6: Public highlight query returns all active highlights visible to the requester
 
-*For any* public trip, the highlight-photos endpoint SHALL return every photo with `is_highlight = 1` AND `media_items.status = 'active'`, and no photo missing either condition SHALL appear in the results.
+*For any* public trip and *any* requester, the highlight-photos endpoint SHALL return exactly the set of photos satisfying **all** of:
+
+- `is_highlight = 1`
+- `media_items.status = 'active'`
+- exposed to that requester by the media visibility policy (`multi-user-system` 需求 9 AC 4/AC 5: owner and admin see every media item, everyone else only `media_items.visibility = 'public'`)
+
+Set equality is required in both directions: no photo failing any of the three conditions SHALL appear, and no photo satisfying all three SHALL be missing.
 
 **Validates: Requirements 6.3**
 

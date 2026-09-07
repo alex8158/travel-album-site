@@ -114,9 +114,17 @@ This divergence went unnoticed because no spec covered per-category slideshows a
 
 #### Acceptance Criteria
 
-1. THE Public_Gallery SHALL display 精选 photos (all `is_highlight = 1` photos) as the default photo view.
+1. THE Public_Gallery SHALL display 精选 photos as the default photo view — every photo that has `is_highlight = 1` and that the media visibility policy exposes to the current requester.
 2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category.
 3. THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`.
+
+#### Correction Note (2026-09-07)
+
+AC 1 previously read *"…display 精选 photos **(all `is_highlight = 1` photos)** as the default photo view."* That parenthetical predates the media-level exposure policy, so it stated completeness over a universe that ignored `media_items.visibility`.
+
+`multi-user-system` 需求 9 AC 4/AC 5 owns media exposure: non-owners get `AND m.visibility = 'public'`, owner and admin get no filter. Highlight membership does not override it — see `multi-user-system` G-19. AC 1 now scopes its completeness requirement to the media the current requester is permitted to see, so the two documents agree.
+
+Wording reconciliation only: no production behaviour changed, and AC 3 (trip-level visibility) is deliberately left as-is.
 
 ### Requirement 9: Subset Invariant Enforcement
 

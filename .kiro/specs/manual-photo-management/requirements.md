@@ -85,7 +85,7 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 
 1. THE Public_Gallery SHALL display two tabs: "精选" (all highlights) and "精华" (tier photos).
 2. THE Public_Gallery SHALL display the "精选" tab as the default active tab.
-3. WHEN the "精选" tab is active, THE Public_Gallery SHALL show all photos where `is_highlight = 1` for the trip.
+3. WHEN the "精选" tab is active, THE Public_Gallery SHALL show every photo where `is_highlight = 1` for the trip that the media visibility policy exposes to the current requester.
 4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus every available per-category Tier_Slideshow video.
 5. THE Public_Gallery tabs SHALL only be visible for trips with `visibility = 'public'`.
 
@@ -94,6 +94,16 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 Criteria 1–3 previously named the first tab "全部". The shipped UI labels it **"精选"** — see `client/src/pages/GalleryPage.tsx` L243, and the existing test `defaults to "全部" tab being active` which asserts on `screen.getByText('精选')`. The wording was corrected to match the implemented and test-covered label; the tab's internal state value remains `'all'`.
 
 Only the label is corrected here. Requirement numbering is unchanged, and no other criteria were rewritten. The same "全部" wording still appears in this spec's `design.md` and in tasks 8.1 / 8.2, which were outside the scope of this correction.
+
+#### Correction Note (2026-09-07)
+
+AC 3 previously read *"…SHALL show **all** photos where `is_highlight = 1` for the trip."* Written before the media-level exposure policy existed, it asserted completeness over a universe that ignored `media_items.visibility`.
+
+`multi-user-system` 需求 9 AC 4/AC 5 owns media exposure: non-owners get `AND m.visibility = 'public'`, owner and admin get no filter. Highlight membership is not a visibility override — see `multi-user-system` G-19. AC 3 now scopes its completeness requirement to the media the current requester may see; this spec does not define a second exposure rule.
+
+`design.md` Property 6 and the `GET /api/trips/:id/highlight-photos` contract, plus task 2.1's query description, were updated in the same pass. AC 5 (tabs visible only for `visibility = 'public'`) is **not** touched here — that is a trip-level discovery question tracked separately.
+
+Wording reconciliation only: no production behaviour changed.
 
 ### Requirement 7: API — Add Photo to Tier
 

@@ -73,7 +73,7 @@ Implementation proceeds bottom-up: backend API → client API functions → fron
   - [x] 2.1 Implement GET /api/trips/:id/highlight-photos (all highlights, public)
     - Add route handler in `server/src/routes/highlights.ts`
     - Auth optional; non-owners can only see public trips (same pattern as existing tier-photos)
-    - Query all photos with `is_highlight = 1` and `status = 'active'` for the trip
+    - Query photos with `is_highlight = 1` and `status = 'active'` for the trip, applying the media visibility policy for the requester (owner/admin unfiltered, otherwise `mi.visibility = 'public'`)
     - Return `{ photos: TierPhotoItem[] }`
     - _Requirements: 6.3, 6.5_
 
