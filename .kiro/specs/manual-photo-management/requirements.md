@@ -87,7 +87,15 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 2. THE Public_Gallery SHALL display the "精选" tab as the default active tab.
 3. WHEN the "精选" tab is active, THE Public_Gallery SHALL show every photo where `is_highlight = 1` for the trip that the media visibility policy exposes to the current requester.
 4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus every available per-category Tier_Slideshow video.
-5. THE Public_Gallery tabs SHALL only be visible for trips with `visibility = 'public'`.
+5. WHENEVER a Public_Gallery page has been permitted to render for a trip, THE Public_Gallery SHALL display both the "精选" and "精华" tabs. An `unlisted` trip SHALL NOT have its tabs hidden once the page has been opened via its direct link; `trips.visibility` affects discovery only, not the composition of an already-permitted page.
+
+#### Correction Note (2026-09-09)
+
+AC 5 previously read *"THE Public_Gallery tabs SHALL only be visible for trips with `visibility = 'public'`."* That predates any defined `unlisted` semantic and, read literally, produced a mutilated page: a visitor arriving on a valid `unlisted` direct link would see gallery chrome with no tab controls.
+
+`multi-user-system` 需求 9 AC 9–11 establishes `trips.visibility` as a discovery control. AC 5 now describes the actual UI contract — once a page is permitted to render, its tabs render.
+
+Scope, stated explicitly because this AC has been mis-cited before: **AC 5 is a UI composition rule only.** It is not an API access control and SHALL NOT be cited as authority for any endpoint returning 403/404 on a non-public trip. API-level media exposure is owned by `multi-user-system` 需求 9 AC 4/AC 5; trip-level discovery vs. direct-link access is owned by 需求 9 AC 9–11 and `highlight-tier` design Property 10.
 
 #### Correction Note
 

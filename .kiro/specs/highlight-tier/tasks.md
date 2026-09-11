@@ -99,7 +99,7 @@ Implement a second curation pass that selects the absolute best photos per categ
 
 - [x] 6. Implement API endpoints for tier photos
   - [x] 6.1 Add tier photos route in `server/src/routes/highlights.ts` (or new file)
-    - `GET /api/trips/:id/tier-photos` — public endpoint (respects trip visibility)
+    - `GET /api/trips/:id/tier-photos` — public endpoint (trip visibility is discovery-only per design Property 10b; returned media is filtered by the media visibility policy)
     - `GET /api/my/trips/:id/tier-photos` — authenticated endpoint for My Gallery
     - Return `{ photos: TierPhotoItem[], slideshowUrl: string | null }`
     - Exclude trashed photos from results
@@ -107,7 +107,7 @@ Implement a second curation pass that selects the absolute best photos per categ
 
   - [ ]* 6.2 Write unit tests for tier photos API endpoints
     - Test that trashed photos are excluded
-    - Test that non-public trips are not exposed on public endpoint
+    - Test that an `unlisted` trip is reachable via direct link on the public endpoint, and that `media_items.visibility = 'private'` photos never appear for an anonymous or non-owner requester
     - _Requirements: 9.3, 8.3_
 
 - [x] 7. Checkpoint - Ensure all backend tests pass
@@ -133,7 +133,7 @@ Implement a second curation pass that selects the absolute best photos per categ
   - [x] 10.1 Update `client/src/pages/GalleryPage.tsx` to show tier video
     - Fetch tier slideshow URL from public tier photos endpoint
     - Display the tier slideshow video prominently in the gallery layout
-    - Only show for trips with `visibility = 'public'`
+    - Do not gate this on `trips.visibility` in the UI. For a non-owner on a non-public trip the video is absent because the API withholds slideshow URLs; that API-side withholding remains the enforcement point, pending the separate tier-slideshow access decision
     - _Requirements: 8.1, 8.2, 8.3_
 
 - [x] 11. Final checkpoint - Ensure all tests pass

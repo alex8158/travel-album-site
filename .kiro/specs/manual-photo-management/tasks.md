@@ -72,7 +72,7 @@ Implementation proceeds bottom-up: backend API → client API functions → fron
 - [x] 2. Backend API — Public Highlight Photos Endpoint
   - [x] 2.1 Implement GET /api/trips/:id/highlight-photos (all highlights, public)
     - Add route handler in `server/src/routes/highlights.ts`
-    - Auth optional; non-owners can only see public trips (same pattern as existing tier-photos)
+    - Auth optional; a non-owner is not refused for reaching an `unlisted` trip by direct link (trip visibility is discovery-only), and exposure is enforced per-media rather than per-trip (same pattern as existing tier-photos)
     - Query photos with `is_highlight = 1` and `status = 'active'` for the trip, applying the media visibility policy for the requester (owner/admin unfiltered, otherwise `mi.visibility = 'public'`)
     - Return `{ photos: TierPhotoItem[] }`
     - _Requirements: 6.3, 6.5_
@@ -177,7 +177,7 @@ Implementation proceeds bottom-up: backend API → client API functions → fron
   - [x] 8.1 Add tab bar with "精选" and "精华" tabs to GalleryPage
     - "精选" is default active tab
     - Use same pill-tabs styling as existing category tabs
-    - Only visible for trips with `visibility = 'public'`
+    - Rendered on any gallery page that was permitted to open, including an `unlisted` trip reached by direct link (R6 AC 5 is a UI composition rule, not an access control)
     - _Requirements: 6.1, 6.2, 6.5_
 
   - [x] 8.2 Wire "精选" tab to display all highlight photos

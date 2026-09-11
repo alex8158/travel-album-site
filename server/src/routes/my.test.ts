@@ -62,22 +62,23 @@ function setTripVisibility(tripId: string, visibility: 'public' | 'unlisted') {
 function seedMedia(
   tripId: string,
   userId: string,
-  overrides: Partial<{ category: string; status: string }> = {}
+  overrides: Partial<{ category: string; status: string; visibility: string }> = {}
 ) {
   const db = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
   const category = overrides.category ?? 'animal';
   const status = overrides.status ?? 'active';
+  const visibility = overrides.visibility ?? 'public';
 
   db.prepare(
     `INSERT INTO media_items
        (id, trip_id, file_path, media_type, mime_type, original_filename, file_size,
         status, user_id, visibility, category, created_at)
-     VALUES (?, ?, ?, 'image', 'image/jpeg', 'photo.jpg', 1024, ?, ?, 'public', ?, ?)`
-  ).run(id, tripId, `${id}/file.jpg`, status, userId, category, now);
+     VALUES (?, ?, ?, 'image', 'image/jpeg', 'photo.jpg', 1024, ?, ?, ?, ?, ?)`
+  ).run(id, tripId, `${id}/file.jpg`, status, userId, visibility, category, now);
 
-  return { id, category, status };
+  return { id, category, status, visibility };
 }
 
 /**
@@ -1215,34 +1216,53 @@ describe('My Space Routes — tier photo management', () => {
       expect((res.body.photos as Array<{ id: string }>).map((p) => p.id)).toEqual([photo.id]);
     });
 
-    it('6.5: an anonymous visitor gets 404 NOT_FOUND for a non-public trip', async () => {
+    // `trips.visibility` is a discovery control, not an access control: an `unlisted`
+    // trip reached by its direct link is not refused. What the response may contain is
+    // decided per media instead. Authority: multi-user-system 需求 9 AC 9–11 (discovery
+    // vs. direct link) + AC 4/AC 5 (media exposure), and highlight-tier design
+    // Property 10a/10b. `manual-photo-management` R6 AC 5 is a UI composition rule and
+    // is deliberately NOT cited here — it is not API access control.
+    it('9.10: an anonymous visitor reaching an unlisted trip by direct link gets 200, public highlights only', async () => {
       const user = seedUser();
       const trip = seedTrip(user.id);
       setTripVisibility(trip.id, 'unlisted');
-      const photo = seedMedia(trip.id, user.id, { category: 'animal' });
-      seedHighlight(trip.id, photo.id, false, 1);
+      const publicPhoto = seedMedia(trip.id, user.id, { category: 'animal' });
+      const privatePhoto = seedMedia(trip.id, user.id, {
+        category: 'animal',
+        visibility: 'private',
+      });
+      seedHighlight(trip.id, publicPhoto.id, false, 1);
+      seedHighlight(trip.id, privatePhoto.id, false, 1);
 
       const res = await getHighlightPhotos(trip.id);
 
-      expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe('NOT_FOUND');
-      // Must not disclose the photo list for a non-public trip.
-      expect(res.body.photos).toBeUndefined();
+      expect(res.status).toBe(200);
+      const ids = (res.body.photos as Array<{ id: string }>).map((p) => p.id);
+      expect(ids).toEqual([publicPhoto.id]);
+      // The private highlight must not leak anywhere in the payload, not just in `photos`.
+      expect(JSON.stringify(res.body)).not.toContain(privatePhoto.id);
     });
 
-    it('6.5: an authenticated non-owner gets 404 NOT_FOUND for a non-public trip', async () => {
+    it('9.10: an authenticated non-owner reaching an unlisted trip by direct link gets 200, public highlights only', async () => {
       const owner = seedUser({ username: 'hp-owner' });
       const stranger = seedUser({ username: 'hp-stranger' });
       const trip = seedTrip(owner.id);
       setTripVisibility(trip.id, 'unlisted');
-      const photo = seedMedia(trip.id, owner.id, { category: 'animal' });
-      seedHighlight(trip.id, photo.id, false, 1);
+      const publicPhoto = seedMedia(trip.id, owner.id, { category: 'animal' });
+      const privatePhoto = seedMedia(trip.id, owner.id, {
+        category: 'animal',
+        visibility: 'private',
+      });
+      seedHighlight(trip.id, publicPhoto.id, false, 1);
+      seedHighlight(trip.id, privatePhoto.id, false, 1);
 
       const token = signToken({ userId: stranger.id, role: 'regular' });
       const res = await getHighlightPhotos(trip.id, token);
 
-      expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe('NOT_FOUND');
+      expect(res.status).toBe(200);
+      const ids = (res.body.photos as Array<{ id: string }>).map((p) => p.id);
+      expect(ids).toEqual([publicPhoto.id]);
+      expect(JSON.stringify(res.body)).not.toContain(privatePhoto.id);
     });
 
     it('6.5: the owner can read their own non-public trip', async () => {

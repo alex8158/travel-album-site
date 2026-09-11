@@ -419,19 +419,42 @@ describe('GalleryPage', () => {
       expect(tierTab.className).not.toContain('active');
     });
 
-    it('does not show gallery mode tabs for unlisted trips', async () => {
+    // `unlisted` keeps a trip out of public listings; it does not lock out a visitor
+    // holding the link. The page renders in full, with a non-blocking status note.
+    // Authority: multi-user-system 需求 9 AC 9–11; manual-photo-management R6 AC 5.
+    it('renders an unlisted trip opened by direct link, with tabs and a link-only notice', async () => {
       const unlistedData: GalleryData = {
         trip: { ...sampleData.trip, visibility: 'unlisted' },
         images: sampleData.images,
         videos: sampleData.videos,
       };
       mockedAxios.get.mockResolvedValueOnce({ data: unlistedData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
       renderGalleryPage();
 
       await waitFor(() => {
-        expect(screen.getByText('该相册未公开')).toBeDefined();
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
       });
-      expect(screen.queryByTestId('gallery-mode-tabs')).toBeNull();
+      expect(screen.getByTestId('unlisted-notice')).toBeDefined();
+      // The old blocking message must be gone, not merely hidden.
+      expect(screen.queryByText('该相册未公开')).toBeNull();
+      // Content is reachable, not just the page chrome.
+      await waitFor(() => {
+        expect(screen.getByTestId('highlight-photos-grid')).toBeDefined();
+      });
+    });
+
+    it('does not show the link-only notice on a public trip', async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
+      mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
+      mockedGetTierPhotos.mockResolvedValueOnce({ photos: tierPhotosMock, slideshowUrls: {} });
+      renderGalleryPage();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gallery-mode-tabs')).toBeDefined();
+      });
+      expect(screen.queryByTestId('unlisted-notice')).toBeNull();
     });
 
     it('shows highlight photos grid when "全部" tab is active', async () => {

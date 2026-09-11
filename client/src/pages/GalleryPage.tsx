@@ -140,8 +140,9 @@ export default function GalleryPage() {
         // Silently ignore — tier data may not exist yet
       }
     }
-    // Only fetch once gallery data confirms the trip is public
-    if (data && data.trip.visibility !== 'unlisted') {
+    // Fetch for any trip we were able to load, including an `unlisted` one opened by
+    // direct link. The endpoint narrows the result per media on its own.
+    if (data) {
       loadTierData();
     }
     return () => { cancelled = true; };
@@ -161,8 +162,8 @@ export default function GalleryPage() {
         // Silently ignore — highlight data may not exist yet
       }
     }
-    // Only fetch for public trips
-    if (data && data.trip.visibility !== 'unlisted') {
+    // Same as tier data: `unlisted` is not a reason to skip the fetch.
+    if (data) {
       loadHighlightPhotos();
     }
     return () => { cancelled = true; };
@@ -180,17 +181,6 @@ export default function GalleryPage() {
     return <div role="alert">未找到相册数据</div>;
   }
 
-  if (data.trip.visibility === 'unlisted') {
-    return (
-      <div className="page-container" style={{ textAlign: 'center' }}>
-        <p role="alert" style={{ fontSize: '1.25rem', color: '#666', marginTop: '48px' }}>该相册未公开</p>
-        <Link to="/" style={{ display: 'inline-block', marginTop: '16px' }}>
-          ← 返回首页
-        </Link>
-      </div>
-    );
-  }
-
   const { trip } = data;
 
   return (
@@ -204,16 +194,33 @@ export default function GalleryPage() {
         {trip.description && <p>{trip.description}</p>}
       </header>
 
-      {/* Gallery mode tabs — only for public trips with highlight data */}
-      {data.trip.visibility === 'public' && (
-        <div className="pill-tabs" data-testid="gallery-mode-tabs">
-          <button className={`pill-tab${galleryTab === 'all' ? ' active' : ''}`} onClick={() => setGalleryTab('all')}>精选</button>
-          <button className={`pill-tab${galleryTab === 'tier' ? ' active' : ''}`} onClick={() => setGalleryTab('tier')}>精华</button>
-        </div>
+      {/*
+        `unlisted` hides a trip from public listings; it does not lock out someone
+        holding the link. So this is a non-blocking status note, not a gate — the
+        gallery below renders normally. Which media appears is decided per media by
+        the API, not by this flag.
+      */}
+      {trip.visibility === 'unlisted' && (
+        <p
+          data-testid="unlisted-notice"
+          style={{ color: '#666', background: '#f6f6f6', padding: '10px 14px', borderRadius: '6px' }}
+        >
+          仅通过链接访问 · 此相册不会出现在公开列表中，但知道链接的人仍可访问。
+        </p>
       )}
 
+      {/*
+        Tabs render on any gallery page that was permitted to open, including an
+        `unlisted` trip reached by direct link. Authority: manual-photo-management
+        R6 AC 5 (a UI composition rule, not an access control).
+      */}
+      <div className="pill-tabs" data-testid="gallery-mode-tabs">
+        <button className={`pill-tab${galleryTab === 'all' ? ' active' : ''}`} onClick={() => setGalleryTab('all')}>精选</button>
+        <button className={`pill-tab${galleryTab === 'tier' ? ' active' : ''}`} onClick={() => setGalleryTab('tier')}>精华</button>
+      </div>
+
       {/* "全部" tab: show all highlight photos */}
-      {galleryTab === 'all' && data.trip.visibility === 'public' && highlightPhotos.length > 0 && (
+      {galleryTab === 'all' && highlightPhotos.length > 0 && (
         <section aria-label="全部精选照片">
           <h2>精选照片 ({highlightPhotos.length})</h2>
           <div
@@ -248,7 +255,7 @@ export default function GalleryPage() {
       )}
 
       {/* "精华" tab: show tier photos + slideshow */}
-      {galleryTab === 'tier' && data.trip.visibility === 'public' && (
+      {galleryTab === 'tier' && (
         <>
           {Object.keys(tierSlideshowUrls).length > 0 && (
             <section aria-label="精华视频" data-testid="tier-slideshow-section" style={{ marginBottom: '24px' }}>
@@ -318,7 +325,12 @@ export default function GalleryPage() {
         routed to /my/trips/:id instead (multi-user-system 需求 11 AC 11), which is
         where the full unfiltered grid lives.
       */}
-      {data.trip.visibility === 'public' && videos.length > 0 && (
+      {/*
+        `videos` comes from GET /api/trips/:id/gallery, whose video query already
+        applies the media visibility clause and the compiled/merged requirement
+        (multi-user-system 需求 9 AC 4/AC 6). No trip-level gate is needed here.
+      */}
+      {videos.length > 0 && (
         <section aria-label="视频区域">
           <h2>视频 ({videos.length})</h2>
           <div

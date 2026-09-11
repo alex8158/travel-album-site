@@ -116,7 +116,15 @@ This divergence went unnoticed because no spec covered per-category slideshows a
 
 1. THE Public_Gallery SHALL display 精选 photos as the default photo view — every photo that has `is_highlight = 1` and that the media visibility policy exposes to the current requester.
 2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category.
-3. THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`.
+3. THE Public_Gallery SHALL treat `trips.visibility` as a discovery control only: an `unlisted` trip SHALL NOT appear on any public discovery surface, and a requester holding its direct link SHALL NOT be refused solely because the trip is `unlisted`. Which media the Public_Gallery then returns SHALL remain governed by the media visibility policy owned by `multi-user-system` 需求 9 AC 4/AC 5.
+
+#### Correction Note (2026-09-09)
+
+AC 3 previously read *"THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`."* Written before `unlisted` had a defined access semantic, it used the trip-level flag as an access control.
+
+`multi-user-system` 需求 9 AC 9–11 subsequently established that `trips.visibility` controls **discovery**, not direct-link access: an `unlisted` trip stays reachable by its link and only disappears from public listings. AC 3 now states that split, and delegates media exposure to 需求 9 AC 4/AC 5 rather than restating it.
+
+Scope: this changes the trip-level condition only. AC 1 (media-scoped completeness, reconciled 2026-09-07) and AC 2 are untouched, and tier slideshow **file** access is deliberately unchanged — those artifacts carry no source-media provenance, so anonymous exposure on a non-public trip remains refused pending a separate decision.
 
 #### Correction Note (2026-09-07)
 

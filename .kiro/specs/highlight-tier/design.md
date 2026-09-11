@@ -421,6 +421,14 @@ For any trip displayed in My Gallery with the "精华" filter active, every phot
 
 ### Property 10: Public Gallery Visibility Guard
 
-For any trip, the public gallery SHALL only display photos and videos from trips where `visibility = 'public'`. No content from non-public trips shall appear in public gallery queries.
+This guard has two independent halves. `trips.visibility` governs the first; it does not govern the second.
+
+**10a — Discovery invariant.** For any trip with `visibility = 'unlisted'`, that trip SHALL NOT appear in any public discovery or listing surface (public trip lists, browse/index responses, or any enumeration reachable without knowing the trip id).
+
+**10b — Direct-link invariant.** For any trip with `visibility = 'unlisted'` and any requester holding its trip id, a well-formed public gallery, highlight-photos, or tier-photos query SHALL NOT be refused solely because the trip is `unlisted`. The media set in the response SHALL still be exactly the set permitted by the media visibility policy owned by `multi-user-system` 需求 9 AC 4/AC 5 — so for an anonymous or non-owner requester, every returned item satisfies `media_items.visibility = 'public'`, and no item with `media_items.visibility = 'private'` appears at any position in the response payload.
+
+A trip id that does not exist remains a 404; that is resource non-existence, not a visibility refusal.
+
+Tier slideshow **file** serving is out of scope for 10b and keeps its existing trip-level refusal — see the note under Requirement 8 AC 3.
 
 **Validates: Requirements 8.3**

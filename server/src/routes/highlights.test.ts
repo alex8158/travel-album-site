@@ -220,23 +220,111 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
     });
   });
 
-  describe('behaviour this change deliberately leaves alone', () => {
-    // The trip-level gate is untouched here. Whether an unlisted trip should be
-    // reachable by direct link is a separate authority question.
-    it('keeps returning 404 to a non-owner on a non-public trip', async () => {
+  // `trips.visibility` controls discovery, not direct-link access. An `unlisted` trip
+  // is absent from public listings but remains reachable by whoever holds its id; the
+  // response is then narrowed per media, not per trip.
+  // Authority: multi-user-system 需求 9 AC 9–11 + AC 4/AC 5; highlight-tier design
+  // Property 10a/10b.
+  describe('unlisted trip reached by direct link', () => {
+    it('serves highlight-photos to an anonymous visitor, public media only', async () => {
       const tripId = createTrip(owner.userId, 'unlisted');
-      createHighlightPhoto(tripId, { visibility: 'public', tier: true });
+      const publicId = createHighlightPhoto(tripId, { visibility: 'public' });
+      const privateId = createHighlightPhoto(tripId, { visibility: 'private' });
 
-      const highlights = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
-      expect(highlights.status).toBe(404);
-      expect(highlights.body.error.code).toBe('NOT_FOUND');
-      expect(highlights.body.photos).toBeUndefined();
+      const res = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
 
-      const tier = await request(app).get(`/api/trips/${tripId}/tier-photos`);
-      expect(tier.status).toBe(404);
-      expect(tier.body.photos).toBeUndefined();
+      expect(res.status).toBe(200);
+      expect(idsOf(res.body)).toEqual([publicId]);
+      expect(JSON.stringify(res.body)).not.toContain(privateId);
     });
 
+    it('serves tier-photos to an anonymous visitor, public media only', async () => {
+      const tripId = createTrip(owner.userId, 'unlisted');
+      const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
+      const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
+
+      const res = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+
+      expect(res.status).toBe(200);
+      expect(idsOf(res.body)).toEqual([publicId]);
+      expect(JSON.stringify(res.body)).not.toContain(privateId);
+    });
+
+    it('serves both endpoints to an authenticated non-owner, public media only', async () => {
+      const tripId = createTrip(owner.userId, 'unlisted');
+      const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
+      const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
+      const stranger = createTestUser('regular');
+
+      const highlights = await request(app)
+        .get(`/api/trips/${tripId}/highlight-photos`)
+        .set('Authorization', `Bearer ${stranger.token}`);
+      expect(highlights.status).toBe(200);
+      expect(idsOf(highlights.body)).toEqual([publicId]);
+      expect(JSON.stringify(highlights.body)).not.toContain(privateId);
+
+      const tier = await request(app)
+        .get(`/api/trips/${tripId}/tier-photos`)
+        .set('Authorization', `Bearer ${stranger.token}`);
+      expect(tier.status).toBe(200);
+      expect(idsOf(tier.body)).toEqual([publicId]);
+      expect(JSON.stringify(tier.body)).not.toContain(privateId);
+    });
+
+    // Opening the photo list must not widen tier slideshow *file* exposure. Those
+    // artifacts are found by scanning the uploads directory and carry no source-media
+    // provenance, so they cannot be narrowed per media. A real artifact is written
+    // first, so this cannot pass vacuously: the URL map is empty because it is
+    // withheld, not because there was nothing to advertise.
+    it('withholds tier slideshow URLs from a non-owner even though a real artifact exists', async () => {
+      const tripId = createTrip(owner.userId, 'unlisted');
+      createHighlightPhoto(tripId, { visibility: 'public', tier: true });
+      const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
+
+      try {
+        // Proof the fixture is real and discoverable: the owner does get the URL.
+        const asOwner = await request(app)
+          .get(`/api/trips/${tripId}/tier-photos`)
+          .set('Authorization', `Bearer ${owner.token}`);
+        expect(asOwner.status).toBe(200);
+        expect(asOwner.body.slideshowUrls.landscape).toContain(
+          `/api/trips/${tripId}/tier-slideshow/landscape/`,
+        );
+
+        const anon = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+        expect(anon.status).toBe(200);
+        expect(anon.body.slideshowUrls).toEqual({});
+
+        const stranger = createTestUser('regular');
+        const asStranger = await request(app)
+          .get(`/api/trips/${tripId}/tier-photos`)
+          .set('Authorization', `Bearer ${stranger.token}`);
+        expect(asStranger.status).toBe(200);
+        expect(asStranger.body.slideshowUrls).toEqual({});
+      } finally {
+        fs.rmSync(tripDir, { recursive: true, force: true });
+        expect(fs.existsSync(tripDir)).toBe(false);
+      }
+    });
+
+    // The slideshow file routes keep their own trip-level gate.
+    it('still refuses the tier slideshow file route to a non-owner', async () => {
+      const tripId = createTrip(owner.userId, 'unlisted');
+      const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
+
+      try {
+        const res = await request(app).get(
+          `/api/trips/${tripId}/tier-slideshow/landscape/tier.mp4`,
+        );
+        expect(res.status).toBe(404);
+      } finally {
+        fs.rmSync(tripDir, { recursive: true, force: true });
+        expect(fs.existsSync(tripDir)).toBe(false);
+      }
+    });
+  });
+
+  describe('behaviour this change deliberately leaves alone', () => {
     it('returns 404 for a trip that does not exist', async () => {
       const res = await request(app).get('/api/trips/no-such-trip/highlight-photos');
       expect(res.status).toBe(404);

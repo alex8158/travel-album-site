@@ -316,7 +316,9 @@ function queryTierPhotos(tripId: string, isOwnerOrAdmin: boolean): TierPhotoItem
 
 // ---------------------------------------------------------------------------
 // GET /api/trips/:id/tier-photos — Public endpoint for tier photos
-// Only returns data for trips with visibility = 'public'
+// Trip visibility is a discovery control, not an access control: an `unlisted`
+// trip reached by direct link is not refused. Which photos come back is decided
+// per media, not per trip. See highlight-tier design Property 10a/10b.
 // Requirements: 8.1, 8.2, 8.3, 9.3
 // ---------------------------------------------------------------------------
 router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => {
@@ -337,13 +339,16 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
     req.user != null &&
     (req.user.role === 'admin' || req.user.userId === trip.user_id);
 
-  // Public endpoint: non-owners can only see public trips
-  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
-  }
-
   const photos = queryTierPhotos(tripId, isOwnerOrAdmin);
-  const slideshowUrls = getTierSlideshowUrls(tripId);
+
+  // Tier slideshow files are discovered by scanning the uploads directory, so they
+  // carry no source-media provenance and cannot be filtered by the media visibility
+  // policy the way photos can. Opening direct-link access to the photo list must not
+  // silently widen file exposure, so a non-owner on a non-public trip still gets no
+  // slideshow URLs. This holds the existing boundary; it does not decide the final
+  // tier-slideshow access semantics.
+  const slideshowUrls =
+    !isOwnerOrAdmin && trip.visibility !== 'public' ? {} : getTierSlideshowUrls(tripId);
 
   return res.json({ photos, slideshowUrls });
 });
@@ -351,7 +356,9 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
 // ---------------------------------------------------------------------------
 // GET /api/trips/:id/highlight-photos — Public endpoint for all highlight photos
 // Returns all photos with is_highlight = 1 and status = 'active' for the trip.
-// Auth optional; non-owners can only see public trips.
+// Auth optional. Trip visibility is a discovery control, not an access control: an
+// `unlisted` trip reached by direct link is not refused, and exposure is decided per
+// media instead. See highlight-tier design Property 10a/10b.
 // Requirements: 6.3, 6.5
 // ---------------------------------------------------------------------------
 router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response) => {
@@ -371,11 +378,6 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
   const isOwnerOrAdmin =
     req.user != null &&
     (req.user.role === 'admin' || req.user.userId === trip.user_id);
-
-  // Public endpoint: non-owners can only see public trips
-  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
-  }
 
   // Query all highlight photos (is_highlight = 1, status = 'active').
   // Highlight membership is not a visibility override — non-owners still only see
