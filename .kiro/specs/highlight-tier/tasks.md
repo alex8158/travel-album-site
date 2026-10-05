@@ -133,7 +133,7 @@ Implement a second curation pass that selects the absolute best photos per categ
   - [x] 10.1 Update `client/src/pages/GalleryPage.tsx` to show tier video
     - Fetch tier slideshow URL from public tier photos endpoint
     - Display the tier slideshow video prominently in the gallery layout
-    - Do not gate this on `trips.visibility` in the UI. For a non-owner on a non-public trip the video is absent because the API withholds slideshow URLs; that API-side withholding remains the enforcement point, pending the separate tier-slideshow access decision
+    - Do not gate this on `trips.visibility` in the UI. For a non-owner on a non-public trip the video is absent because the API withholds slideshow URLs; that API-side withholding remains the enforcement point. It is a transitional gate: the target rule is `multi-user-system` 需求 9 AC 15, to be implemented after G-20
     - _Requirements: 8.1, 8.2, 8.3_
 
 - [x] 11. Final checkpoint - Ensure all tests pass

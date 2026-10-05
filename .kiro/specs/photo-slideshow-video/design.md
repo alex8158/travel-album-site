@@ -471,7 +471,7 @@ This property governs **this feature only** — the user-initiated, multi-select
 
 It does **not** govern the highlight tier slideshow. Those files are produced by a different feature (AI tier selection), are written to `uploads/{tripId}/tier-slideshow/`, are served by routes owned by `highlight-tier` 需求 6 AC 4/AC 6, and never create a `slideshow_jobs` row. The anchor above (`Validates: Requirements 2.1`) is a generation-request authorization rule, not a general rule for every route whose path contains the word "slideshow".
 
-Read otherwise, this property would forbid any anonymous access to a tier slideshow and thereby contradict `highlight-tier` 需求 8 AC 2, which requires the Public Gallery to present tier slideshow videos. The read access policy for tier slideshow **files** is not owned here. Its media dimension is owned by `multi-user-system` 需求 9 AC 12–14 (not yet decidable for tier slideshows, see G-20); its trip-visibility dimension is still undecided — see the boundary note under that requirement.
+Read otherwise, this property would forbid any anonymous access to a tier slideshow and thereby contradict `highlight-tier` 需求 8 AC 2, which requires the Public Gallery to present tier slideshow videos. The read access policy for tier slideshow **files** is not owned here. Its media dimension is owned by `multi-user-system` 需求 9 AC 12–14 (not yet decidable for tier slideshows, see G-20); its trip-visibility dimension, left undecided when this scope was set on 2026-09-10, is now owned by 需求 9 AC 15 (2026-09-21).
 
 **Validates: Requirements 2.1**
 

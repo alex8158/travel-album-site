@@ -118,6 +118,15 @@ This divergence went unnoticed because no spec covered per-category slideshows a
 2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category.
 3. THE Public_Gallery SHALL treat `trips.visibility` as a discovery control only: an `unlisted` trip SHALL NOT appear on any public discovery surface, and a requester holding its direct link SHALL NOT be refused solely because the trip is `unlisted`. Which media the Public_Gallery then returns SHALL remain governed by the media visibility policy owned by `multi-user-system` 需求 9 AC 4/AC 5.
 
+#### Correction Note (2026-09-21)
+
+No acceptance criterion in this requirement changes. The 2026-09-09 note below records that tier slideshow **file** access was left refused on non-public trips "pending a separate decision". That decision has now been made, and it is owned by `multi-user-system` 需求 9 AC 15, not by this spec:
+
+- For a requester who is neither owner nor admin, `public` and `unlisted` trips use the same provenance-based rule.
+- An `unlisted` trip's slideshow is reachable by direct link once that rule passes, and its URL stays off every public discovery surface.
+
+The existing refusal on `unlisted` trips is a transitional gate. It stays in place until the provenance in `multi-user-system` G-20 is implemented; it is not the final behaviour. The 2026-09-09 note is kept as written.
+
 #### Correction Note (2026-09-09)
 
 AC 3 previously read *"THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`."* Written before `unlisted` had a defined access semantic, it used the trip-level flag as an access control.

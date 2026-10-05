@@ -210,6 +210,22 @@
 > 本裁定的范围边界：AC 12 约束的是**曝光**，不是生成。生成时是否应排除 private source 属产品决策，未在此裁定。tier slideshow **文件读取**当前依赖 trip-level gate，那是在 provenance 缺失下的粗粒度代理，不是本 AC 的实现，亦不满足本 AC。
 >
 > AC 12–14 只裁定 **media 维度**。产物读取的 **trip visibility 维度**未在此裁定：本需求 AC 9 把 Trip_Visibility 定为可发现性而非访问控制，但 `highlight-tier` 需求 8 AC 3 的 2026-09-09 更正说明与 design Property 10b 明确把 tier slideshow 文件服务排除在直链放开之外，并写明「pending a separate decision」。因此 provenance 落地后，`unlisted` trip 的 tier slideshow 能否向持直链的匿名或非所有者请求者曝光，仍是一项**独立的待裁定事项**，AC 12–14 不得被引用为其依据。
+>
+> **2026-09-21 更新**：上述待裁定事项已由 AC 15 裁定。上段保留为裁定前的记录，不改写。
+
+15. WHEN AC 4 所指的请求者请求某 trip 的 tier slideshow 时（无论是通过列表响应中的 URL，还是直接请求文件）, THE 系统 SHALL 对 `public` 与 `unlisted` 两种 Trip_Visibility 适用**同一**判定，仅当以下条件全部成立时才曝光该产物：
+    - 该产物具有完整且非空的 Artifact_Provenance
+    - 每一条 source media 当前存在、属于该 trip，且满足 AC 12–14
+    - 产物文件存在
+
+    任一条件不成立时，列表响应 SHALL NOT 包含该产物的 URL，直接文件请求 SHALL 返回 404。列表与文件请求**各自独立**执行上述判定：文件请求 SHALL NOT 以「该 URL 曾由列表返回」作为放行依据。`unlisted` trip 的产物可经直链取得，但其 URL SHALL NOT 出现在任何公开发现面（AC 1、AC 9）。匿名请求者与已登录的普通非所有者适用同一规则；所有者与管理员按 AC 5 保持既有权限。本条只对 AC 7 允许的两个 Trip_Visibility 取值授予曝光 —— `trips.visibility` 不存在 `private` 取值；若数据中出现 AC 7 以外的取值（数据库无 CHECK 约束，见 G-13），本条不授予任何曝光
+
+> **AC 15 的性质**：2026-09-21 对 tier slideshow 读取的 trip visibility 维度所作的正式裁定，与 AC 12–14 同属**目标契约**，当前实现不满足。不满足的方向因 trip 而异：
+>
+> - **unlisted trip**：现状**比目标更严**。非所有者拿到的 `slideshowUrls` 恒为 `{}`，两条文件路由恒为 404。这是 provenance 缺失期间的**过渡 gate**，不是本条的最终行为。在 G-20 的 provenance 落地并通过本条判定之前，SHALL NOT 移除该 gate。
+> - **public trip**：现状**比目标更宽**。文件只经 trip-level gate 即可曝光，未做任何 provenance 判定（G-20 的 stale exposure 路径即出于此）。
+>
+> 本条不授权任何实现改动。
 
 ## 需求 10：密码与账户自服务
 
@@ -333,7 +349,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 附注（同一规则下的第二处违反）：`services/mergeEngine.ts` 的 `merge()` 在 INSERT 时把 merged 视频的 `visibility` 写成硬编码字面量 `'public'`，而 `validateSources()` 只校验 `status = 'active'` 与 `compiled_path IS NOT NULL`，不校验 source 的 visibility。合并若干 private 视频，产物为 public，直接违反 AC 12。但 merged 视频**有** provenance（`merged_video_sources`），所以它缺的是继承逻辑，而非可判定性 —— 与 tier slideshow 的缺口性质不同，修复成本也低得多。
 
-裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。
+裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。读取的目标行为（public 与 unlisted 同一判定）见需求 9 AC 15（2026-09-21）；该 gate 对 unlisted 的拒绝属于过渡状态。
 
 独立的低风险缺陷（不属本条，另计）：`generateSlideshow()` 用 `mkdirSync(recursive)` 但不清空输出目录，重复 regenerate 会在同目录堆积多个 mp4；而 `getTierSlideshowUrls()` 取的是 `readdirSync` 结果中第一个 `.mp4`，并非 mtime 最新。故「用 regenerate 当作 invalidation 手段」亦不可靠。
 
