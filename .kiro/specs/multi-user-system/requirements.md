@@ -42,6 +42,8 @@
 - **Trip_Visibility**：`trips.visibility`，取值 `public` 或 `unlisted`。它是**可发现性（discovery）控制**，不是访问控制 —— 两个取值都允许持有直接链接的访问者访问，区别只在于是否出现在公开列表中。素材层面的访问控制由 `media_items.visibility` 独立负责（见需求 9 AC 4、AC 8），本术语不涉及其含义
 - **Public_Trip**：`visibility = 'public'` 的旅行。出现在公开列表，且可通过直接链接访问
 - **Unlisted_Trip**：`visibility = 'unlisted'` 的旅行。**不**出现在公开列表，但**仍可**通过直接链接访问。它不是 owner-only 或完全私有状态
+- **Derived_Artifact**：由一个或多个 media 生成、且其内容已不可逆地烘入产物的文件。包括 tier slideshow 视频、photo slideshow 视频、merged 视频。判定要点是**不可逆**：产物生成后无法再按单条 source 的可见性过滤其内容。与之相对，`media_items.optimized_path` / `thumbnail_path` / `compiled_path` / `preview_proxy_path` **不是** Derived_Artifact —— 它们是同一 media 自身的不同表示，与 source 共享同一 `media_items` 行，可见性天然一致
+- **Artifact_Provenance**：某个 Derived_Artifact 与其全部 source media 之间的持久化映射。`merged_video_sources` 是目前唯一已实现的例子；tier slideshow 没有（见 G-20）
 
 ---
 
@@ -194,6 +196,21 @@
 
 > **AC 9–11 的性质**：这三条是 2026-09-02 对 Trip_Visibility 语义的正式裁定，用于把既有实现固化为可测试契约，**不引入任何行为变更**。此前 `unlisted` 的访问语义在本文档中从未定义，只有 AC 7 约束了可写取值，导致 G-6 被误判为越权缺陷（见第二部分 G-6）。裁定依据是 AC 1、AC 3、AC 4 与 `routes/gallery.ts` 的既有行为：`GET /api/trips/:id/gallery` 一直对任意 trip 返回 trip metadata 并按素材可见性过滤素材，若 `unlisted` 意为完全私有，AC 3 这条 SHALL 将自相矛盾。
 
+12. WHEN 请求者既不是所有者也不是管理员时（即 AC 4 所指的请求者）, THE 系统 SHALL 仅在 Derived_Artifact 的**每一条** source media 均满足 AC 4 曝光条件时才向其曝光该产物：单条 source 为 `private` 即足以使整个产物对该请求者不可曝光。`is_highlight` / `is_highlight_tier` / 产物文件已存在于磁盘，均不构成对本条的 override。所有者与管理员按 AC 5 不受本条限制；本条不改变其既有访问
+13. WHEN 某条 source media 的 `visibility` 由 `public` 改为 `private`，或其 `status` 变为 `trashed`，或该 media 被永久删除时, THE 系统 SHALL 使依赖它的既有 Derived_Artifact 不再向 AC 12 所指的请求者曝光。本条规定的是结果，不规定机制：重新生成、删除、标记失效，或在每次请求时按当前状态拒绝，均可满足本条
+14. THE 系统 SHALL 使 AC 12 与 AC 13 可被验证地成立：
+    - 向 AC 12 所指请求者的曝光判定 SHALL 依据完整、可验证的 Artifact_Provenance 与各 source 的**当前**状态
+    - provenance 缺失、不完整、任一 source 已不存在，或删除映射后剩下空 source 集合，SHALL 一律视为**不可曝光**，不得解释为可曝光
+    - source 状态变更后，依赖它的既有产物 SHALL 停止任何不再被 AC 12 允许的曝光
+
+    职责划分：**判定**（给定请求与当前状态，产物此刻是否可曝光）由每次请求的 runtime access check 承担；**生命周期处理**（产物在 source 变更后是否重新生成、删除或标记失效）属实现方案，本条不强制。只要上述三项结果成立，单一机制即可满足本条，本条不要求设立两套独立机制。AC 12/13 的可判定性以 Artifact_Provenance 存在为前置条件
+
+> **AC 12–14 的性质**：这三条是 2026-09-10 对 Derived_Artifact 可见性的正式裁定，**与 AC 9–11 不同，它们描述的是目标契约而非既有行为**。当前实现不满足：tier slideshow 没有 Artifact_Provenance，因而 AC 12/13 对它在技术上不可判定（G-20）；`mergeEngine` 把 merged 视频的 `visibility` 硬编码为 `'public'` 且不校验 source 可见性，直接违反 AC 12（G-20 附注）；`mediaServing` 三条路由不执行任何 access control，使 AC 12 在该表面被完全绕过（G-21）。登记这些偏差正是本次裁定的目的：在此之前「派生产物应继承什么」在全仓没有任何 owner，缺陷因此无法被表述为缺陷。本裁定不授权任何实现改动，AC 12–14 的落地需先满足 G-20 的 provenance 前置项。
+>
+> 本裁定的范围边界：AC 12 约束的是**曝光**，不是生成。生成时是否应排除 private source 属产品决策，未在此裁定。tier slideshow **文件读取**当前依赖 trip-level gate，那是在 provenance 缺失下的粗粒度代理，不是本 AC 的实现，亦不满足本 AC。
+>
+> AC 12–14 只裁定 **media 维度**。产物读取的 **trip visibility 维度**未在此裁定：本需求 AC 9 把 Trip_Visibility 定为可发现性而非访问控制，但 `highlight-tier` 需求 8 AC 3 的 2026-09-09 更正说明与 design Property 10b 明确把 tier slideshow 文件服务排除在直链放开之外，并写明「pending a separate decision」。因此 provenance 落地后，`unlisted` trip 的 tier slideshow 能否向持直链的匿名或非所有者请求者曝光，仍是一项**独立的待裁定事项**，AC 12–14 不得被引用为其依据。
+
 ## 需求 10：密码与账户自服务
 
 **用户故事：** 作为用户，我希望能修改自己的密码，也能注销账户。
@@ -302,7 +319,33 @@ JWT 有效期 7 天，没有刷新机制、黑名单或版本号。账户被 `di
 
 highlight/tier membership 不构成 visibility override。修复复用 `routes/gallery.ts` 已有的 owner/admin + `mi.visibility='public'` media-level policy，未创建第二套曝光规则 —— 见 `routes/highlights.ts` 的 `queryTierPhotos()` 与 highlight-photos 查询，回归测试见 `routes/highlights.test.ts`。owner/admin 的既有完整访问不变。
 
-本条只涉及**照片列表的 media 级曝光**。这两个端点的 trip-level gate 未在此修复中改动，tier slideshow 文件服务的 gate 亦未改动。
+本条只涉及**照片列表的 media 级曝光**。这两个端点的 trip-level gate 未在此修复中改动（后于 2026-09-09 按需求 9 AC 9–11 放开为直链可访问，见 `highlight-tier` design Property 10a/10b），tier slideshow 文件服务的 gate 亦未改动。
+
+上文提到的「mediaServing 不执行独立 visibility 鉴权」在本条中仅作为暴露链的一环被描述，其自身从未单独登记。现已独立登记为 **G-21**：G-19 关闭的是列表层的 id 泄露，G-21 才是文件层可被直取的通道，二者需分别处置。
+
+**G-20 Derived_Artifact 缺少 Artifact_Provenance，AC 12/13 不可判定（待批准 schema 前置项，2026-09-10 登记）**
+
+tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动生成，或由 `POST /api/my/trips/:id/tier-slideshow/regenerate` 手动生成，落盘到 `uploads/{tripId}/tier-slideshow/{category}/`。两条路径都**不持久化参与生成的 media id 集合**：不写 `slideshow_jobs`（该表属 photo-slideshow-video 功能），也没有任何 sidecar / manifest。产物的唯一记录就是磁盘上的 mp4，`getTierSlideshowUrls()` 靠 `fs.readdirSync` 扫目录发现它。
+
+因此需求 9 AC 12 与 AC 13 对 tier slideshow **在技术上不可判定**：给定一个 mp4，无法查出它由哪些 media 生成，也无法查出生成时各 source 的 visibility。两条生成查询本身也不含 visibility 过滤（`getTierCandidates()` 只过滤 `is_highlight = 1 AND status = 'active' AND category IN (...)`；regenerate 的查询只过滤 `is_highlight_tier = 1 AND status = 'active'`），所以 private media 本来就可能被烘入产物。
+
+可证明的后果（AC 13 违反，纯代码路径可推，无需实跑）：public trip 生成含照片 X 的 tier 视频后，owner 调 `PUT /api/media/X/visibility` 置为 private —— `routes/trash.ts` 只执行 `UPDATE media_items SET visibility = ?`，随后即返回；批量路径 `routes/media.ts` 同理。全仓针对 `tier-slideshow` 目录的删除或失效逻辑命中为 0，`helpers/deleteMediaItem.ts` 亦不涉及该目录。此后匿名请求 `GET /api/trips/:id/tier-photos` 已不再返回 X 的 media id（G-19 生效），但 `slideshowUrls` 仍返回，且 tier slideshow 文件路由因 trip 仍为 `public` 而放行，**X 的画面照常播放**。
+
+附注（同一规则下的第二处违反）：`services/mergeEngine.ts` 的 `merge()` 在 INSERT 时把 merged 视频的 `visibility` 写成硬编码字面量 `'public'`，而 `validateSources()` 只校验 `status = 'active'` 与 `compiled_path IS NOT NULL`，不校验 source 的 visibility。合并若干 private 视频，产物为 public，直接违反 AC 12。但 merged 视频**有** provenance（`merged_video_sources`），所以它缺的是继承逻辑，而非可判定性 —— 与 tier slideshow 的缺口性质不同，修复成本也低得多。
+
+裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。
+
+独立的低风险缺陷（不属本条，另计）：`generateSlideshow()` 用 `mkdirSync(recursive)` 但不清空输出目录，重复 regenerate 会在同目录堆积多个 mp4；而 `getTierSlideshowUrls()` 取的是 `readdirSync` 结果中第一个 `.mp4`，并非 mtime 最新。故「用 regenerate 当作 invalidation 手段」亦不可靠。
+
+**G-21 `mediaServing` 三条路由无 auth / visibility / status access control（安全缺陷，2026-09-10 登记，未修）**
+
+`routes/mediaServing.ts` 挂载于 `/api/media`（`index.ts`），提供 `GET /:id/thumbnail`、`GET /:id/original`、`GET /:id/raw`。三条路由**均未挂 `authMiddleware` 或 `requireAuth`**，且 `visibility` 一词在该文件出现 0 次 —— 三个 SELECT 的字段列表里根本不含 `visibility`，也不检查所属 trip 的 visibility，连 `status = 'trashed'` 都不拦。
+
+后果：需求 9 AC 4 的 media 级曝光策略在该表面被完全绕过。凡持有 media id 者即可取得原图/原始文件，无论该 media 是 `private`、已 `trashed`，还是属于他人 trip。G-19 修复的是「非所有者能否从列表响应**取得** private media 的 id」，本条是「拿到 id 之后能否**取到文件**」—— 前者是遮挡，后者是实际访问控制，G-19 并未也无法覆盖本条。
+
+附带副作用：`/:id/thumbnail` 在缩略图缺失时会即时生成并执行 `UPDATE media_items SET thumbnail_path = ?`，即**未认证请求可触发写操作**。`STORAGE_TYPE === 's3'` 时该路由 302 跳转到 presigned URL，绕过服务端的范围更大。
+
+本条的暴露面比 G-20 更广：它不限于 tier 场景，作用于全部 media。裁定前需回答：公开画廊页面当前依赖这些 URL 匿名可取（`TierPhotoItem.thumbnailUrl` / `originalUrl` 即指向此处），因此直接加鉴权会破坏公开分享面，须先确定「匿名可读 public media、但拒绝 private/trashed」的判定点与缓存策略。**本轮只登记，不改实现。**
 
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
@@ -348,6 +391,8 @@ highlight/tier membership 不构成 visibility override。修复复用 `routes/g
 
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
+| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面 |
+| P1 | G-20 | 需求 9 AC 12/13 目前不可判定；需先批准 Artifact_Provenance schema。merged 视频的继承缺陷（同条附注）可先单独修，成本远低于 provenance |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
 | P1 | G-4 | 凭证进版本库，建议改为环境变量注入 + 首登强制改密 |

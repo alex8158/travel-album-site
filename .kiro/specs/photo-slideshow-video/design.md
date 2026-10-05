@@ -458,7 +458,20 @@ CREATE INDEX IF NOT EXISTS idx_slideshow_jobs_user_id ON slideshow_jobs(user_id)
 
 ### Property 7: Access control enforcement
 
-*For any* user and trip combination, the slideshow API SHALL grant access only when the user owns the trip (user_id matches) or the user has admin role. All other combinations SHALL be rejected with 403.
+*For any* user and trip combination, the Slideshow_API SHALL grant access only when the user owns the trip (user_id matches) or the user has admin role. All other combinations SHALL be rejected with 403.
+
+**Scope (adjudicated 2026-09-10).** This property is anchored to 需求 2 AC 1 and covers exactly what that requirement covers:
+
+- **Generation request** — 需求 2 AC 1: *WHEN Slideshow_API 收到生成请求, SHALL 验证请求用户对所选照片所属旅行拥有访问权限.*
+- **SSE progress stream** — 需求 2 AC 3: only a *valid* generation request (*收到有效的生成请求*) creates the task and streams progress over SSE. The stream is the response of that same `POST /api/slideshow/generate` request (§5, ownership validated in step 2 before SSE opens in step 6), not a separately addressable endpoint, so it is reached only through the check in AC 1.
+
+The **download endpoint is not covered.** 需求 2 says nothing about download; it comes from 需求 5 AC 3, which only requires that a download endpoint exist and states no access rule, and this property does not validate 需求 5. No access rule for the download endpoint is established anywhere in this spec; the generated video is a Derived_Artifact, so its exposure is bounded by `multi-user-system` 需求 9 AC 12 regardless of which endpoint serves it. (§6 and the shipped route also disagree on its path — `/api/slideshow/:filename` vs `/:jobId/download` — which is not adjudicated here.)
+
+This property governs **this feature only** — the user-initiated, multi-select slideshow backed by the `slideshow_jobs` table.
+
+It does **not** govern the highlight tier slideshow. Those files are produced by a different feature (AI tier selection), are written to `uploads/{tripId}/tier-slideshow/`, are served by routes owned by `highlight-tier` 需求 6 AC 4/AC 6, and never create a `slideshow_jobs` row. The anchor above (`Validates: Requirements 2.1`) is a generation-request authorization rule, not a general rule for every route whose path contains the word "slideshow".
+
+Read otherwise, this property would forbid any anonymous access to a tier slideshow and thereby contradict `highlight-tier` 需求 8 AC 2, which requires the Public Gallery to present tier slideshow videos. The read access policy for tier slideshow **files** is not owned here. Its media dimension is owned by `multi-user-system` 需求 9 AC 12–14 (not yet decidable for tier slideshows, see G-20); its trip-visibility dimension is still undecided — see the boundary note under that requirement.
 
 **Validates: Requirements 2.1**
 
