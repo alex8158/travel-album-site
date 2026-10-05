@@ -86,8 +86,12 @@ Manual Photo Management (手动精华管理) enhances the existing highlight-tie
 1. THE Public_Gallery SHALL display two tabs: "精选" (all highlights) and "精华" (tier photos).
 2. THE Public_Gallery SHALL display the "精选" tab as the default active tab.
 3. WHEN the "精选" tab is active, THE Public_Gallery SHALL show every photo where `is_highlight = 1` for the trip that the media visibility policy exposes to the current requester.
-4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus every available per-category Tier_Slideshow video.
+4. WHEN the "精华" tab is active, THE Public_Gallery SHALL show only photos where `is_highlight_tier = 1` for the trip, plus every available per-category Tier_Slideshow video — "available" meaning enumerated to the current requester under `highlight-tier` 需求 6 AC 9, not merely present on disk.
 5. WHENEVER a Public_Gallery page has been permitted to render for a trip, THE Public_Gallery SHALL display both the "精选" and "精华" tabs. An `unlisted` trip SHALL NOT have its tabs hidden once the page has been opened via its direct link; `trips.visibility` affects discovery only, not the composition of an already-permitted page.
+
+#### Correction Note (2026-09-21)
+
+AC 4 said "every available per-category Tier_Slideshow video" without saying available *to whom*. Read as "every file on disk", it would require showing videos to anonymous and non-owner visitors that `multi-user-system` 需求 9 AC 12–15 forbid exposing. AC 4 now points to `highlight-tier` 需求 6 AC 9, which owns the caller-scoped rule. The photo half of AC 4 and the tab composition in AC 5 are unchanged.
 
 #### Correction Note (2026-09-09)
 

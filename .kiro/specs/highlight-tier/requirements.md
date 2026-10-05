@@ -85,17 +85,27 @@ Highlight Tier (精华) adds a second curation layer on top of the existing high
 1. WHEN the Highlight_Tier_Selector completes and at least one photo is marked as highlight tier, THE system SHALL automatically trigger the Slideshow_Generator for the trip's highlight tier photos.
 2. THE system SHALL group highlight tier photos by `media_items.category` and generate **one slideshow video per category** rather than a single combined video.
 3. THE system SHALL skip any category whose highlight tier photo count is below `MIN_PHOTOS_FOR_VIDEO` (6) and SHALL log the skipped category together with its photo count.
-4. THE system SHALL write each category's video to `uploads/{tripId}/tier-slideshow/{category}/` and expose it at `/api/trips/{tripId}/tier-slideshow/{category}/{filename}`.
-5. THE Tier_API SHALL return the generated videos as a `slideshowUrls` object keyed by category (for example `{ "animal": "...", "landscape": "..." }`), NOT as a single `slideshowUrl` string.
-6. WHEN an mp4 file exists directly under `uploads/{tripId}/tier-slideshow/` rather than in a category subdirectory, THE Tier_API SHALL expose it under the reserved key `all` for backward compatibility with trips whose videos were produced before per-category generation existed.
+4. THE system SHALL write each category's video to `uploads/{tripId}/tier-slideshow/{category}/` and expose it at `/api/trips/{tripId}/tier-slideshow/{category}/{filename}`, subject to the caller-scoped access rule in AC 9.
+5. THE Tier_API SHALL return the generated videos as a `slideshowUrls` object keyed by category (for example `{ "animal": "...", "landscape": "..." }`), NOT as a single `slideshowUrl` string. Which entries appear for a given requester is governed by AC 9.
+6. WHEN an mp4 file exists directly under `uploads/{tripId}/tier-slideshow/` rather than in a category subdirectory, THE Tier_API SHALL expose it under the reserved key `all` for backward compatibility with trips whose videos were produced before per-category generation existed, subject to AC 9.
 7. WHEN a category's video generation fails, THE system SHALL record that category's error, continue generating the remaining categories, and SHALL NOT abort the whole regeneration.
 8. IF the Highlight_Tier_Selector completes with zero photos selected, THEN THE system SHALL skip slideshow generation entirely.
+9. AC 4–6 define storage location, URL shape and the `slideshowUrls` key scheme only; they do not grant access. Whether a video is enumerated in `slideshowUrls` for a requester, and whether its file is served to that requester, SHALL follow `multi-user-system` 需求 9:
+   - The trip owner and admins keep their existing access (需求 9 AC 5).
+   - For any other requester (需求 9 AC 4), a video SHALL be enumerated or served only when it passes 需求 9 AC 12–15. A file existing on disk SHALL NOT by itself entitle such a requester to its URL or its bytes.
+   - The legacy `all` key (AC 6): no current generation path writes root-level files, and no root-level file carries Artifact_Provenance. Such a file SHALL therefore NOT be enumerated or served to a 需求 9 AC 4 requester; owner and admin continue to see it under `all`.
 
 #### Correction Note
 
 Criteria 1–3 previously described a **single** highlight tier video ("store the resulting slideshow video as the highlight tier video"). The implementation generates one video per category and returns a `slideshowUrls` map — see `getTierSlideshowUrls()` in `server/src/routes/highlights.ts` (L245) and the regeneration path in `server/src/routes/my.ts` (L460 onward).
 
 This divergence went unnoticed because no spec covered per-category slideshows and the only test touching this area (`client/src/pages/GalleryPage.test.tsx`) still mocked the old singular `slideshowUrl` field. The test was corrected on 2026-08-05; this requirement was rewritten at the same time to match the implementation.
+
+#### Correction Note (2026-09-21)
+
+AC 4–6 were worded purely in terms of file existence ("WHEN an mp4 file exists … SHALL expose it"). Read literally, any requester would be entitled to any file on disk. That conflicts with `multi-user-system` 需求 9 AC 12–15, which bound Derived_Artifact exposure for non-owner, non-admin requesters.
+
+Since B-β (2026-09-09) the implementation had already relied on reading AC 4–6 as an addressing contract — an `unlisted` trip returned `slideshowUrls: {}` to non-owners — but no requirement said so. AC 9 now states it. AC 4–6 gain only a pointer to AC 9; their path, URL and key-scheme content is unchanged, and owner/admin access is unchanged. The note above (2026-08-05) is kept as written.
 
 ### Requirement 7: My Gallery — Highlight Tier Tab
 
@@ -115,7 +125,7 @@ This divergence went unnoticed because no spec covered per-category slideshows a
 #### Acceptance Criteria
 
 1. THE Public_Gallery SHALL display 精选 photos as the default photo view — every photo that has `is_highlight = 1` and that the media visibility policy exposes to the current requester.
-2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category.
+2. THE Public_Gallery SHALL display the highlight tier (精华) slideshow videos prominently within the gallery, one per available category — "available" meaning enumerated to the current requester under Requirement 6 AC 9.
 3. THE Public_Gallery SHALL treat `trips.visibility` as a discovery control only: an `unlisted` trip SHALL NOT appear on any public discovery surface, and a requester holding its direct link SHALL NOT be refused solely because the trip is `unlisted`. Which media the Public_Gallery then returns SHALL remain governed by the media visibility policy owned by `multi-user-system` 需求 9 AC 4/AC 5.
 
 #### Correction Note (2026-09-21)
