@@ -168,21 +168,18 @@ export async function getSimilarGroups(tripId: string): Promise<SimilarGroup[]> 
  * Fetch highlight tier photos for a trip (public endpoint).
  *
  * Calls `GET /api/trips/:id/tier-photos`. Returns tier photos and slideshow URL.
+ * Sent through `authFetch` so a logged-in owner/admin carries the bearer token —
+ * the server only lists `slideshowUrls` for them. Anonymous callers send no
+ * Authorization header and still get the photo list.
  * Throws `HighlightsApiError` on non-2xx responses.
  */
 export async function getTierPhotos(tripId: string): Promise<TierPhotosResponse> {
-  try {
-    const res = await axios.get<TierPhotosResponse>(`/api/trips/${tripId}/tier-photos`);
-    return res.data;
-  } catch (error) {
-    if (axios.isAxiosError(error) && error.response) {
-      const body = error.response.data as { error?: { code?: string; message?: string } } | null;
-      const message = body?.error?.message || `请求失败（HTTP ${error.response.status}）`;
-      const code = body?.error?.code;
-      throw new HighlightsApiError(message, error.response.status, code);
-    }
-    throw error;
+  const res = await authFetch(`/api/trips/${tripId}/tier-photos`);
+  if (!res.ok) {
+    const { message, code } = await readErrorBody(res);
+    throw new HighlightsApiError(message, res.status, code);
   }
+  return (await res.json()) as TierPhotosResponse;
 }
 
 /**

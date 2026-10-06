@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import axios from 'axios';
@@ -387,6 +387,41 @@ describe('GalleryPage', () => {
       { id: 'tier-1', filePath: '/path/tier-1.jpg', thumbnailUrl: '/api/media/tier-1/thumbnail', originalUrl: '/api/media/tier-1/original', category: 'animal', reason: 'top' },
     ];
 
+    // Tier slideshow videos are fetched with the bearer token (the file route
+    // serves owner/admin only) and played from an object URL. The real authFetch
+    // runs against a stubbed fetch; each blob remembers the URL it came from so
+    // `src` can be traced back to the API URL it was loaded from.
+    let videoFetch: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      const store = new Map<string, string>([['auth_token', 'owner-token']]);
+      vi.stubGlobal('localStorage', {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => { store.set(k, v); },
+        removeItem: (k: string) => { store.delete(k); },
+      });
+      videoFetch = vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          blob: async () => ({ fetchedFrom: String(input) }),
+        } as unknown as Response),
+      );
+      vi.stubGlobal('fetch', videoFetch);
+      globalThis.URL.createObjectURL = vi.fn(
+        (b: { fetchedFrom: string }) => `blob:${b.fetchedFrom}`,
+      ) as unknown as typeof URL.createObjectURL;
+      globalThis.URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function videoAuthHeaders(url: string): string | null {
+      const call = videoFetch.mock.calls.find((c) => String(c[0]) === url);
+      expect(call).toBeDefined();
+      return new Headers((call![1] as RequestInit | undefined)?.headers).get('Authorization');
+    }
+
     it('shows gallery mode tabs for public trips', async () => {
       mockedAxios.get.mockResolvedValueOnce({ data: publicTripData });
       mockedGetHighlightPhotos.mockResolvedValueOnce({ photos: highlightPhotosMock });
@@ -528,7 +563,8 @@ describe('GalleryPage', () => {
       expect(mockedGetTierPhotos).toHaveBeenCalledTimes(tierCallsBeforeSwitch);
 
       expect(screen.getByTestId('tier-photo-tier-1')).toBeDefined();
-      expect(screen.getByTestId('tier-slideshow-video')).toBeDefined();
+      // The video appears once its bytes have been fetched with the token.
+      expect(await screen.findByTestId('tier-slideshow-video')).toBeDefined();
     });
 
     it('renders one slideshow video per category when several categories have videos', async () => {
@@ -555,17 +591,24 @@ describe('GalleryPage', () => {
       });
 
       // Every category must get its own <video>, not just the first one.
+      await waitFor(() => {
+        expect(screen.getAllByTestId('tier-slideshow-video')).toHaveLength(3);
+      });
       const videos = screen.getAllByTestId('tier-slideshow-video');
-      expect(videos).toHaveLength(3);
 
-      // Each video must carry its own category's URL. Looked up by aria-label
-      // rather than by index so the assertion does not depend on entry order.
+      // Each video must carry its own category's URL — now as the object URL of
+      // the bytes fetched from that URL. Looked up by aria-label rather than by
+      // index so the assertion does not depend on entry order.
       const byCategory = (cat: string) =>
         videos.find((v) => v.getAttribute('aria-label') === `精华视频 - ${cat}`);
 
-      expect(byCategory('animal')?.getAttribute('src')).toBe('/slideshow/animal.mp4');
-      expect(byCategory('landscape')?.getAttribute('src')).toBe('/slideshow/landscape.mp4');
-      expect(byCategory('people')?.getAttribute('src')).toBe('/slideshow/people.mp4');
+      expect(byCategory('animal')?.getAttribute('src')).toBe('blob:/slideshow/animal.mp4');
+      expect(byCategory('landscape')?.getAttribute('src')).toBe('blob:/slideshow/landscape.mp4');
+      expect(byCategory('people')?.getAttribute('src')).toBe('blob:/slideshow/people.mp4');
+      for (const cat of ['animal', 'landscape', 'people']) {
+        expect(videoAuthHeaders(`/slideshow/${cat}.mp4`)).toBe('Bearer owner-token');
+        expect(byCategory(cat)?.hasAttribute('controls')).toBe(true);
+      }
 
       // Category headings as currently rendered by GalleryPage.
       expect(screen.getByText('🐾 动物')).toBeDefined();
@@ -593,7 +636,7 @@ describe('GalleryPage', () => {
       });
 
       expect(screen.getByText('other')).toBeDefined();
-      expect(screen.getByTestId('tier-slideshow-video').getAttribute('src')).toBe('/slideshow/other.mp4');
+      expect((await screen.findByTestId('tier-slideshow-video')).getAttribute('src')).toBe('blob:/slideshow/other.mp4');
     });
 
     it('renders no category heading for the legacy "all" key', async () => {
@@ -615,9 +658,11 @@ describe('GalleryPage', () => {
         expect(screen.getByTestId('tier-slideshow-section')).toBeDefined();
       });
 
+      await screen.findByTestId('tier-slideshow-video');
       const videos = screen.getAllByTestId('tier-slideshow-video');
       expect(videos).toHaveLength(1);
-      expect(videos[0].getAttribute('src')).toBe('/slideshow/legacy.mp4');
+      expect(videos[0].getAttribute('src')).toBe('blob:/slideshow/legacy.mp4');
+      expect(videoAuthHeaders('/slideshow/legacy.mp4')).toBe('Bearer owner-token');
       expect(videos[0].getAttribute('aria-label')).toBe('精华视频 - all');
 
       // The 'all' key is a legacy aggregate, so no category heading is shown.
@@ -645,6 +690,8 @@ describe('GalleryPage', () => {
 
       expect(screen.queryByTestId('tier-slideshow-section')).toBeNull();
       expect(screen.queryByTestId('tier-slideshow-video')).toBeNull();
+      // With no URLs (what AC 4 requesters receive) no video file is requested.
+      expect(videoFetch).not.toHaveBeenCalled();
     });
 
     it('hides highlight grid and shows tier content when switching to "精华" tab', async () => {

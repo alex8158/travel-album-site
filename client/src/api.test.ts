@@ -10,6 +10,7 @@ import {
   triggerHighlightEvaluation,
   getHighlights,
   getSimilarGroups,
+  getTierPhotos,
   HighlightsApiError,
   type HighlightEvaluation,
   type HighlightPhoto,
@@ -157,6 +158,64 @@ describe('highlights API client', () => {
         status: 403,
         code: 'FORBIDDEN',
       });
+    });
+  });
+
+  // The server lists tier slideshow URLs only for the trip owner or an admin, and
+  // only reads the JWT from the Authorization header. These tests route the mocked
+  // authFetch through the real implementation so the header that reaches fetch is
+  // what gets asserted.
+  describe('getTierPhotos', () => {
+    let fetchSpy: ReturnType<typeof vi.fn>;
+    let store: Map<string, string>;
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('./contexts/AuthContext')>('./contexts/AuthContext');
+      mockAuthFetch.mockImplementation((...args: unknown[]) =>
+        actual.authFetch(...(args as Parameters<typeof actual.authFetch>)),
+      );
+      fetchSpy = vi.fn().mockImplementation(() =>
+        Promise.resolve(jsonResponse({ photos: [], slideshowUrls: { animal: '/x.mp4' } })),
+      );
+      vi.stubGlobal('fetch', fetchSpy);
+      store = new Map();
+      vi.stubGlobal('localStorage', {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => { store.set(k, v); },
+        removeItem: (k: string) => { store.delete(k); },
+      });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function sentHeaders(): Headers {
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      return new Headers((fetchSpy.mock.calls[0][1] as RequestInit | undefined)?.headers);
+    }
+
+    it('sends the stored bearer token so owner/admin get slideshowUrls', async () => {
+      store.set('auth_token', 'owner-token');
+      const result = await getTierPhotos('trip-1');
+      expect(String(fetchSpy.mock.calls[0][0])).toBe('/api/trips/trip-1/tier-photos');
+      expect(sentHeaders().get('Authorization')).toBe('Bearer owner-token');
+      expect(result).toEqual({ photos: [], slideshowUrls: { animal: '/x.mp4' } });
+    });
+
+    it('sends no Authorization header for anonymous visitors and still returns data', async () => {
+      const result = await getTierPhotos('trip-1');
+      expect(sentHeaders().has('Authorization')).toBe(false);
+      expect(result.photos).toEqual([]);
+    });
+
+    it('throws HighlightsApiError with the server message on non-2xx', async () => {
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(jsonResponse({ error: { code: 'NOT_FOUND', message: '旅行不存在' } }, 404)),
+      );
+      const err = await getTierPhotos('trip-1').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HighlightsApiError);
+      expect(err).toMatchObject({ status: 404, code: 'NOT_FOUND', message: '旅行不存在' });
     });
   });
 });

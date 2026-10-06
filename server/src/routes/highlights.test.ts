@@ -1,11 +1,13 @@
 /**
- * Media-level visibility on the public highlight/tier photo endpoints.
+ * Media-level visibility on the public highlight/tier photo endpoints, plus the
+ * tier slideshow exposure rule.
  *
- * Scope note: this suite covers G-19 only — highlight/tier membership must not
- * override `media_items.visibility` for anonymous or non-owner callers. The
- * trip-level gate on these endpoints is deliberately left as-is and is asserted
- * below, so this file does not encode any position on unlisted direct-link
- * access (that is tracked separately).
+ * - G-19: highlight/tier membership must not override `media_items.visibility`
+ *   for anonymous or non-owner callers.
+ * - Tier slideshow (C1): files carry no source-media provenance (G-20), so per
+ *   multi-user-system 需求 9 AC 12–15 / highlight-tier 需求 6 AC 9 they are not
+ *   exposed to non-owner, non-admin requesters on any trip. Fail-closed
+ *   transitional state; owner/admin access unchanged (需求 9 AC 5).
  */
 import fs from 'fs';
 import path from 'path';
@@ -83,6 +85,24 @@ function writeTierSlideshowArtifact(tripId: string, category: string): string {
   fs.mkdirSync(path.join(tripDir, 'tier-slideshow', category), { recursive: true });
   fs.writeFileSync(path.join(tripDir, 'tier-slideshow', category, 'tier.mp4'), 'stub');
   return tripDir;
+}
+
+/** Write a legacy root-level tier slideshow (`tier-slideshow/legacy.mp4`, key `all`). */
+function writeLegacyTierSlideshowArtifact(tripId: string, content: string): string {
+  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
+  const tripDir = path.join(uploadsBase, tripId);
+  fs.mkdirSync(path.join(tripDir, 'tier-slideshow'), { recursive: true });
+  fs.writeFileSync(path.join(tripDir, 'tier-slideshow', 'legacy.mp4'), content);
+  return tripDir;
+}
+
+type RequesterKind = 'anonymous' | 'non-owner' | 'owner' | 'admin';
+
+/** GET with an optional bearer token; video bodies are read as raw bytes. */
+function getAs(url: string, token: string | undefined, raw = false) {
+  let req = request(app).get(url);
+  if (raw) req = req.responseType('blob');
+  return token ? req.set('Authorization', `Bearer ${token}`) : req;
 }
 
 describe('highlight/tier photo endpoints — media-level visibility (G-19)', () => {
@@ -273,9 +293,9 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
 
     // Opening the photo list must not widen tier slideshow *file* exposure. Those
     // artifacts are found by scanning the uploads directory and carry no source-media
-    // provenance, so they cannot be narrowed per media. A real artifact is written
-    // first, so this cannot pass vacuously: the URL map is empty because it is
-    // withheld, not because there was nothing to advertise.
+    // provenance (G-20), so they cannot be narrowed per media. A real artifact is
+    // written first, so this cannot pass vacuously: the URL map is empty because it
+    // is withheld, not because there was nothing to advertise.
     it('withholds tier slideshow URLs from a non-owner even though a real artifact exists', async () => {
       const tripId = createTrip(owner.userId, 'unlisted');
       createHighlightPhoto(tripId, { visibility: 'public', tier: true });
@@ -307,8 +327,8 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       }
     });
 
-    // The slideshow file routes keep their own trip-level gate.
-    it('still refuses the tier slideshow file route to a non-owner', async () => {
+    // The slideshow file routes check the requester themselves; the list is not the gate.
+    it('refuses the tier slideshow file route to a non-owner', async () => {
       const tripId = createTrip(owner.userId, 'unlisted');
       const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
 
@@ -331,23 +351,128 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       expect(res.body.error.code).toBe('NOT_FOUND');
     });
 
-    // Slideshow exposure on a public trip is unchanged by this fix. Asserted with
-    // a real artifact so the expectation cannot pass vacuously.
-    it('still advertises tier slideshow URLs on a public trip', async () => {
+    // A public trip no longer advertises tier slideshow URLs to an anonymous caller
+    // (C1, fail-closed until G-20 provenance exists). The owner still gets them, which
+    // also proves the artifact is real so the anonymous `{}` is not vacuous.
+    it('advertises tier slideshow URLs on a public trip to the owner only', async () => {
       const tripId = createTrip(owner.userId, 'public');
       createHighlightPhoto(tripId, { visibility: 'public', tier: true });
       const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
 
       try {
-        const res = await request(app).get(`/api/trips/${tripId}/tier-photos`);
-        expect(res.status).toBe(200);
-        expect(res.body.slideshowUrls.landscape).toContain(
+        const asOwner = await request(app)
+          .get(`/api/trips/${tripId}/tier-photos`)
+          .set('Authorization', `Bearer ${owner.token}`);
+        expect(asOwner.status).toBe(200);
+        expect(asOwner.body.slideshowUrls.landscape).toContain(
           `/api/trips/${tripId}/tier-slideshow/landscape/`,
         );
+
+        const anon = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+        expect(anon.status).toBe(200);
+        expect(anon.body.slideshowUrls).toEqual({});
       } finally {
         fs.rmSync(tripDir, { recursive: true, force: true });
         expect(fs.existsSync(tripDir)).toBe(false);
       }
     });
+  });
+
+  // C1 requester matrix. Authority: multi-user-system 需求 9 AC 4/5 and AC 12–15;
+  // highlight-tier 需求 6 AC 9. Tier slideshow files carry no provenance (G-20), so
+  // AC 4 requesters (anonymous, or authenticated non-owner non-admin) get no URLs
+  // and 404 on both file routes, on public and unlisted trips alike. Owner/admin
+  // keep today's behaviour, including the legacy root-level `all` key.
+  describe('tier slideshow exposure — requester × trip visibility matrix (C1)', () => {
+    const CATEGORY_BYTES = 'stub';
+    const LEGACY_BYTES = 'legacy-stub';
+
+    function tokenFor(kind: RequesterKind): string | undefined {
+      switch (kind) {
+        case 'anonymous':
+          return undefined;
+        case 'non-owner':
+          return createTestUser('regular').token;
+        case 'owner':
+          return owner.token;
+        case 'admin':
+          return createTestUser('admin').token;
+      }
+    }
+
+    const visibilities = ['public', 'unlisted'] as const;
+    const ac4Requesters: RequesterKind[] = ['anonymous', 'non-owner'];
+    const privileged: RequesterKind[] = ['owner', 'admin'];
+
+    for (const visibility of visibilities) {
+      describe(`${visibility} trip`, () => {
+        for (const kind of [...ac4Requesters, ...privileged]) {
+          const isAc4 = ac4Requesters.includes(kind);
+          const title = isAc4
+            ? `${kind}: no slideshowUrls, 404 on category and legacy file routes, public photos only`
+            : `${kind}: slideshowUrls incl. legacy "all", 200 with file bytes on both file routes`;
+
+          it(title, async () => {
+            const tripId = createTrip(owner.userId, visibility);
+            const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
+            const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
+            const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
+            writeLegacyTierSlideshowArtifact(tripId, LEGACY_BYTES);
+
+            const categoryUrl = `/api/trips/${tripId}/tier-slideshow/landscape/tier.mp4`;
+            const legacyUrl = `/api/trips/${tripId}/tier-slideshow/legacy.mp4`;
+
+            try {
+              // Fixture proof: the owner sees both artifacts, so `{}` below is a
+              // withholding, not an absence.
+              const asOwner = await getAs(`/api/trips/${tripId}/tier-photos`, owner.token);
+              expect(asOwner.status).toBe(200);
+              expect(asOwner.body.slideshowUrls).toEqual({
+                landscape: categoryUrl,
+                all: legacyUrl,
+              });
+
+              const token = tokenFor(kind);
+              const list = await getAs(`/api/trips/${tripId}/tier-photos`, token);
+              const categoryFile = await getAs(categoryUrl, token, true);
+              const legacyFile = await getAs(legacyUrl, token, true);
+
+              expect(list.status).toBe(200);
+
+              if (isAc4) {
+                expect(list.body.slideshowUrls).toEqual({});
+                // G-19 still applies in the same response.
+                expect(idsOf(list.body)).toEqual([publicId]);
+                expect(JSON.stringify(list.body)).not.toContain(privateId);
+
+                for (const file of [categoryFile, legacyFile]) {
+                  expect(file.status).toBe(404);
+                  expect(file.headers['content-type']).toMatch(/application\/json/);
+                  const body = JSON.parse(Buffer.from(file.body).toString('utf8'));
+                  expect(body).toEqual({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+                }
+              } else {
+                expect(list.body.slideshowUrls).toEqual({
+                  landscape: categoryUrl,
+                  all: legacyUrl,
+                });
+                expect(idsOf(list.body).sort()).toEqual([publicId, privateId].sort());
+
+                expect(categoryFile.status).toBe(200);
+                expect(categoryFile.headers['content-type']).toBe('video/mp4');
+                expect(Buffer.from(categoryFile.body).toString('utf8')).toBe(CATEGORY_BYTES);
+
+                expect(legacyFile.status).toBe(200);
+                expect(legacyFile.headers['content-type']).toBe('video/mp4');
+                expect(Buffer.from(legacyFile.body).toString('utf8')).toBe(LEGACY_BYTES);
+              }
+            } finally {
+              fs.rmSync(tripDir, { recursive: true, force: true });
+              expect(fs.existsSync(tripDir)).toBe(false);
+            }
+          });
+        }
+      });
+    }
   });
 });

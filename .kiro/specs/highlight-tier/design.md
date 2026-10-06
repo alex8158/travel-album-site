@@ -429,6 +429,6 @@ This guard has two independent halves. `trips.visibility` governs the first; it 
 
 A trip id that does not exist remains a 404; that is resource non-existence, not a visibility refusal.
 
-Tier slideshow **file** serving is out of scope for 10b and keeps its existing trip-level refusal — see the note under Requirement 8 AC 3. That refusal is transitional. The target rule, which applies identically to public and unlisted trips, is `multi-user-system` 需求 9 AC 15 (2026-09-21); the refusal stays only until that rule is implemented (G-20).
+Tier slideshow **file** serving is out of scope for 10b and keeps its existing trip-level refusal — see the note under Requirement 8 AC 3. Since C1 (2026-10-06) that refusal applies to non-owner, non-admin requesters on every trip, public included, and it covers the `/api` routes only (the `/uploads` static route is `multi-user-system` G-22). That refusal is transitional. The target rule, which applies identically to public and unlisted trips, is `multi-user-system` 需求 9 AC 15 (2026-09-21); the refusal stays only until that rule is implemented (G-20).
 
 **Validates: Requirements 8.3**

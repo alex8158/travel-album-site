@@ -4,6 +4,7 @@ import axios from 'axios';
 import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
+import AuthorizedVideo from '../components/AuthorizedVideo';
 import { getTierPhotos, getHighlightPhotos, TierPhotoItem } from '../api';
 
 export interface GalleryTrip {
@@ -125,7 +126,9 @@ export default function GalleryPage() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Fetch tier slideshow URL and tier photos for public trips
+  // Fetch tier slideshow URLs and tier photos. getTierPhotos sends the stored
+  // bearer token when there is one: the server only lists slideshow URLs for the
+  // trip owner or an admin, and returns `slideshowUrls: {}` to everyone else.
   useEffect(() => {
     let cancelled = false;
     async function loadTierData() {
@@ -263,7 +266,9 @@ export default function GalleryPage() {
               {Object.entries(tierSlideshowUrls).map(([cat, url]) => (
                 <div key={cat} style={{ maxWidth: '800px', margin: '0 auto 16px' }}>
                   {cat !== 'all' && <h3 style={{ margin: '0 0 8px 0', color: '#666' }}>{cat === 'animal' ? '🐾 动物' : cat === 'landscape' ? '🏞️ 风景' : cat === 'people' ? '👤 人物' : cat}</h3>}
-                  <video
+                  {/* The file route only serves owner/admin (bearer token), which a
+                      plain <video src> cannot send — fetch with auth, play a blob. */}
+                  <AuthorizedVideo
                     src={url}
                     controls
                     data-testid="tier-slideshow-video"

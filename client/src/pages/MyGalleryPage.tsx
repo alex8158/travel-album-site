@@ -17,6 +17,7 @@ import ProcessingLog from '../components/ProcessingLog';
 import HighlightBadge from '../components/HighlightBadge';
 import SimilarGroupPanel from '../components/SimilarGroupPanel';
 import PhotoPicker from '../components/PhotoPicker';
+import AuthorizedVideo from '../components/AuthorizedVideo';
 import { useAuth, authFetch } from '../contexts/AuthContext';
 import {
   updateCategory,
@@ -1140,14 +1141,16 @@ export default function MyGalleryPage() {
                       {Object.entries(tierSlideshowUrls).map(([cat, url]) => (
                         <div key={cat} style={{ marginBottom: '12px' }}>
                           {cat !== 'all' && <h4 style={{ margin: '0 0 4px 0', color: '#666' }}>{cat === 'animal' ? '🐾 动物' : cat === 'landscape' ? '🏞️ 风景' : cat === 'people' ? '👤 人物' : cat}</h4>}
-                          <video
+                          {/* Tier slideshow files are served to owner/admin only via the
+                              bearer token, which a plain <video src> cannot send. */}
+                          <AuthorizedVideo
                             src={url}
                             controls
                             style={{ width: '100%', maxHeight: '400px', borderRadius: '8px', background: '#000' }}
                             aria-label={`精华视频 - ${cat}`}
                           >
                             您的浏览器不支持视频播放
-                          </video>
+                          </AuthorizedVideo>
                         </div>
                       ))}
                     </div>

@@ -319,6 +319,7 @@ function queryTierPhotos(tripId: string, isOwnerOrAdmin: boolean): TierPhotoItem
 // Trip visibility is a discovery control, not an access control: an `unlisted`
 // trip reached by direct link is not refused. Which photos come back is decided
 // per media, not per trip. See highlight-tier design Property 10a/10b.
+// `slideshowUrls` is returned only to the owner or an admin; see the note below.
 // Requirements: 8.1, 8.2, 8.3, 9.3
 // ---------------------------------------------------------------------------
 router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => {
@@ -341,14 +342,12 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
 
   const photos = queryTierPhotos(tripId, isOwnerOrAdmin);
 
-  // Tier slideshow files are discovered by scanning the uploads directory, so they
-  // carry no source-media provenance and cannot be filtered by the media visibility
-  // policy the way photos can. Opening direct-link access to the photo list must not
-  // silently widen file exposure, so a non-owner on a non-public trip still gets no
-  // slideshow URLs. This holds the existing boundary; it does not decide the final
-  // tier-slideshow access semantics.
-  const slideshowUrls =
-    !isOwnerOrAdmin && trip.visibility !== 'public' ? {} : getTierSlideshowUrls(tripId);
+  // Tier slideshow files are discovered by scanning the uploads directory and carry
+  // no source-media provenance (G-20). Per multi-user-system 需求 9 AC 12–15 and
+  // highlight-tier 需求 6 AC 9, they are therefore not exposed to non-owner,
+  // non-admin requesters on any trip. This is a fail-closed transitional state
+  // until provenance exists; owner/admin access is unchanged (需求 9 AC 5).
+  const slideshowUrls = isOwnerOrAdmin ? getTierSlideshowUrls(tripId) : {};
 
   return res.json({ photos, slideshowUrls });
 });
@@ -417,13 +416,17 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
 // ---------------------------------------------------------------------------
 // GET /api/trips/:id/tier-slideshow/:filename — Serve tier slideshow video file (legacy)
 // GET /api/trips/:id/tier-slideshow/:category/:filename — Serve per-category tier video
+// These files carry no source-media provenance (G-20), so per multi-user-system
+// 需求 9 AC 12–15 / highlight-tier 需求 6 AC 9 both routes return 404 to non-owner,
+// non-admin requesters on any trip. Fail-closed transitional state until provenance
+// exists; owner/admin access unchanged (需求 9 AC 5).
 // ---------------------------------------------------------------------------
 router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const category = req.params.category as string;
   const filename = req.params.filename as string;
 
-  // Verify trip exists and check visibility
+  // Verify trip exists, then restrict to owner/admin
   const db = getDb();
   const trip = db
     .prepare('SELECT id, user_id, visibility FROM trips WHERE id = ?')
@@ -437,7 +440,7 @@ router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, (req: Requ
     req.user != null &&
     (req.user.role === 'admin' || req.user.userId === trip.user_id);
 
-  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
+  if (!isOwnerOrAdmin) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 
@@ -488,7 +491,7 @@ router.get('/:id/tier-slideshow/:filename', authMiddleware, (req: Request, res: 
   const tripId = req.params.id as string;
   const filename = req.params.filename as string;
 
-  // Verify trip exists and check visibility
+  // Verify trip exists, then restrict to owner/admin (same rule as the category route)
   const db = getDb();
   const trip = db
     .prepare('SELECT id, user_id, visibility FROM trips WHERE id = ?')
@@ -502,7 +505,7 @@ router.get('/:id/tier-slideshow/:filename', authMiddleware, (req: Request, res: 
     req.user != null &&
     (req.user.role === 'admin' || req.user.userId === trip.user_id);
 
-  if (!isOwnerOrAdmin && trip.visibility !== 'public') {
+  if (!isOwnerOrAdmin) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
   }
 

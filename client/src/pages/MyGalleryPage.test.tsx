@@ -195,3 +195,126 @@ describe('MyGalleryPage compiled video download', () => {
     expect(src.match(deadEndpoint)).toBeNull();
   });
 });
+
+// Tier slideshow files are served to owner/admin only, via the bearer token that a
+// plain <video src> cannot send. The page must fetch them through authFetch and
+// play the resulting object URL, both on first load and after regeneration.
+describe('MyGalleryPage tier slideshow playback', () => {
+  const V1 = '/api/trips/trip-1/tier-slideshow/animal/slideshow_1.mp4';
+  const V2 = '/api/trips/trip-1/tier-slideshow/animal/slideshow_2.mp4';
+
+  const tierData: GalleryData = {
+    ...sampleData,
+    images: [
+      {
+        item: {
+          id: 'img-1',
+          tripId: 'trip-1',
+          filePath: '/uploads/trip-1/originals/img-1.jpg',
+          mediaType: 'image',
+          mimeType: 'image/jpeg',
+          originalFilename: 'a.jpg',
+          fileSize: 100,
+        },
+        isDefault: true,
+        thumbnailUrl: '/api/media/img-1/thumbnail',
+        originalUrl: '/api/media/img-1/original',
+      },
+    ],
+  };
+  const tierPhoto = {
+    id: 'img-1',
+    filePath: '/x.jpg',
+    thumbnailUrl: '/api/media/img-1/thumbnail',
+    originalUrl: '/api/media/img-1/original',
+    category: 'animal',
+    reason: 'top',
+  };
+
+  function videoResponse(url: string): Response {
+    return {
+      ok: true,
+      status: 200,
+      blob: async () => ({ fetchedFrom: url }) as unknown as Blob,
+    } as unknown as Response;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.URL.createObjectURL = vi.fn(
+      (b: { fetchedFrom: string }) => `blob:${b.fetchedFrom}`,
+    ) as unknown as typeof URL.createObjectURL;
+    globalThis.URL.revokeObjectURL = vi.fn();
+    mockedAuthFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/my/trips/trip-1/gallery') return Promise.resolve(jsonResponse(tierData));
+      if (url === '/api/trips/trip-1/trash') return Promise.resolve(jsonResponse([]));
+      if (url === '/api/my/trips/trip-1/tier-photos') {
+        return Promise.resolve(jsonResponse({ photos: [tierPhoto], slideshowUrls: { animal: V1 } }));
+      }
+      if (url === '/api/my/trips/trip-1/tier-slideshow/regenerate') {
+        return Promise.resolve(jsonResponse({ slideshowUrls: { animal: V2 } }));
+      }
+      if (url === V1 || url === V2) return Promise.resolve(videoResponse(url));
+      return Promise.resolve(jsonResponse({ error: 'not found' }, 404));
+    });
+  });
+
+  async function openTierTab() {
+    await waitFor(() => {
+      expect(screen.getByTestId('highlight-filter-tier')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('highlight-filter-tier'));
+    await waitFor(() => {
+      expect(screen.getByTestId('tier-slideshow')).toBeInTheDocument();
+    });
+  }
+
+  function videoFetchUrls(): string[] {
+    return mockedAuthFetch.mock.calls.map((c) => String(c[0])).filter((u) => u === V1 || u === V2);
+  }
+
+  it('fetches the tier video through authFetch and plays the object URL on first load', async () => {
+    renderPage();
+    await openTierTab();
+
+    const video = await screen.findByLabelText('精华视频 - animal');
+    expect(video.tagName).toBe('VIDEO');
+    expect(video.getAttribute('src')).toBe(`blob:${V1}`);
+    expect(video.hasAttribute('controls')).toBe(true);
+    expect(videoFetchUrls()).toEqual([V1]);
+  });
+
+  it('plays the regenerated video and revokes the previous object URL', async () => {
+    renderPage();
+    await openTierTab();
+    await waitFor(() => {
+      expect(screen.getByLabelText('精华视频 - animal').getAttribute('src')).toBe(`blob:${V1}`);
+    });
+
+    fireEvent.click(screen.getByTestId('tier-regenerate-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('精华视频 - animal').getAttribute('src')).toBe(`blob:${V2}`);
+    });
+    expect(videoFetchUrls()).toEqual([V1, V2]);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(`blob:${V1}`);
+  });
+
+  it('shows an error instead of a broken video when the file request fails', async () => {
+    const base = mockedAuthFetch.getMockImplementation()!;
+    mockedAuthFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === V1
+        ? Promise.resolve(jsonResponse({ error: 'not found' }, 404))
+        : base(input, init),
+    );
+    renderPage();
+    await openTierTab();
+
+    const slideshow = screen.getByTestId('tier-slideshow');
+    await waitFor(() => {
+      expect(slideshow.textContent).toContain('视频加载失败');
+    });
+    expect(slideshow.querySelector('video')).toBeNull();
+  });
+});

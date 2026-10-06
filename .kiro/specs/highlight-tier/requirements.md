@@ -137,6 +137,8 @@ No acceptance criterion in this requirement changes. The 2026-09-09 note below r
 
 The existing refusal on `unlisted` trips is a transitional gate. It stays in place until the provenance in `multi-user-system` G-20 is implemented; it is not the final behaviour. The 2026-09-09 note is kept as written.
 
+Status 2026-10-06 (C1): the transitional gate now covers **public trips too**. For a non-owner, non-admin requester on any trip, `slideshowUrls` is `{}` and both `/api` file routes return 404. This is stricter than the target, and it still is not the target. The gate covers the `/api` routes only; the `/uploads` static route is tracked separately as `multi-user-system` G-22.
+
 #### Correction Note (2026-09-09)
 
 AC 3 previously read *"THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`."* Written before `unlisted` had a defined access semantic, it used the trip-level flag as an access control.
