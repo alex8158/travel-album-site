@@ -230,6 +230,8 @@
 > **2026-10-06 状态更新（C1）**：上面两条描述的是 C1 之前的现状，保留不改。C1 之后，对 AC 4 请求者，public 与 unlisted 两种 trip 都处于**同一个 fail-closed 过渡状态**：`GET /api/trips/:id/tier-photos` 返回 `slideshowUrls: {}`，`/api/trips/:id/tier-slideshow/:category/:filename` 与 legacy `/api/trips/:id/tier-slideshow/:filename` 都返回 404。所有者与管理员不变（AC 5），客户端改为携带 Authorization 取回文件字节后播放。这个状态比本条更严，仍不是本条的实现：G-20 的 provenance 落地并通过本条判定之前，SHALL NOT 放开。
 >
 > 这一过渡状态**只覆盖 `/api` 路由**。同一批文件仍可经 `/uploads` 静态路由按路径匿名读取（G-22），因此不得据此声称 tier slideshow 文件已对 AC 4 请求者不可读。
+>
+> **2026-10-06 更新（G-22）**：应用层的 `/uploads` 现已对所有人拒绝 `tier-slideshow/` 路径，上段所说的按路径读取在应用层已关闭。线上部署配置未核实，G-20 仍未完成。
 
 ## 需求 10：密码与账户自服务
 
@@ -353,6 +355,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 2026-10-06（C1）：上段在 `/api` 上的那两步已关闭。AC 4 请求者在任何 trip 上都拿不到 `slideshowUrls`，两条 `/api` 文件路由都返回 404。但文件本身仍在磁盘上，且可经 `/uploads` 静态路由按路径匿名读取（G-22），所以这条 stale exposure 路径**尚未完全关闭**。本条仍未完成。
 
+2026-10-06（G-22）：`/uploads` 在应用层已对所有人拒绝 tier slideshow 路径，上段所说的按路径读取在应用层已关闭（部署配置未核实）。provenance 仍不存在，AC 12/13 仍不可判定，本条仍未完成。
+
 附注（同一规则下的第二处违反）：`services/mergeEngine.ts` 的 `merge()` 在 INSERT 时把 merged 视频的 `visibility` 写成硬编码字面量 `'public'`，而 `validateSources()` 只校验 `status = 'active'` 与 `compiled_path IS NOT NULL`，不校验 source 的 visibility。合并若干 private 视频，产物为 public，直接违反 AC 12。但 merged 视频**有** provenance（`merged_video_sources`），所以它缺的是继承逻辑，而非可判定性 —— 与 tier slideshow 的缺口性质不同，修复成本也低得多。
 
 裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。读取的目标行为（public 与 unlisted 同一判定）见需求 9 AC 15（2026-09-21）；该 gate 对 unlisted 的拒绝属于过渡状态。
@@ -383,6 +387,25 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 未核实：生产环境前置的 nginx 是否拦截或另行提供 `/uploads`（仓库内没有被跟踪的 nginx 配置）。
 
 修复会改变全部本地媒体的服务方式，可能影响依赖 `/uploads/...` 路径的现有消费方，属高风险访问控制变更，需单独批准。**本轮只登记，不改实现。**
+
+**2026-10-06 状态更新：应用层已修复，部署配置未核实。** 上文保留为登记时的记录。其中「仓库内没有被跟踪的 nginx 配置」一句不准确：`deploy/setup.sh` 与 `deploy/update.sh` 会写入 nginx server block，只有 `location /api/` 与 `location /` 两段，都 `proxy_pass` 到 Node，没有任何 `/uploads` 的 location、alias 或 root。所以按仓库脚本部署时，nginx 不拦截 `/uploads`，Node 是唯一的 gate。
+
+消费者追踪结论：
+- 本地存储模式下没有任何 API 响应或客户端代码通过 `/uploads` 加载文件。`localProvider.getUrl()` 只在 S3 模式的 `mediaServing.ts` 分支里被调用。
+- 图片、视频、音频分别走 `/api/media/*`、tier slideshow 的 `/api` 路由（经 `AuthorizedVideo`）、`/api/audio/:id/stream`、`/api/slideshow/:jobId/download`。
+- 因此修复无需改动客户端。
+
+修复：`index.ts` 把匿名静态挂载换成 `authMiddleware` + `routes/uploadsAccess.ts`。规则：
+- 文件必须恰好是某个现存 trip 下 `media_items` 行的 `file_path`、`thumbnail_path`、`optimized_path`、`compiled_path` 或 `preview_proxy_path`，且路径中的 trip 与该行一致。
+- 所有者、管理员：放行（AC 5）。
+- AC 4 请求者：要求 `status = 'active'`、`visibility = 'public'`、不是 merged 视频（Derived_Artifact）、视频必须已编译（AC 6），且 trip visibility 属于 AC 7 允许的两个值。视频必须已编译这一条比字面规则更严，依据是公开画廊从不展示未编译视频。
+- `tier-slideshow/` 与 `slideshow/` 目录对所有人拒绝；这些文件改走各自已鉴权的 `/api` 路由。
+- 无登记文件、已删除 trip 的残留、`frames/`、`audio/`、点号目录、编码穿越路径、指向 uploads 之外的符号链接：一律 404 JSON，不落入 SPA catch-all，也不转到 `/api/media`。
+- 允许的响应带 `Cache-Control: private, no-cache` 与 `Vary: Authorization`。
+
+未核实：线上主机实际的 nginx 文件（可能被手工改过）、CDN 或负载均衡、生产是否运行在 `STORAGE_TYPE=s3`（S3 模式下 `/api/media` 会 302 到 presigned URL，bucket ACL 未查）。应用层修复只在部署后生效，需要对线上主机复核。
+
+本条不关闭 G-21：`/api/media/:id/*` 仍按 id 匿名提供任意 media，媒体文件仍可经该路由读取。
 
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
@@ -428,7 +451,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
-| P0 | G-22 | `/uploads` 静态路由按路径匿名提供整个上传目录，绕过 C1 与 G-21 的任何修复；需先核实生产 nginx 行为，并确认依赖 `/uploads/...` 的消费方 |
+| P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面 |
 | P1 | G-20 | 需求 9 AC 12/13 目前不可判定；需先批准 Artifact_Provenance schema。merged 视频的继承缺陷（同条附注）可先单独修，成本远低于 provenance |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |

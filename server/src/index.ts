@@ -37,6 +37,8 @@ import videoEnhanceRouter, { tripVideoEnhanceRouter } from './routes/videoEnhanc
 import slideshowRouter from './routes/slideshow';
 import highlightsRouter from './routes/highlights';
 import { globalErrorHandler } from './middleware/errorHandler';
+import { authMiddleware } from './middleware/auth';
+import { createUploadsAccessHandler } from './routes/uploadsAccess';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -138,8 +140,11 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Static file serving for uploads
-app.use('/uploads', express.static(uploadsBase));
+// Access-checked file serving for uploads (G-22). Replaces the former anonymous
+// express.static mount: a file is served only if it is registered on an existing
+// media row and the requester passes that row's rule; every denial ends here
+// with a 404 JSON and never falls through to the SPA catch-all below.
+app.use('/uploads', authMiddleware, createUploadsAccessHandler(uploadsBase));
 
 // In production, serve the client build
 const clientBuildPath = path.join(__dirname, '..', 'public');
