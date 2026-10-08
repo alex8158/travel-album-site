@@ -376,6 +376,14 @@ function getAudioDuration(filePath: string): Promise<number> {
  * Run an ffmpeg process with timeout and optional progress parsing.
  *
  * Progress is parsed from stderr by looking for `time=HH:MM:SS.ms` patterns.
+ *
+ * Safety guarantees:
+ * - Only the last STDERR_TAIL_MAX_CHARS characters of stderr are retained
+ *   (a looping ffmpeg input can print stderr forever).
+ * - An exception in the stderr handler never escapes the event callback; the
+ *   child is SIGKILLed and the run fails instead. Timeouts also SIGKILL.
+ * - The Promise settles only after the child has closed, or when it is
+ *   confirmed never to have started (spawn 'error' with no pid). It settles once.
  */
 function runFfmpegProcess(
   args: string[],
@@ -383,52 +391,94 @@ function runFfmpegProcess(
   totalDuration?: number,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
+  const STDERR_TAIL_MAX_CHARS = 64 * 1024;
+
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    let settled = false;
     let killed = false;
+    /** Error recorded while the child may still be running; reported on 'close'. */
+    let failure: Error | null = null;
+
+    const settle = (err: Error | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const killChild = () => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // kill() failing must not throw out of an event callback; 'close' still settles.
+      }
+    };
+
     const timer = setTimeout(() => {
       killed = true;
-      proc.kill('SIGKILL');
+      killChild();
     }, timeoutMs);
 
     let stderr = '';
 
     proc.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderr += text;
+      try {
+        const text = chunk.toString();
+        stderr += text;
+        if (stderr.length > STDERR_TAIL_MAX_CHARS) {
+          stderr = stderr.slice(-STDERR_TAIL_MAX_CHARS);
+        }
 
-      // Parse progress from stderr (time=HH:MM:SS.ms pattern)
-      if (onProgress && totalDuration && totalDuration > 0) {
-        const timeMatch = text.match(/time=(\d+):(\d+):(\d+)\.(\d+)/);
-        if (timeMatch) {
-          const hours = parseInt(timeMatch[1], 10);
-          const minutes = parseInt(timeMatch[2], 10);
-          const seconds = parseInt(timeMatch[3], 10);
-          const centiseconds = parseInt(timeMatch[4], 10);
-          const currentTime = hours * 3600 + minutes * 60 + seconds + centiseconds / 100;
-          const percent = Math.min(99, Math.round((currentTime / totalDuration) * 100));
-          onProgress(percent);
+        // Parse progress from stderr (time=HH:MM:SS.ms pattern)
+        if (onProgress && totalDuration && totalDuration > 0) {
+          const timeMatch = text.match(/time=(\d+):(\d+):(\d+)\.(\d+)/);
+          if (timeMatch) {
+            const hours = parseInt(timeMatch[1], 10);
+            const minutes = parseInt(timeMatch[2], 10);
+            const seconds = parseInt(timeMatch[3], 10);
+            const centiseconds = parseInt(timeMatch[4], 10);
+            const currentTime = hours * 3600 + minutes * 60 + seconds + centiseconds / 100;
+            const percent = Math.min(99, Math.round((currentTime / totalDuration) * 100));
+            onProgress(percent);
+          }
+        }
+      } catch (err) {
+        // Never let a handler error escape (it would crash the server and orphan
+        // ffmpeg): stop the child and fail this run once it has closed.
+        if (!failure) {
+          failure = new Error(`ffmpeg 输出处理失败: ${err instanceof Error ? err.message : String(err)}`);
+          killChild();
         }
       }
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      reject(new Error(`ffmpeg 进程启动失败: ${err.message}`));
+      if (proc.pid === undefined) {
+        // The child never started: nothing to wait for.
+        settle(new Error(`ffmpeg 进程启动失败: ${err.message}`));
+        return;
+      }
+      // The child started (e.g. a later kill/signal error): make sure it stops
+      // and settle on 'close'.
+      if (!failure) failure = new Error(`ffmpeg 进程错误: ${err.message}`);
+      killChild();
     });
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (killed) {
-        reject(new Error('视频生成超时'));
+      if (failure) {
+        settle(failure);
+      } else if (killed) {
+        settle(new Error('视频生成超时'));
       } else if (code !== 0) {
         const lastLines = stderr.split('\n').slice(-5).join('\n');
-        reject(new Error(`ffmpeg 处理失败，退出码: ${code}。${lastLines}`));
+        settle(new Error(`ffmpeg 处理失败，退出码: ${code}。${lastLines}`));
       } else {
-        resolve();
+        settle(null);
       }
     });
   });
