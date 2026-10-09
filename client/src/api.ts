@@ -169,8 +169,9 @@ export async function getSimilarGroups(tripId: string): Promise<SimilarGroup[]> 
  *
  * Calls `GET /api/trips/:id/tier-photos`. Returns tier photos and slideshow URL.
  * Sent through `authFetch` so a logged-in owner/admin carries the bearer token —
- * the server only lists `slideshowUrls` for them. Anonymous callers send no
- * Authorization header and still get the photo list.
+ * `slideshowUrls` is scoped to the requester: owner/admin get every published
+ * video, everyone else only videos whose sources are all public (G-20 provenance).
+ * Anonymous callers send no Authorization header and still get the photo list.
  * Throws `HighlightsApiError` on non-2xx responses.
  */
 export async function getTierPhotos(tripId: string): Promise<TierPhotosResponse> {

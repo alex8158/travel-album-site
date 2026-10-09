@@ -12,6 +12,12 @@ import {
 } from '../services/highlightService';
 import { generateSlideshow } from '../services/slideshowGenerator';
 import { getStorageProvider } from '../storage/factory';
+import { ARTIFACT_FILE_PREFIX } from '../services/tierSlideshowProvenance';
+import {
+  listTierSlideshowUrls,
+  resolveTierSlideshowFile,
+  streamVerifiedFd,
+} from '../services/tierSlideshowAccess';
 
 const router = Router();
 
@@ -239,42 +245,6 @@ interface TierPhotoItem {
 }
 
 /**
- * Find the tier slideshow video file for a trip.
- * Returns a URL path if a slideshow exists, or null otherwise.
- */
-function getTierSlideshowUrls(tripId: string): Record<string, string> {
-  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
-  const tierSlideshowDir = path.join(uploadsBase, tripId, 'tier-slideshow');
-  const urls: Record<string, string> = {};
-
-  if (!fs.existsSync(tierSlideshowDir)) {
-    return urls;
-  }
-
-  try {
-    const entries = fs.readdirSync(tierSlideshowDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        // Per-category subdirectory (animal/, landscape/, people/)
-        const catDir = path.join(tierSlideshowDir, entry.name);
-        const catFiles = fs.readdirSync(catDir);
-        const mp4File = catFiles.find((f) => f.endsWith('.mp4'));
-        if (mp4File) {
-          urls[entry.name] = `/api/trips/${tripId}/tier-slideshow/${entry.name}/${mp4File}`;
-        }
-      } else if (entry.isFile() && entry.name.endsWith('.mp4')) {
-        // Legacy: mp4 directly in tier-slideshow/ root
-        urls['all'] = `/api/trips/${tripId}/tier-slideshow/${entry.name}`;
-      }
-    }
-  } catch {
-    // Directory not readable
-  }
-
-  return urls;
-}
-
-/**
  * Query tier photos for a trip from the database.
  * Excludes trashed photos (only returns status = 'active').
  *
@@ -319,10 +289,10 @@ function queryTierPhotos(tripId: string, isOwnerOrAdmin: boolean): TierPhotoItem
 // Trip visibility is a discovery control, not an access control: an `unlisted`
 // trip reached by direct link is not refused. Which photos come back is decided
 // per media, not per trip. See highlight-tier design Property 10a/10b.
-// `slideshowUrls` is returned only to the owner or an admin; see the note below.
+// `slideshowUrls` is scoped to the requester; see the note below.
 // Requirements: 8.1, 8.2, 8.3, 9.3
 // ---------------------------------------------------------------------------
-router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => {
+router.get('/:id/tier-photos', authMiddleware, async (req: Request, res: Response) => {
   const db = getDb();
   const tripId = req.params.id as string;
 
@@ -342,12 +312,19 @@ router.get('/:id/tier-photos', authMiddleware, (req: Request, res: Response) => 
 
   const photos = queryTierPhotos(tripId, isOwnerOrAdmin);
 
-  // Tier slideshow files are discovered by scanning the uploads directory and carry
-  // no source-media provenance (G-20). Per multi-user-system 需求 9 AC 12–15 and
-  // highlight-tier 需求 6 AC 9, they are therefore not exposed to non-owner,
-  // non-admin requesters on any trip. This is a fail-closed transitional state
-  // until provenance exists; owner/admin access is unchanged (需求 9 AC 5).
-  const slideshowUrls = isOwnerOrAdmin ? getTierSlideshowUrls(tripId) : {};
+  // Tier slideshow URLs (multi-user-system 需求 9 AC 12–15, highlight-tier 需求 6 AC 9).
+  // Non-owner, non-admin requesters (public and unlisted alike) see only a category's
+  // published, provenance-registered video whose every source is currently public,
+  // active and in this trip, and whose file hash matches the sealed row. Owner/admin
+  // see the published row for registered categories and historical files otherwise
+  // (需求 9 AC 5). See services/tierSlideshowAccess.ts.
+  let slideshowUrls: Record<string, string>;
+  try {
+    slideshowUrls = await listTierSlideshowUrls(trip, isOwnerOrAdmin);
+  } catch (err) {
+    console.error(`[tier-photos] tripId=${tripId} slideshow listing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
+  }
 
   return res.json({ photos, slideshowUrls });
 });
@@ -416,12 +393,14 @@ router.get('/:id/highlight-photos', authMiddleware, (req: Request, res: Response
 // ---------------------------------------------------------------------------
 // GET /api/trips/:id/tier-slideshow/:filename — Serve tier slideshow video file (legacy)
 // GET /api/trips/:id/tier-slideshow/:category/:filename — Serve per-category tier video
-// These files carry no source-media provenance (G-20), so per multi-user-system
-// 需求 9 AC 12–15 / highlight-tier 需求 6 AC 9 both routes return 404 to non-owner,
-// non-admin requesters on any trip. Fail-closed transitional state until provenance
-// exists; owner/admin access unchanged (需求 9 AC 5).
+// The category route decides per request, independently of the list (需求 9 AC 15):
+// non-owner, non-admin requesters get bytes only for a registered artifact that
+// passes the provenance check and the full file-hash check; everything else is 404.
+// Verified artifacts are streamed from the descriptor they were hashed through.
+// Legacy root files carry no provenance and stay owner/admin-only
+// (highlight-tier 需求 6 AC 9).
 // ---------------------------------------------------------------------------
-router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, (req: Request, res: Response) => {
+router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, async (req: Request, res: Response) => {
   const tripId = req.params.id as string;
   const category = req.params.category as string;
   const filename = req.params.filename as string;
@@ -440,24 +419,33 @@ router.get('/:id/tier-slideshow/:category/:filename', authMiddleware, (req: Requ
     req.user != null &&
     (req.user.role === 'admin' || req.user.userId === trip.user_id);
 
-  if (!isOwnerOrAdmin) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
-  }
-
   // Prevent path traversal
   const safeCategory = path.basename(category);
   const safeName = path.basename(filename);
-  if (!safeName.endsWith('.mp4')) {
+
+  if (isOwnerOrAdmin && !safeName.endsWith('.mp4')) {
     return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: '无效文件名' } });
   }
 
-  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
-  const videoPath = path.join(uploadsBase, tripId, 'tier-slideshow', safeCategory, safeName);
-
-  if (!fs.existsSync(videoPath)) {
-    return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '视频文件不存在' } });
+  let file: Awaited<ReturnType<typeof resolveTierSlideshowFile>>;
+  try {
+    file = await resolveTierSlideshowFile(trip, isOwnerOrAdmin, safeCategory, safeName);
+  } catch (err) {
+    console.error(`[tier-slideshow] tripId=${tripId} category=${safeCategory} resolve failed: ${err instanceof Error ? err.message : String(err)}`);
+    file = null;
+  }
+  if (!file) {
+    // AC 4 requesters: same body for every refusal (no oracle on whether a row or file exists).
+    return isOwnerOrAdmin
+      ? res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '视频文件不存在' } })
+      : res.status(404).json({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
+  }
+  if (file.kind === 'verified') {
+    return streamVerifiedFd(req, res, file.fd, file.size);
   }
 
+  // Historical (unregistered) file, owner/admin only: existing path-based behaviour.
+  const videoPath = file.path;
   const stat = fs.statSync(videoPath);
   const fileSize = stat.size;
   const range = req.headers.range;
@@ -518,7 +506,9 @@ router.get('/:id/tier-slideshow/:filename', authMiddleware, (req: Request, res: 
   const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
   const videoPath = path.join(uploadsBase, tripId, 'tier-slideshow', safeName);
 
-  if (!fs.existsSync(videoPath)) {
+  // C2-pattern names are reserved for registered per-category artifacts and are
+  // never served from the legacy root, not even to owner/admin.
+  if (safeName.startsWith(ARTIFACT_FILE_PREFIX) || !fs.existsSync(videoPath)) {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '视频文件不存在' } });
   }
 

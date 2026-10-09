@@ -1,12 +1,11 @@
 import { Router, Request, Response } from 'express';
-import fs from 'fs';
-import path from 'path';
 import { getDb } from '../database';
 import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import { getStorageProvider } from '../storage/factory';
 import { publishTierSlideshow } from '../services/tierSlideshowProvenance';
+import { listTierSlideshowUrls } from '../services/tierSlideshowAccess';
 import type { GalleryImage, DuplicateGroup } from '../types';
 
 interface DuplicateGroupRow {
@@ -160,7 +159,7 @@ router.get('/trips/:id/gallery', (req: Request, res: Response) => {
 // Only accessible to the trip owner or admin
 // Requirements: 7.2, 8.2, 9.3
 // ---------------------------------------------------------------------------
-router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
+router.get('/trips/:id/tier-photos', async (req: Request, res: Response) => {
   const db = getDb();
   const tripId = req.params.id as string;
   const userId = req.user!.userId;
@@ -202,31 +201,15 @@ router.get('/trips/:id/tier-photos', (req: Request, res: Response) => {
     reason: row.reason,
   }));
 
-  // Check for tier slideshow videos (per-category subdirectories)
-  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
-  const tierSlideshowDir = path.join(uploadsBase, tripId, 'tier-slideshow');
-  const slideshowUrls: Record<string, string> = {};
-
-  if (fs.existsSync(tierSlideshowDir)) {
-    try {
-      const entries = fs.readdirSync(tierSlideshowDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          // Per-category subdirectory (e.g., animal/, landscape/, people/)
-          const catDir = path.join(tierSlideshowDir, entry.name);
-          const catFiles = fs.readdirSync(catDir);
-          const mp4File = catFiles.find((f) => f.endsWith('.mp4'));
-          if (mp4File) {
-            slideshowUrls[entry.name] = `/api/trips/${tripId}/tier-slideshow/${entry.name}/${mp4File}`;
-          }
-        } else if (entry.isFile() && entry.name.endsWith('.mp4')) {
-          // Legacy: mp4 directly in tier-slideshow/ (old format)
-          slideshowUrls['all'] = `/api/trips/${tripId}/tier-slideshow/${entry.name}`;
-        }
-      }
-    } catch {
-      // Directory not readable
-    }
+  // Owner/admin view (route is owner/admin-only): published provenance-registered
+  // video for registered categories, historical files otherwise. Same selection as
+  // GET /api/trips/:id/tier-photos for owner/admin (services/tierSlideshowAccess.ts).
+  let slideshowUrls: Record<string, string>;
+  try {
+    slideshowUrls = await listTierSlideshowUrls(tripRow, true);
+  } catch (err) {
+    console.error(`[my/tier-photos] tripId=${tripId} slideshow listing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
   }
 
   return res.json({ photos: tierPhotos, slideshowUrls });

@@ -127,8 +127,9 @@ export default function GalleryPage() {
   }, [id]);
 
   // Fetch tier slideshow URLs and tier photos. getTierPhotos sends the stored
-  // bearer token when there is one: the server only lists slideshow URLs for the
-  // trip owner or an admin, and returns `slideshowUrls: {}` to everyone else.
+  // bearer token when there is one: the server scopes `slideshowUrls` to the
+  // requester (owner/admin see all published videos; others only those whose
+  // every source photo is public).
   useEffect(() => {
     let cancelled = false;
     async function loadTierData() {
@@ -266,7 +267,7 @@ export default function GalleryPage() {
               {Object.entries(tierSlideshowUrls).map(([cat, url]) => (
                 <div key={cat} style={{ maxWidth: '800px', margin: '0 auto 16px' }}>
                   {cat !== 'all' && <h3 style={{ margin: '0 0 8px 0', color: '#666' }}>{cat === 'animal' ? '🐾 动物' : cat === 'landscape' ? '🏞️ 风景' : cat === 'people' ? '👤 人物' : cat}</h3>}
-                  {/* The file route only serves owner/admin (bearer token), which a
+                  {/* The file route decides per requester from the bearer token, which a
                       plain <video src> cannot send — fetch with auth, play a blob. */}
                   <AuthorizedVideo
                     src={url}
