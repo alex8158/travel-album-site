@@ -16,6 +16,16 @@ jobs:
         with:
           node-version: 18
 
+      # Real-ffmpeg C2 acceptance test (tierSlideshowProvenance.ffmpeg.test.ts) fails
+      # when ffmpeg/ffprobe are missing; it must never be skipped silently, so this job
+      # never sets ALLOW_MISSING_FFMPEG.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
       - name: Install and test server
         run: |
           cd server
