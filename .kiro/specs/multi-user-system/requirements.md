@@ -232,6 +232,17 @@
 > 这一过渡状态**只覆盖 `/api` 路由**。同一批文件仍可经 `/uploads` 静态路由按路径匿名读取（G-22），因此不得据此声称 tier slideshow 文件已对 AC 4 请求者不可读。
 >
 > **2026-10-06 更新（G-22）**：应用层的 `/uploads` 现已对所有人拒绝 `tier-slideshow/` 路径，上段所说的按路径读取在应用层已关闭。线上部署配置未核实，G-20 仍未完成。
+>
+> **2026-10-09 更新（C2）**：本条已在代码中实现，**尚未验收**。
+> - 实现：`tierSlideshowAccess.ts`，接入 `highlights.ts` 与 `my.ts`。上述 C1 过渡状态被本条规则取代。
+> - 对 AC 4 请求者，public 与 unlisted 同一判定：
+>   - 列表只给通过判定的 published 行；
+>   - 直接文件请求按所请求那一行自己的 provenance 判定，superseded 也一样；
+>   - 判定内容：manifest 完整、非空且摘要一致；每条 source 当前存在、属于该 trip、public 且 active；文件完整 sha256 与登记值一致，并从已校验的同一个 fd 输出。
+>   - legacy `all` 与未登记的历史文件不给。
+> - owner/admin：已登记分类只读 published 行，不回退；未登记分类保持原有选择，只排除 `tsa_*`。
+> - 回滚边界：只回退读取代码时，落回 C1 的 `{}` / 404。
+> - 关闭 G-20 之前还缺两项：CI 上真实 ffmpeg 测试实际通过（尚未 push，没有 CI 结果），以及浏览器实测（未进行）。
 
 ## 需求 10：密码与账户自服务
 
@@ -357,6 +368,23 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 2026-10-06（G-22）：`/uploads` 在应用层已对所有人拒绝 tier slideshow 路径，上段所说的按路径读取在应用层已关闭（部署配置未核实）。provenance 仍不存在，AC 12/13 仍不可判定，本条仍未完成。
 
+2026-10-09（C2）：provenance 已实现，状态为**已实现、未验收**，本条仍未关闭。
+- 封存表 `tier_slideshow_artifacts`：manifest 有序且不可变；只允许 published→superseded；`rel_path` 绑定 manifest 摘要。
+- 防护 trigger：
+  - artifact 表的写入防护；
+  - 收窄的 trips 防护；
+  - `media_items` 的 source 身份防护：被 manifest 引用的 id 不能被同 id REPLACE、删除后重插或改 id 复用。
+  - 这些都不依赖 `recursive_triggers`。
+- 发布协议：生成器输出先复制成独立 inode 的发布候选，再 no-clobber link，重新校验 hash 后在事务中登记。
+- 读取判定：见需求 9 AC 15 的 2026-10-09 更新。
+- 上段的 stale exposure 路径在代码层面已关闭：source 转 private、trashed、删除后，下一次请求即不可曝光，不依赖失效处理。
+- 关闭前还缺两项：CI 上真实 ffmpeg 测试实际通过（尚未 push），以及浏览器实测（未进行）。
+
+已知遗留：
+- 失败尝试的 staging 内容与孤儿文件会累积，清理未获批准；
+- `media_items` 身份防护的开销随 artifact 行数线性增长，1 000 行时每次插入约多 1.2 ms；
+- 读取每次做全量 hash，约 0.45 ms/MB。
+
 附注（同一规则下的第二处违反）：`services/mergeEngine.ts` 的 `merge()` 在 INSERT 时把 merged 视频的 `visibility` 写成硬编码字面量 `'public'`，而 `validateSources()` 只校验 `status = 'active'` 与 `compiled_path IS NOT NULL`，不校验 source 的 visibility。合并若干 private 视频，产物为 public，直接违反 AC 12。但 merged 视频**有** provenance（`merged_video_sources`），所以它缺的是继承逻辑，而非可判定性 —— 与 tier slideshow 的缺口性质不同，修复成本也低得多。
 
 裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。读取的目标行为（public 与 unlisted 同一判定）见需求 9 AC 15（2026-09-21）；该 gate 对 unlisted 的拒绝属于过渡状态。
@@ -453,7 +481,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面 |
-| P1 | G-20 | 需求 9 AC 12/13 目前不可判定；需先批准 Artifact_Provenance schema。merged 视频的继承缺陷（同条附注）可先单独修，成本远低于 provenance |
+| P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
 | P1 | G-4 | 凭证进版本库，建议改为环境变量注入 + 首登强制改密 |

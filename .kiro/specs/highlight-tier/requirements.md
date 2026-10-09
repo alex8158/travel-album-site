@@ -139,6 +139,8 @@ The existing refusal on `unlisted` trips is a transitional gate. It stays in pla
 
 Status 2026-10-06 (C1): the transitional gate now covers **public trips too**. For a non-owner, non-admin requester on any trip, `slideshowUrls` is `{}` and both `/api` file routes return 404. This is stricter than the target, and it still is not the target. The gate covers the `/api` routes only; the `/uploads` static route is tracked separately as `multi-user-system` G-22.
 
+Status 2026-10-09 (C2): the transitional gate is replaced in code by the `multi-user-system` 需求 9 AC 15 rule (implemented, not yet accepted — CI and browser checks outstanding, see G-20). AC 9 of Requirement 6 is unchanged; "available" still means enumerated to the current requester.
+
 #### Correction Note (2026-09-09)
 
 AC 3 previously read *"THE Public_Gallery SHALL only show photos and videos from trips with `visibility = 'public'`."* Written before `unlisted` had a defined access semantic, it used the trip-level flag as an access control.
