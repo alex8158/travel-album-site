@@ -756,6 +756,173 @@ function initTables(db: Database.Database): void {
     // Column already exists — ignore for idempotency
   }
 
+  // Migration: tier slideshow provenance (multi-user-system G-20, 需求 9 AC 12–15).
+  // Sealed, ordered source manifest per published tier slideshow file. Rows are
+  // immutable except published -> superseded, and are removed only by deleting
+  // the trip (ON DELETE CASCADE). The trips triggers stop REPLACE / re-keying from
+  // deleting a trip row (which would cascade-wipe its artifacts) while the trip
+  // still owns artifacts. The media_items triggers stop an id that a sealed
+  // manifest references from being re-inserted (REPLACE / UPSERT / DELETE then
+  // INSERT) or re-keyed, so no other media row can become an old video's source.
+  // None of this depends on PRAGMA recursive_triggers.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tier_slideshow_artifacts (
+      id TEXT NOT NULL PRIMARY KEY
+        CHECK (length(id) = 36
+               AND NOT id GLOB '*[^0-9a-f-]*'
+               AND substr(id, 9, 1) = '-' AND substr(id, 14, 1) = '-'
+               AND substr(id, 19, 1) = '-' AND substr(id, 24, 1) = '-'),
+      trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+      category TEXT NOT NULL
+        CHECK (length(category) BETWEEN 1 AND 64 AND NOT category GLOB '*[^a-z0-9_-]*'),
+      status TEXT NOT NULL CHECK (status IN ('published', 'superseded')),
+      -- Ordered manifest: canonical (minified) JSON array of source media ids in baked order.
+      manifest_json TEXT NOT NULL
+        CHECK (json_valid(manifest_json)
+               AND json_type(manifest_json) = 'array'
+               AND manifest_json = json(manifest_json)),
+      source_count INTEGER NOT NULL
+        CHECK (source_count >= 1 AND source_count = json_array_length(manifest_json)),
+      -- sha256 of manifest_json (UTF-8). Verified by the application; format checked here.
+      manifest_sha256 TEXT NOT NULL
+        CHECK (length(manifest_sha256) = 64 AND NOT manifest_sha256 GLOB '*[^0-9a-f]*'),
+      -- sha256 of the published video bytes. Independent of manifest_sha256.
+      file_sha256 TEXT NOT NULL
+        CHECK (length(file_sha256) = 64 AND NOT file_sha256 GLOB '*[^0-9a-f]*'),
+      file_size INTEGER NOT NULL CHECK (file_size > 0),
+      -- File-name binding (hardening only): the path is fully determined by trip,
+      -- category, artifact id and manifest digest.
+      rel_path TEXT NOT NULL UNIQUE
+        CHECK (rel_path = trip_id || '/tier-slideshow/' || category || '/tsa_' || id || '_' || manifest_sha256 || '.mp4'),
+      created_at TEXT NOT NULL
+    ) STRICT, WITHOUT ROWID;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tsa_one_published
+      ON tier_slideshow_artifacts(trip_id, category) WHERE status = 'published';
+    CREATE INDEX IF NOT EXISTS idx_tsa_trip_category
+      ON tier_slideshow_artifacts(trip_id, category);
+
+    -- INSERT guard. BEFORE INSERT fires before uniqueness checks and before conflict
+    -- resolution (REPLACE / IGNORE / UPSERT), so a row that would collide is refused
+    -- here instead of being resolved by deleting or skipping a sealed row.
+    CREATE TRIGGER IF NOT EXISTS tsa_insert_guard
+    BEFORE INSERT ON tier_slideshow_artifacts
+    BEGIN
+      SELECT RAISE(ABORT, 'tsa: new rows must be published')
+        WHERE NEW.status IS NOT 'published';
+      SELECT RAISE(ABORT, 'tsa: artifact id already registered')
+        WHERE EXISTS (SELECT 1 FROM tier_slideshow_artifacts WHERE id = NEW.id);
+      SELECT RAISE(ABORT, 'tsa: rel_path already registered')
+        WHERE EXISTS (SELECT 1 FROM tier_slideshow_artifacts WHERE rel_path = NEW.rel_path);
+      SELECT RAISE(ABORT, 'tsa: trip/category already has a published artifact')
+        WHERE EXISTS (SELECT 1 FROM tier_slideshow_artifacts
+                      WHERE trip_id = NEW.trip_id AND category = NEW.category AND status = 'published');
+      -- Re-checked here so the binding holds even under PRAGMA ignore_check_constraints=ON.
+      SELECT RAISE(ABORT, 'tsa: rel_path not bound to trip/category/id/manifest digest')
+        WHERE NEW.rel_path IS NOT (NEW.trip_id || '/tier-slideshow/' || NEW.category || '/tsa_'
+                                   || NEW.id || '_' || NEW.manifest_sha256 || '.mp4');
+      SELECT RAISE(ABORT, 'tsa: trip does not exist')
+        WHERE NOT EXISTS (SELECT 1 FROM trips WHERE id = NEW.trip_id);
+      -- Entries: distinct text ids of 1-64 characters from [0-9A-Za-z_-] (media ids
+      -- are uuidv4), and the array length equals source_count.
+      SELECT RAISE(ABORT, 'tsa: manifest entries must be distinct non-empty text ids')
+        WHERE (SELECT count(DISTINCT value) FROM json_each(NEW.manifest_json)
+               WHERE type = 'text' AND length(value) BETWEEN 1 AND 64
+                 AND NOT value GLOB '*[^0-9A-Za-z_-]*') IS NOT NEW.source_count
+           OR json_array_length(NEW.manifest_json) IS NOT NEW.source_count;
+      -- Plain form only: ["id1","id2",...] with no escapes or whitespace. Every
+      -- referenced id therefore appears verbatim as "id" in manifest_json, which is
+      -- what makes the media_items guards' instr() pre-filter exact.
+      SELECT RAISE(ABORT, 'tsa: manifest_json must be the plain canonical form')
+        WHERE NEW.manifest_json IS NOT
+              ('["' || (SELECT group_concat(value, '","' ORDER BY key) FROM json_each(NEW.manifest_json)) || '"]');
+      SELECT RAISE(ABORT, 'tsa: manifest source missing or not in this trip')
+        WHERE EXISTS (SELECT 1 FROM json_each(NEW.manifest_json) j
+                      WHERE NOT EXISTS (SELECT 1 FROM media_items m
+                                        WHERE m.id = j.value AND m.trip_id = NEW.trip_id));
+    END;
+
+    -- Sealed rows: the only permitted UPDATE is published -> superseded with every
+    -- other column unchanged. Covers UPDATE, UPDATE OR <any>, and UPSERT DO UPDATE.
+    CREATE TRIGGER IF NOT EXISTS tsa_update_guard
+    BEFORE UPDATE ON tier_slideshow_artifacts
+    WHEN NOT (OLD.status = 'published' AND NEW.status = 'superseded'
+              AND NEW.id IS OLD.id AND NEW.trip_id IS OLD.trip_id AND NEW.category IS OLD.category
+              AND NEW.manifest_json IS OLD.manifest_json AND NEW.source_count IS OLD.source_count
+              AND NEW.manifest_sha256 IS OLD.manifest_sha256 AND NEW.file_sha256 IS OLD.file_sha256
+              AND NEW.file_size IS OLD.file_size AND NEW.rel_path IS OLD.rel_path
+              AND NEW.created_at IS OLD.created_at)
+    BEGIN
+      SELECT RAISE(ABORT, 'tsa: sealed; only published -> superseded is allowed');
+    END;
+
+    -- No direct DELETE while the owning trip exists. The ON DELETE CASCADE from trips
+    -- runs after the parent row is gone, so normal trip deletion still works.
+    CREATE TRIGGER IF NOT EXISTS tsa_delete_guard
+    BEFORE DELETE ON tier_slideshow_artifacts
+    WHEN EXISTS (SELECT 1 FROM trips WHERE id = OLD.trip_id)
+    BEGIN
+      SELECT RAISE(ABORT, 'tsa: artifacts are removed only by deleting their trip');
+    END;
+
+    -- trips: refuse an INSERT (any conflict clause, incl. UPSERT) whose id, or whose
+    -- explicit rowid, collides with a trip that owns artifacts. Without it, REPLACE
+    -- would delete that trip row and the FK cascade would silently wipe its artifacts.
+    -- Narrow by design: trips that own no artifacts are unaffected.
+    CREATE TRIGGER IF NOT EXISTS trips_artifact_owner_insert_guard
+    BEFORE INSERT ON trips
+    WHEN EXISTS (SELECT 1 FROM tier_slideshow_artifacts WHERE trip_id = NEW.id)
+      OR EXISTS (SELECT 1 FROM trips t
+                 WHERE t.rowid = NEW.rowid
+                   AND EXISTS (SELECT 1 FROM tier_slideshow_artifacts a WHERE a.trip_id = t.id))
+    BEGIN
+      SELECT RAISE(ABORT, 'trips: id/rowid collides with a trip that owns tier slideshow artifacts');
+    END;
+
+    -- trips: id and rowid are immutable (no production path changes them). Blocks
+    -- UPDATE / UPDATE OR REPLACE that would re-key a trip or overwrite another one.
+    CREATE TRIGGER IF NOT EXISTS trips_identity_guard
+    BEFORE UPDATE ON trips
+    WHEN NEW.id IS NOT OLD.id OR NEW.rowid IS NOT OLD.rowid
+    BEGIN
+      SELECT RAISE(ABORT, 'trips: id and rowid are immutable');
+    END;
+
+    -- media_items: an id referenced by any artifact manifest (published or
+    -- superseded) can never be inserted again while that artifact exists. BEFORE
+    -- INSERT runs before conflict resolution, so this covers plain INSERT, INSERT OR
+    -- REPLACE / IGNORE, REPLACE INTO and UPSERT alike: a referenced source that was
+    -- deleted stays deleted, and a live one cannot be swapped for another row.
+    -- Narrow by design: only referenced ids; the rest of the row (visibility,
+    -- status, trashing, deletion) keeps its normal lifecycle. instr() is a cheap
+    -- pre-filter (exact, given the plain manifest form); json_each confirms.
+    CREATE TRIGGER IF NOT EXISTS media_items_artifact_source_insert_guard
+    BEFORE INSERT ON media_items
+    WHEN EXISTS (SELECT 1 FROM tier_slideshow_artifacts a
+                 WHERE instr(a.manifest_json, '"' || CAST(NEW.id AS TEXT) || '"') > 0
+                   AND EXISTS (SELECT 1 FROM json_each(a.manifest_json) j
+                               WHERE j.value = CAST(NEW.id AS TEXT)))
+    BEGIN
+      SELECT RAISE(ABORT, 'media_items: id is a sealed tier slideshow source and cannot be re-inserted');
+    END;
+
+    -- media_items: a referenced id cannot be moved off its row, and no row can be
+    -- re-keyed onto a referenced id (UPDATE, UPDATE OR REPLACE, UPSERT DO UPDATE SET id).
+    CREATE TRIGGER IF NOT EXISTS media_items_artifact_source_rekey_guard
+    BEFORE UPDATE OF id ON media_items
+    WHEN NEW.id IS NOT OLD.id
+     AND EXISTS (SELECT 1 FROM tier_slideshow_artifacts a
+                 WHERE (instr(a.manifest_json, '"' || CAST(OLD.id AS TEXT) || '"') > 0
+                        AND EXISTS (SELECT 1 FROM json_each(a.manifest_json) j
+                                    WHERE j.value = CAST(OLD.id AS TEXT)))
+                    OR (instr(a.manifest_json, '"' || CAST(NEW.id AS TEXT) || '"') > 0
+                        AND EXISTS (SELECT 1 FROM json_each(a.manifest_json) j
+                                    WHERE j.value = CAST(NEW.id AS TEXT))))
+    BEGIN
+      SELECT RAISE(ABORT, 'media_items: a sealed tier slideshow source id cannot be re-keyed');
+    END;
+  `);
+
   // Cleanup zombie processing jobs (running/queued) left from previous server instance
   try {
     const now = new Date().toISOString();
