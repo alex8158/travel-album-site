@@ -26,6 +26,8 @@
  * environment of the 56 existing tests. This file mounts `myRouter` only and
  * keeps the fixture surface to what regenerate actually needs.
  */
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import request from 'supertest';
 import bcrypt from 'bcrypt';
@@ -75,9 +77,13 @@ function seedUser(overrides: Partial<{ username: string; role: string }> = {}) {
   return { id, username, role };
 }
 
+const UPLOADS_BASE = path.resolve(__dirname, '..', '..', 'uploads');
+const seededTripIds: string[] = [];
+
 function seedTrip(userId: string) {
   const db = getDb();
   const id = uuidv4();
+  seededTripIds.push(id);
   const now = new Date().toISOString();
 
   db.prepare(
@@ -127,10 +133,18 @@ function generatedCategories(): string[] {
   });
 }
 
-function successResult(name = 'video.mp4') {
+/**
+ * A successful generator run. Since C2 (G-20) regenerate publishes the generator's
+ * output file under a provenance-registered name, a "success" must leave real bytes
+ * in the staging `outputDir` it was given — exactly as the real generator does.
+ */
+function successIn(opts: { outputDir: string }, name = 'video.mp4') {
+  fs.mkdirSync(opts.outputDir, { recursive: true });
+  const outputPath = path.join(opts.outputDir, name);
+  fs.writeFileSync(outputPath, `fake-mp4:${name}`);
   return {
     success: true,
-    outputPath: `/abs/out/${name}`,
+    outputPath,
     totalDuration: 18,
     skippedPhotos: [],
   };
@@ -171,11 +185,14 @@ describe('POST /api/my/trips/:id/tier-slideshow/regenerate — terminal-state tr
     vi.clearAllMocks();
     // Default: every download succeeds, every generation succeeds.
     mockDownloadToTemp.mockImplementation(async (p: string) => `/tmp/${p.replace(/\//g, '_')}`);
-    mockGenerateSlideshow.mockResolvedValue(successResult());
+    mockGenerateSlideshow.mockImplementation(async (opts: { outputDir: string }) => successIn(opts));
   });
 
   afterEach(() => {
     closeDb();
+    for (const id of seededTripIds.splice(0)) {
+      fs.rmSync(path.join(UPLOADS_BASE, id), { recursive: true, force: true });
+    }
   });
 
   // =========================================================================
@@ -332,7 +349,7 @@ describe('POST /api/my/trips/:id/tier-slideshow/regenerate — terminal-state tr
       mockGenerateSlideshow.mockImplementation(async (opts: { outputDir: string }) =>
         opts.outputDir.includes('people')
           ? failureResult('ffmpeg exploded')
-          : successResult('animal.mp4')
+          : successIn(opts, 'animal.mp4')
       );
 
       const res = await regenerate(trip.id, token);
@@ -360,7 +377,7 @@ describe('POST /api/my/trips/:id/tier-slideshow/regenerate — terminal-state tr
 
       mockGenerateSlideshow.mockImplementation(async (opts: { outputDir: string }) => {
         if (opts.outputDir.includes('animal')) throw new Error('spawn ENOENT');
-        return successResult('people.mp4');
+        return successIn(opts, 'people.mp4');
       });
 
       const res = await regenerate(trip.id, token);

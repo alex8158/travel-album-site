@@ -6,7 +6,7 @@ import { TripRow, rowToTrip } from '../helpers/tripRow';
 import { MediaItemRow, rowToMediaItem } from '../helpers/mediaItemRow';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import { getStorageProvider } from '../storage/factory';
-import { generateSlideshow } from '../services/slideshowGenerator';
+import { publishTierSlideshow } from '../services/tierSlideshowProvenance';
 import type { GalleryImage, DuplicateGroup } from '../types';
 
 interface DuplicateGroupRow {
@@ -480,7 +480,6 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
   // Generate per-category videos (minimum 6 photos required)
   const MIN_PHOTOS_FOR_VIDEO = 6;
   const storageProvider = getStorageProvider();
-  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
   const slideshowUrls: Record<string, string> = {};
   const errors: string[] = [];
   // Eligibility is decided *before* any generation attempt, purely on the
@@ -502,16 +501,18 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
     // is a generation-attempt failure (highlight-tier 6.7), not an eligibility skip.
     eligibleCategories++;
 
-    // Download photos to temp
-    const photoPaths: string[] = [];
+    // Download photos to temp, keeping each path paired with its media id so the
+    // published manifest records exactly which sources were baked in.
+    const sources: Array<{ mediaId: string; localPath: string }> = [];
     for (const photo of photos) {
       try {
         const localPath = await storageProvider.downloadToTemp(photo.file_path);
-        photoPaths.push(localPath);
+        sources.push({ mediaId: photo.id, localPath });
       } catch (err) {
         console.warn(`[regenerate] Failed to download photo ${photo.id}: ${err}`);
       }
     }
+    const photoPaths = sources.map((s) => s.localPath);
 
     if (photoPaths.length < MIN_PHOTOS_FOR_VIDEO) {
       // The category cleared the Tier_Photo eligibility threshold, so falling
@@ -524,22 +525,21 @@ router.post('/trips/:id/tier-slideshow/regenerate', async (req: Request, res: Re
       continue;
     }
 
-    const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow', category);
-
     try {
-      const result = await generateSlideshow({
-        photoPaths,
-        audioPath: null,
-        outputDir,
+      // Generates in a staging dir, then publishes under an immutable name with a
+      // sealed source manifest (G-20). Never overwrites or deletes earlier videos.
+      const outcome = await publishTierSlideshow({
+        tripId,
+        category,
+        sources,
         photoDuration: 3,
       });
 
-      if (result.success && result.outputPath) {
-        const filename = path.basename(result.outputPath);
-        slideshowUrls[category] = `/api/trips/${tripId}/tier-slideshow/${category}/${filename}`;
-        console.log(`[regenerate] Category '${category}': video generated (${result.totalDuration}s)`);
+      if (outcome.ok) {
+        slideshowUrls[category] = outcome.url;
+        console.log(`[regenerate] Category '${category}': video generated (${outcome.totalDuration}s)`);
       } else {
-        errors.push(`${category}: ${result.error || '生成失败'}`);
+        errors.push(`${category}: ${outcome.error || '生成失败'}`);
       }
     } catch (err) {
       errors.push(`${category}: ${err instanceof Error ? err.message : String(err)}`);

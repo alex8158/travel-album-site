@@ -14,12 +14,11 @@
  *   - persistTierResults — 持久化 tier 结果
  */
 
-import path from 'path';
 import { getDb } from '../database';
 import { extractJSON, resizeForAnalysis } from './bedrockClient';
 import { detectConfiguredProviders, ProviderConfig } from './llmPairReviewer';
 import { getStorageProvider } from '../storage/factory';
-import { generateSlideshow } from './slideshowGenerator';
+import { publishTierSlideshow } from './tierSlideshowProvenance';
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -805,7 +804,6 @@ async function triggerTierSlideshow(
   }
 
   let anyGenerated = false;
-  const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
 
   // Generate per-category videos in parallel
   const categoryJobs = Object.entries(picksByCategory)
@@ -817,42 +815,46 @@ async function triggerTierSlideshow(
       return true;
     })
     .map(async ([cat, catPicks]) => {
-      // Download photos in parallel
+      // Download photos in parallel, keeping each path paired with its media id so
+      // the published manifest records exactly which sources were baked in.
       const downloadResults = await Promise.allSettled(
         catPicks.map(async (pick) => {
           const row = db
             .prepare('SELECT file_path FROM media_items WHERE id = ?')
             .get(pick.photoId) as { file_path: string } | undefined;
           if (!row) return null;
-          return storageProvider.downloadToTemp(row.file_path);
+          const localPath = await storageProvider.downloadToTemp(row.file_path);
+          return { mediaId: pick.photoId, localPath };
         })
       );
 
-      const photoPaths = downloadResults
-        .filter((r): r is PromiseFulfilledResult<string | null> => r.status === 'fulfilled')
+      const sources = downloadResults
+        .filter(
+          (r): r is PromiseFulfilledResult<{ mediaId: string; localPath: string } | null> =>
+            r.status === 'fulfilled',
+        )
         .map((r) => r.value)
-        .filter((p): p is string => p !== null);
+        .filter((s): s is { mediaId: string; localPath: string } => s !== null);
 
-      if (photoPaths.length < MIN_PHOTOS_FOR_VIDEO) {
-        console.warn(`[tierSelector] Category '${cat}': only ${photoPaths.length} downloadable photos, skipping slideshow`);
+      if (sources.length < MIN_PHOTOS_FOR_VIDEO) {
+        console.warn(`[tierSelector] Category '${cat}': only ${sources.length} downloadable photos, skipping slideshow`);
         return false;
       }
 
-      const outputDir = path.join(uploadsBase, tripId, 'tier-slideshow', cat);
-
-      const result = await generateSlideshow({
-        photoPaths,
-        audioPath: null,
-        outputDir,
+      // Staging + immutable publish with a sealed source manifest (G-20).
+      const outcome = await publishTierSlideshow({
+        tripId,
+        category: cat,
+        sources,
         photoDuration: 3,
       });
 
-      if (result.success && result.outputPath) {
-        console.log(`[tierSelector] Tier slideshow for '${cat}' generated: ${result.outputPath} (${result.totalDuration}s)`);
+      if (outcome.ok) {
+        console.log(`[tierSelector] Tier slideshow for '${cat}' generated: ${outcome.relPath} (${outcome.totalDuration}s)`);
         return true;
       }
 
-      console.error(`[tierSelector] Slideshow for '${cat}' failed: ${result.error}`);
+      console.error(`[tierSelector] Slideshow for '${cat}' failed at ${outcome.stage}: ${outcome.error}`);
       return false;
     });
 
