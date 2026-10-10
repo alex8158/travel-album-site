@@ -93,12 +93,28 @@ export function createStreamProcessor(storage: StorageProvider): StreamProcessor
       const startTime = Date.now();
 
       let readStream: Readable | null = null;
+      let readStreamClosed: Promise<void> | null = null;
+      let readStreamError: Error | null = null;
       let timedOut = false;
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
       try {
-        // Create read stream
+        // Create read stream.
+        //
+        // createReadStream opens the file asynchronously. If storage.save rejects
+        // before consuming the stream, that deferred open (or any later read) can
+        // still emit 'error' after we have given up on the stream — e.g. ENOENT
+        // once the temp file is unlinked. An 'error' with no listener is an
+        // uncaught exception, so we attach a listener right away that records the
+        // first error (it is re-checked after save, so it is never hidden), and a
+        // 'close' listener so the failure path can wait for the fd to be released
+        // before unlinking the temp file.
         readStream = createReadStream(tempFilePath);
+        const stream = readStream;
+        readStreamClosed = new Promise<void>((resolve) => stream.once('close', () => resolve()));
+        stream.on('error', (streamErr: Error) => {
+          if (!readStreamError) readStreamError = streamErr;
+        });
 
         // Use Promise.race for timeout: race storage.save against a timeout promise
         const timeoutPromise = new Promise<never>((_, reject) => {
@@ -116,6 +132,10 @@ export function createStreamProcessor(storage: StorageProvider): StreamProcessor
 
         // Clear timeout on success
         if (timeoutHandle) clearTimeout(timeoutHandle);
+
+        // A read error must fail the transfer even if storage.save resolved
+        // without observing it (our listener above would otherwise mask it).
+        if (readStreamError) throw readStreamError;
 
         const durationMs = Date.now() - startTime;
 
@@ -140,16 +160,24 @@ export function createStreamProcessor(storage: StorageProvider): StreamProcessor
         // Clear timeout
         if (timeoutHandle) clearTimeout(timeoutHandle);
 
-        // Destroy the read stream if it's still open
-        if (readStream && !readStream.destroyed) {
-          readStream.destroy();
+        // Destroy the read stream and wait until it has closed (a pending open
+        // finishes and its fd is released first) so the unlink below cannot race
+        // the stream. Late stream errors land on the listener attached above.
+        if (readStream) {
+          if (!readStream.destroyed) readStream.destroy();
+          await readStreamClosed;
         }
 
-        // Clean up temp file on error
+        // Clean up temp file on error; a cleanup failure never replaces the
+        // original error.
         try {
           await fs.unlink(tempFilePath);
-        } catch {
-          // Ignore cleanup errors during error handling
+        } catch (cleanupErr: any) {
+          if (cleanupErr?.code !== 'ENOENT') {
+            console.warn(
+              `[StreamProcessor] Failed to delete temp file after failed transfer: "${tempFilePath}": ${cleanupErr?.message}`,
+            );
+          }
         }
 
         // Wrap error with context
