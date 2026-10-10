@@ -1,0 +1,126 @@
+name: Acceptance (tests only, no deploy)
+
+# Remote test runs for acceptance branches. This workflow only builds and tests:
+# it has no deploy step, reads no secrets and sends no notifications.
+# Production deployment stays in deploy.yml (push to main only) and is unchanged.
+on:
+  push:
+    branches: ['acceptance/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: server suite (run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # The real-ffmpeg C2 test must run and never be skipped, so
+      # ALLOW_MISSING_FFMPEG is deliberately not set anywhere in this job.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Record versions
+        run: |
+          echo "sha=${GITHUB_SHA}"
+          echo "node=$(node --version) npm=$(npm --version)"
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: Install server dependencies
+        run: cd server && npm ci
+
+      - name: Typecheck server
+        run: cd server && npx tsc --noEmit
+
+      - name: Run full server suite
+        run: |
+          set -o pipefail
+          cd server
+          npx vitest --run --reporter=default --reporter=json --outputFile=vitest-results.json 2>&1 | tee vitest-output.log
+
+      - name: Prove the real-ffmpeg test executed and passed
+        if: always()
+        run: |
+          cd server
+          node -e '
+            const fs = require("fs");
+            if (!fs.existsSync("vitest-results.json")) { console.error("vitest-results.json missing"); process.exit(1); }
+            const r = JSON.parse(fs.readFileSync("vitest-results.json", "utf8"));
+            console.log(`totals: suites=${r.numTotalTestSuites} tests=${r.numTotalTests} passed=${r.numPassedTests} failed=${r.numFailedTests} pending=${r.numPendingTests} todo=${r.numTodoTests}`);
+            const f = r.testResults.find((t) => t.name.endsWith("tierSlideshowProvenance.ffmpeg.test.ts"));
+            if (!f) { console.error("real-ffmpeg test file not found in results"); process.exit(1); }
+            for (const a of f.assertionResults) console.log(`ffmpeg test: ${a.status}  ${a.fullName}`);
+            const ok = f.assertionResults.length >= 2 && f.assertionResults.every((a) => a.status === "passed");
+            if (!ok) { console.error("real-ffmpeg test did not execute and pass in full"); process.exit(1); }
+            for (const t of r.testResults) for (const a of t.assertionResults) {
+              if (a.status === "failed") console.log(`FAILED: ${t.name} > ${a.fullName}`);
+            }
+          '
+
+      - name: Upload server logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-run-${{ matrix.run }}-${{ github.sha }}
+          path: |
+            server/vitest-output.log
+            server/vitest-results.json
+          if-no-files-found: warn
+
+  client:
+    name: client tsc, tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Record versions
+        run: |
+          echo "sha=${GITHUB_SHA}"
+          echo "node=$(node --version) npm=$(npm --version)"
+
+      - name: Install client dependencies
+        run: cd client && npm ci
+
+      - name: Typecheck client
+        run: cd client && npx tsc -b
+
+      - name: Run client tests
+        run: |
+          set -o pipefail
+          cd client
+          npx vitest --run 2>&1 | tee vitest-output.log
+
+      - name: Build client
+        run: cd client && npm run build
+
+      - name: Upload client logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-${{ github.sha }}
+          path: client/vitest-output.log
+          if-no-files-found: warn
