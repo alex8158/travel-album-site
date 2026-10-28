@@ -243,6 +243,11 @@
 > - owner/admin：已登记分类只读 published 行，不回退；未登记分类保持原有选择，只排除 `tsa_*`。
 > - 回滚边界：只回退读取代码时，落回 C1 的 `{}` / 404。
 > - 关闭 G-20 之前还缺两项：CI 上真实 ffmpeg 测试实际通过（尚未 push，没有 CI 结果），以及浏览器实测（未进行）。
+>
+> **2026-10-28 更新（C2 验收）**：上段所列两项均已有通过证据，本条 C2 实现**已验收**。
+> - CI：run https://github.com/alex8158/travel-album-site/actions/runs/38045557514 ，SHA `c17be30`，3 个 server job 与 client 检查全部 success，真实 ffmpeg 用例 2/2 实际执行并通过。
+> - 浏览器：在 `c17be30` 的隔离环境中用 headless Chrome 156 实测，54 行全部 PASS（public 与 unlisted；owner、admin、普通 non-owner、匿名的播放与 seek；源照片转 private、进入 trash、永久删除后对原视频 URL 与页面重新获取 URL 的拒绝；禁用缓存，无旧版本回退）。记录见 `acceptance/c2-browser-acceptance.md`。
+> - 验收范围只限本条 tier slideshow 读取规则。G-22 的部署配置、G-21、merged 视频可见性、孤儿文件清理与性能遗留项不在范围内，状态不变。
 
 ## 需求 10：密码与账户自服务
 
@@ -380,6 +385,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 - 上段的 stale exposure 路径在代码层面已关闭：source 转 private、trashed、删除后，下一次请求即不可曝光，不依赖失效处理。
 - 关闭前还缺两项：CI 上真实 ffmpeg 测试实际通过（尚未 push），以及浏览器实测（未进行）。
 
+2026-10-28（C2 验收）：上段所缺两项均已有通过证据，本条（tier slideshow 部分）**已关闭、已验收**。CI run https://github.com/alex8158/travel-album-site/actions/runs/38045557514 在 `c17be30` 全部 success；浏览器实测 54 行全部 PASS，见 `acceptance/c2-browser-acceptance.md`。下方「已知遗留」与 merged 视频附注不随本条关闭，仍然开放。
+
 已知遗留：
 - 失败尝试的 staging 内容与孤儿文件会累积，清理未获批准；
 - `media_items` 身份防护的开销随 artifact 行数线性增长，1 000 行时每次插入约多 1.2 ms；
@@ -481,7 +488,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面 |
-| P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理 |
+| P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
 | P1 | G-4 | 凭证进版本库，建议改为环境变量注入 + 首登强制改密 |

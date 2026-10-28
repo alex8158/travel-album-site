@@ -134,6 +134,7 @@ Implement a second curation pass that selects the absolute best photos per categ
     - Fetch tier slideshow URL from public tier photos endpoint
     - Display the tier slideshow video prominently in the gallery layout
     - Do not gate this on `trips.visibility` in the UI. For a non-owner on a non-public trip the video is absent because the API withholds slideshow URLs; since C1 (2026-10-06) that holds for a non-owner, non-admin requester on any trip. Since C2 (2026-10-09) such a requester gets only videos that pass the provenance check in `multi-user-system` 需求 9 AC 15. The API side remains the enforcement point. Owner/admin playback goes through `AuthorizedVideo`, which fetches the file with the Authorization header, because a plain `<video src>` cannot send it. It is a transitional gate: the target rule is `multi-user-system` 需求 9 AC 15, to be implemented after G-20
+    - Status 2026-10-28 (C2 accepted): CI run https://github.com/alex8158/travel-album-site/actions/runs/38045557514 passed at `c17be30`, and the real-browser acceptance passed all 54 rows, including `AuthorizedVideo` playback and seek for owner/admin and blocking for anonymous and non-owner requesters (see `multi-user-system/acceptance/c2-browser-acceptance.md`).
     - _Requirements: 8.1, 8.2, 8.3_
 
 - [x] 11. Final checkpoint - Ensure all tests pass

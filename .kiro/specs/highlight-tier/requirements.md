@@ -140,6 +140,7 @@ The existing refusal on `unlisted` trips is a transitional gate. It stays in pla
 Status 2026-10-06 (C1): the transitional gate now covers **public trips too**. For a non-owner, non-admin requester on any trip, `slideshowUrls` is `{}` and both `/api` file routes return 404. This is stricter than the target, and it still is not the target. The gate covers the `/api` routes only; the `/uploads` static route is tracked separately as `multi-user-system` G-22.
 
 Status 2026-10-09 (C2): the transitional gate is replaced in code by the `multi-user-system` 需求 9 AC 15 rule (implemented, not yet accepted — CI and browser checks outstanding, see G-20). AC 9 of Requirement 6 is unchanged; "available" still means enumerated to the current requester.
+Status 2026-10-28 (C2 accepted): both outstanding checks now have passing evidence. CI run https://github.com/alex8158/travel-album-site/actions/runs/38045557514 succeeded at `c17be30`, and the real-browser acceptance passed all 54 rows (see `multi-user-system/acceptance/c2-browser-acceptance.md`). C2 is accepted; the tier slideshow part of G-20 is closed.
 
 #### Correction Note (2026-09-09)
 
