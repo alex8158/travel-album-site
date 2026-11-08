@@ -13,6 +13,7 @@
 
 import { useEffect, useCallback } from 'react';
 import type { SimilarGroup } from '../api';
+import AuthorizedImage from './AuthorizedImage';
 
 export interface SimilarGroupPanelProps {
   group: SimilarGroup;
@@ -153,7 +154,7 @@ export default function SimilarGroupPanel({ group, photos, onClose }: SimilarGro
                     boxShadow: isBest ? '0 0 12px rgba(255, 193, 7, 0.5)' : 'none',
                   }}
                 >
-                  <img
+                  <AuthorizedImage
                     src={photo.thumbnailUrl}
                     alt={isBest ? '推荐保留的最佳照片' : '相似组成员照片'}
                     loading="lazy"

@@ -691,7 +691,12 @@ describe('GalleryPage', () => {
       expect(screen.queryByTestId('tier-slideshow-section')).toBeNull();
       expect(screen.queryByTestId('tier-slideshow-video')).toBeNull();
       // With no URLs (what AC 4 requesters receive) no video file is requested.
-      expect(videoFetch).not.toHaveBeenCalled();
+      // Since G-21 thumbnails are also fetched (AuthorizedImage); those image
+      // requests are not video files and are excluded from this check.
+      const nonThumbnailCalls = videoFetch.mock.calls.filter(
+        (c) => !/^\/api\/media\/[^/]+\/thumbnail$/.test(String(c[0])),
+      );
+      expect(nonThumbnailCalls).toHaveLength(0);
     });
 
     it('hides highlight grid and shows tier content when switching to "精华" tab', async () => {

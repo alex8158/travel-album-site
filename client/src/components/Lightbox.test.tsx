@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Lightbox, { LightboxImage } from './Lightbox';
 
@@ -37,11 +37,28 @@ describe('Lightbox', () => {
     expect(dialog).toHaveAttribute('aria-label', '图片灯箱');
   });
 
-  it('displays the current image at original resolution', () => {
-    setup(1);
-    const img = screen.getByTestId('lightbox-image');
-    expect(img).toHaveAttribute('src', '/api/media/img-2/original');
-    expect(img).toHaveAttribute('alt', 'photo2.jpg');
+  // Media-route URLs are fetched with the bearer token and shown from a blob
+  // (multi-user-system G-21), so the <img> src is the object URL.
+  it('displays the current image at original resolution', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true, status: 200, blob: async () => ({ from: String(input) }),
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    // The test runtime's own localStorage is not usable; authFetch reads it.
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0 });
+    const create = vi.fn((b: { from: string }) => `blob:${b.from}`);
+    globalThis.URL.createObjectURL = create as unknown as typeof URL.createObjectURL;
+    globalThis.URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+    try {
+      setup(1);
+      await waitFor(() =>
+        expect(screen.getByTestId('lightbox-image')).toHaveAttribute('src', 'blob:/api/media/img-2/original'),
+      );
+      expect(String(fetchMock.mock.calls[0][0])).toBe('/api/media/img-2/original');
+      expect(screen.getByTestId('lightbox-image')).toHaveAttribute('alt', 'photo2.jpg');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('calls onClose when close button is clicked', async () => {

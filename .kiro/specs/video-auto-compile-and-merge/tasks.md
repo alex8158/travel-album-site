@@ -86,6 +86,7 @@
     - 修改视频查询 SQL，仅返回 `compiled_path IS NOT NULL OR media_source = 'merged'` 的视频
     - 对于有 `compiled_path` 的视频，在响应中包含 `compiledUrl` 字段
     - _Requirements: 3.1, 3.2, 3.3, 3.4_
+    - 2026-10-29 注：非所有者请求的 merged 隐藏由 multi-user-system G-21 改动（需求 9 AC 18），不属本任务；本任务勾选状态不变。见 requirements.md Requirement 3 同日注记
 
   - [ ]* 6.3 编写 Gallery API 视频过滤测试
     - 验证公开画廊不返回无 compiled_path 的原始视频

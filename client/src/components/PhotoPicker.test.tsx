@@ -20,7 +20,7 @@
  * Likewise Requirement 2.1's click-on-Empty_Slot half belongs to MyGalleryPage;
  * here we lock the half PhotoPicker owns — the `open` prop gating visibility.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PhotoPicker from './PhotoPicker';
@@ -59,9 +59,22 @@ function renderPicker(props: Partial<React.ComponentProps<typeof PhotoPicker>> =
 }
 
 describe('PhotoPicker', () => {
+  let thumbFetch: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGetHighlightPool.mockResolvedValue({ photos: [] });
+    thumbFetch = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true, status: 200, blob: async () => ({ from: String(input) }),
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', thumbFetch);
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0 });
+    globalThis.URL.createObjectURL = vi.fn((b: { from: string }) => `blob:${b.from}`) as unknown as typeof URL.createObjectURL;
+    globalThis.URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   // =========================================================================
@@ -175,11 +188,12 @@ describe('PhotoPicker', () => {
       renderPicker();
 
       await screen.findByTestId('photo-picker-grid');
-      expect(screen.getByAltText('landscape')).toHaveAttribute(
-        'src',
-        '/api/media/p1/thumbnail'
-      );
-      expect(screen.getByAltText('照片')).toHaveAttribute('src', '/api/media/p2/thumbnail');
+      // Thumbnails load through AuthorizedImage (G-21): fetched, shown from a blob.
+      expect(await screen.findByAltText('landscape')).toHaveAttribute('src', 'blob:/api/media/p1/thumbnail');
+      expect(await screen.findByAltText('照片')).toHaveAttribute('src', 'blob:/api/media/p2/thumbnail');
+      expect(thumbFetch.mock.calls.map((c) => String(c[0])).sort()).toEqual([
+        '/api/media/p1/thumbnail', '/api/media/p2/thumbnail',
+      ]);
     });
   });
 

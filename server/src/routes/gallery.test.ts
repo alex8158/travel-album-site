@@ -232,15 +232,63 @@ describe('GET /api/trips/:id/gallery', () => {
     expect(JSON.stringify(res.body)).not.toContain(`/api/media/${vidId}/compiled`);
   });
 
+  // Requested as the owner: since G-21 (需求 9 AC 18) merged videos are listed
+  // only for owner/admin, so the compiledUrl check has to run on that view.
   it('should not emit a compiledUrl field for merged videos without a compiled_path', async () => {
     const tripId = createTrip(owner.userId);
     createMediaItem(tripId, 'video', { mediaSource: 'merged' });
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(app)
+      .get(`/api/trips/${tripId}/gallery`)
+      .set('Authorization', `Bearer ${owner.token}`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
     expect(res.body.videos[0]).not.toHaveProperty('compiledUrl');
     expect(JSON.stringify(res.body)).not.toContain('/compiled');
+  });
+
+  describe('merged videos (G-21, 需求 9 AC 18)', () => {
+    it('hides public merged videos from anonymous and non-owner requesters, keeps them for owner and admin', async () => {
+      const tripId = createTrip(owner.userId);
+      const plainVid = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/a.mp4` });
+      const mergedVid = createMediaItem(tripId, 'video', {
+        mediaSource: 'merged', compiledPath: `${tripId}/merged/m.mp4`,
+      });
+      const other = createTestUser('regular');
+      const admin = createTestUser('admin');
+
+      const anon = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const nonOwner = await request(app)
+        .get(`/api/trips/${tripId}/gallery`).set('Authorization', `Bearer ${other.token}`);
+      for (const res of [anon, nonOwner]) {
+        expect(res.status).toBe(200);
+        expect(res.body.videos.map((v: { id: string }) => v.id)).toEqual([plainVid]);
+      }
+
+      for (const token of [owner.token, admin.token]) {
+        const res = await request(app)
+          .get(`/api/trips/${tripId}/gallery`).set('Authorization', `Bearer ${token}`);
+        expect(res.status).toBe(200);
+        expect(res.body.videos.map((v: { id: string }) => v.id).sort()).toEqual([plainVid, mergedVid].sort());
+      }
+    });
+
+    it('treats NULL media_source as an upload and keeps NULL processing_status videos for non-owners', async () => {
+      const tripId = createTrip(owner.userId);
+      const vid = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/a.mp4` });
+      getDb().prepare('UPDATE media_items SET media_source = NULL, processing_status = NULL WHERE id = ?').run(vid);
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.body.videos.map((v: { id: string }) => v.id)).toEqual([vid]);
+    });
+
+    it('hides empty-string compiled_path videos from non-owners', async () => {
+      const tripId = createTrip(owner.userId);
+      createMediaItem(tripId, 'video', { compiledPath: '' });
+
+      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      expect(res.body.videos).toHaveLength(0);
+    });
   });
 
   describe('visibility filtering', () => {

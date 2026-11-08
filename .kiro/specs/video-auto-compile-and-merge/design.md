@@ -351,6 +351,8 @@ interface MyGalleryResponse {
 
 **Validates: Requirements 3.1, 3.2, 3.3, 3.4**
 
+> **2026-10-29 限定（multi-user-system G-21，需求 9 AC 18）**：上述 Property 原文保留，现只对所有者与管理员成立。对其他请求者，公开画廊返回的是 `compiled_path` 非空且非空串、`media_source` 不是 `'merged'`（NULL 视为 `'upload'`）、`processing_status` 不是 `uploading` / `cancelled`（NULL 与历史默认 `none` 通过）的视频。merged 视频被隐藏是 Requirement 3 AC 3 的限定（见 requirements.md 同日注记）。
+
 ### Property 4: 合并选择验证
 
 *For any* merge request containing a list of source media IDs, the system SHALL reject the request if any source video lacks a `compiled_path`, and SHALL accept the request only when all source videos have a non-null `compiled_path`.

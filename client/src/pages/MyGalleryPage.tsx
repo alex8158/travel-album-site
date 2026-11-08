@@ -18,6 +18,7 @@ import HighlightBadge from '../components/HighlightBadge';
 import SimilarGroupPanel from '../components/SimilarGroupPanel';
 import PhotoPicker from '../components/PhotoPicker';
 import AuthorizedVideo from '../components/AuthorizedVideo';
+import AuthorizedImage from '../components/AuthorizedImage';
 import { useAuth, authFetch } from '../contexts/AuthContext';
 import {
   updateCategory,
@@ -1214,7 +1215,8 @@ export default function MyGalleryPage() {
                           position: 'relative',
                         }}
                       >
-                        <img
+                        <AuthorizedImage
+                          loading="lazy"
                           src={photo.thumbnailUrl}
                           alt={photo.category || '精华照片'}
                           style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -1365,7 +1367,8 @@ export default function MyGalleryPage() {
                   aria-label={multiSelectMode ? `选择 ${img.item.originalFilename}` : `查看 ${img.item.originalFilename}`}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') multiSelectMode ? toggleSelect(img.item.id) : setLightboxIndex(idx); }}
                 >
-                  <img
+                  <AuthorizedImage
+                    loading="lazy"
                     src={img.thumbnailUrl}
                     alt={img.item.originalFilename}
                     style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -1620,7 +1623,8 @@ export default function MyGalleryPage() {
                   }}
                 >
                   {video.thumbnailUrl ? (
-                    <img
+                    <AuthorizedImage
+                      loading="lazy"
                       src={video.thumbnailUrl}
                       alt={video.originalFilename}
                       style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -1775,7 +1779,8 @@ export default function MyGalleryPage() {
                   }}
                 >
                   {video.thumbnailUrl ? (
-                    <img
+                    <AuthorizedImage
+                      loading="lazy"
                       src={video.thumbnailUrl}
                       alt={video.originalFilename}
                       style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -1980,7 +1985,8 @@ export default function MyGalleryPage() {
                   background: '#fff5f5',
                 }}
               >
-                <img
+                <AuthorizedImage
+                  loading="lazy"
                   src={item.thumbnailUrl}
                   alt={item.originalFilename}
                   style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -2030,6 +2036,7 @@ export default function MyGalleryPage() {
         >
           <div style={{ width: '90%', maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
             <VideoPlayer
+              authorized
               videoUrl={`/api/media/${selectedVideoId}/original`}
               mimeType={videos.find(v => v.id === selectedVideoId)?.mimeType || 'video/mp4'}
               onClose={() => setSelectedVideoId(null)}
@@ -2392,7 +2399,7 @@ export default function MyGalleryPage() {
                     borderRadius: '4px', cursor: 'pointer', background: 'none', overflow: 'hidden',
                   }}
                 >
-                  <img src={img.thumbnailUrl} alt={img.item.originalFilename} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
+                  <AuthorizedImage loading="lazy" src={img.thumbnailUrl} alt={img.item.originalFilename} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
                 </button>
               ))}
             </div>
@@ -2443,7 +2450,7 @@ export default function MyGalleryPage() {
                       borderRadius: '4px', cursor: 'pointer', background: 'none', overflow: 'hidden',
                     }}
                   >
-                    <img src={img.thumbnailUrl} alt={img.originalFilename} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
+                    <AuthorizedImage loading="lazy" src={img.thumbnailUrl} alt={img.originalFilename} style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }} />
                   </button>
                 ))}
               </div>

@@ -5,6 +5,7 @@ import Lightbox from '../components/Lightbox';
 import ImageEditor from '../components/ImageEditor';
 import VideoPlayer from '../components/VideoPlayer';
 import AuthorizedVideo from '../components/AuthorizedVideo';
+import AuthorizedImage from '../components/AuthorizedImage';
 import { getTierPhotos, getHighlightPhotos, TierPhotoItem } from '../api';
 
 export interface GalleryTrip {
@@ -247,7 +248,8 @@ export default function GalleryPage() {
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
               >
-                <img
+                <AuthorizedImage
+                  loading="lazy"
                   src={photo.thumbnailUrl}
                   alt={photo.category || '精选照片'}
                   style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -303,7 +305,8 @@ export default function GalleryPage() {
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setLightboxIndex(idx); }}
                   >
-                    <img
+                    <AuthorizedImage
+                      loading="lazy"
                       src={photo.thumbnailUrl}
                       alt={photo.category || '精华照片'}
                       style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}
@@ -363,7 +366,8 @@ export default function GalleryPage() {
                 }}
               >
                 {video.thumbnailUrl ? (
-                  <img
+                  <AuthorizedImage
+                    loading="lazy"
                     src={video.thumbnailUrl}
                     alt={video.originalFilename}
                     style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', display: 'block' }}

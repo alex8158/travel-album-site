@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, authFetch } from '../contexts/AuthContext';
+import AuthorizedImage from '../components/AuthorizedImage';
 
 interface Trip {
   id: string;
@@ -96,7 +97,7 @@ export default function UserSpacePage() {
           {trips.map((trip) => (
             <article key={trip.id} className="trip-card">
               <Link to={`/my/trips/${trip.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                <img
+                <AuthorizedImage
                   src={trip.coverImageUrl}
                   alt={`${trip.title} 封面`}
                   style={{ width: '100%', height: '180px', objectFit: 'cover' }}

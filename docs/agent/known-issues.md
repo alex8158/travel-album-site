@@ -256,6 +256,20 @@ Before changing deployment or runtime scripts, inspect current deployment files,
 
 Deployment changes are high risk and should pause for explanation before implementation.
 
+## 12a. Random supertest ETIMEDOUT / ECONNRESET / foreign 404 on macOS
+
+### Symptom
+
+Server tests fail at random, a different set on each run: about 8 s `ETIMEDOUT`, `read ECONNRESET`, or a 404 whose body is `{}` or `Not Found`. The failures go away when the file is re-run alone. HEAD shows them too.
+
+### Cause (reproduced on the development Mac, 2026-11-02)
+
+`request(app)` makes supertest call `app.listen(0)`, which binds the dual-stack `::` wildcard, but then it connects to `127.0.0.1:<port>`. On that machine the OS handed out ephemeral ports that another local process (editors, Electron apps, helpers) already held on `127.0.0.1`, and the requests went to those processes. In a standalone experiment, 140 of 3000 `::` listeners failed this way; 0 of 3000 failed when bound to `127.0.0.1`. This was reproduced on one machine only; it has not been checked on other macOS setups or on CI. Two earlier failures closely match this mechanism, but they were logged without the port or response headers and could not be confirmed one by one. Evidence: `travel-album-acceptance/g21/20261102T023422Z/round2/port-experiment/`.
+
+### Rule
+
+Do not treat these failures as product bugs, or as passes, without the response headers or an error with the port. Do not fix them by retrying, lengthening timeouts, or sharing one server. A per-request server bound to `127.0.0.1` avoids the problem; see `local()` in `server/src/routes/mediaServing.test.ts`. The other test files still use the default and remain exposed.
+
 ## 13. What Agents Should Update Here
 
 Agents should update this file when they discover:

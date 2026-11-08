@@ -58,6 +58,44 @@ describe('VideoPlayer', () => {
     expect(source!.getAttribute('src')).toBe('/api/media/v2/original');
   });
 
+  it('default mode never fetches: plain <source src> keeps Range streaming', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(<VideoPlayer videoUrl="/api/media/v1/original" mimeType="video/mp4" />);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('authorized mode fetches with the token only when mounted and plays the blob; close aborts and revokes', async () => {
+    const store = new Map<string, string>([['auth_token', 'owner-token']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k), clear: () => store.clear(), key: () => null, length: 0,
+    });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      ({ ok: true, status: 200, blob: async () => ({}) }) as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const revoke = vi.fn();
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:owner-video') as unknown as typeof URL.createObjectURL;
+    globalThis.URL.revokeObjectURL = revoke as unknown as typeof URL.revokeObjectURL;
+    try {
+      const { unmount } = render(<VideoPlayer authorized videoUrl="/api/media/v9/original" mimeType="video/mp4" />);
+      const video = await screen.findByTestId('video-element');
+      expect(video.getAttribute('src')).toBe('blob:owner-video');
+      expect(video.querySelector('source')).toBeNull();
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer owner-token');
+      unmount();
+      expect((init.signal as AbortSignal).aborted).toBe(true);
+      expect(revoke).toHaveBeenCalledWith('blob:owner-video');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('contains fallback text for unsupported browsers', () => {
     render(<VideoPlayer videoUrl="/api/media/v1/original" mimeType="video/mp4" />);
     const video = screen.getByTestId('video-element');

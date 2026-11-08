@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { getHighlightPool, TierPhotoItem } from '../api';
+import AuthorizedImage from './AuthorizedImage';
 
 export interface PhotoPickerProps {
   tripId: string;
@@ -178,7 +179,8 @@ export default function PhotoPicker({ tripId, open, onClose, onSelect }: PhotoPi
                   (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent';
                 }}
               >
-                <img
+                <AuthorizedImage
+                  loading="lazy"
                   src={photo.thumbnailUrl}
                   alt={photo.category || '照片'}
                   style={{

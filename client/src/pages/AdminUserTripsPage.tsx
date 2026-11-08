@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { authFetch } from '../contexts/AuthContext';
+import AuthorizedImage from '../components/AuthorizedImage';
 
 interface Trip {
   id: string;
@@ -85,7 +86,7 @@ export default function AdminUserTripsPage() {
                 >
                   {trip.visibility === 'public' ? '公开' : '不公开'}
                 </span>
-                <img
+                <AuthorizedImage
                   src={trip.coverImageUrl}
                   alt={`${trip.title} 封面`}
                   style={{ width: '100%', height: '180px', objectFit: 'cover' }}

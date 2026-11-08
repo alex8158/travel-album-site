@@ -161,7 +161,6 @@
 5. WHEN 目标旅行不存在时, THE 系统 SHALL 返回 404，错误码 `NOT_FOUND`
 6. THE 系统 SHALL 在素材与回收站相关路由（`routes/media.ts`、`routes/trash.ts`）中同样执行 Owner_Or_Admin_Rule 并使用 `FORBIDDEN` 错误码
 7. THE 系统 SHALL 统一以 `FORBIDDEN` 作为越权访问的错误码（不区分资源类型）
-
 ## 需求 8：个人空间接口
 
 **用户故事：** 作为用户，我需要看到自己的全部旅行，包括未公开的内容。
@@ -187,7 +186,7 @@
 3. THE 系统 SHALL 允许未登录访问者调用 `GET /api/trips/:id/gallery`
 4. WHEN 请求者不是所有者也不是管理员时, THE 系统 SHALL 对素材查询追加 `AND m.visibility = 'public'`
 5. WHEN 请求者是所有者或管理员时, THE 系统 SHALL 不追加素材可见性过滤
-6. THE 系统 SHALL 在公开视频查询中额外要求 `compiled_path IS NOT NULL OR media_source = 'merged'`，即公开画廊只呈现剪辑后或合并后的视频
+6. THE 系统 SHALL 在公开视频查询中额外要求 `compiled_path IS NOT NULL OR media_source = 'merged'`，即公开画廊只呈现剪辑后或合并后的视频（2026-10-29 限定：对非所有者另排除 merged 视频与空串 `compiled_path`，见 AC 18；展示资格不等于可曝光）
 7. THE 系统 SHALL 限定 `trips.visibility` 的可写取值为 `public` 与 `unlisted`，非法值返回 400，错误码 `INVALID_VISIBILITY`
 8. THE 系统 SHALL 限定 `media_items.visibility` 的可写取值为 `public` 与 `private`
 9. THE 系统 SHALL 把 Trip_Visibility 视为可发现性控制而非访问控制：Public_Trip 既可从公开列表发现也可通过直接链接访问；Unlisted_Trip 不可从公开列表发现但可通过直接链接访问。公开列表的过滤由 AC 1 实现
@@ -249,6 +248,45 @@
 > - 浏览器：在 `c17be30` 的隔离环境中用 headless Chrome 156 实测，54 行全部 PASS（public 与 unlisted；owner、admin、普通 non-owner、匿名的播放与 seek；源照片转 private、进入 trash、永久删除后对原视频 URL 与页面重新获取 URL 的拒绝；禁用缓存，无旧版本回退）。记录见 `acceptance/c2-browser-acceptance.md`。
 > - 验收范围只限本条 tier slideshow 读取规则。G-22 的部署配置、G-21、merged 视频可见性、孤儿文件清理与性能遗留项不在范围内，状态不变。
 
+### 媒体文件入口（AC 16–23，2026-10-29 裁定，G-21）
+
+以下八条约束 `GET`/`HEAD` `/api/media/:id/thumbnail`、`/api/media/:id/original`（含 `?original=true`）、`/api/media/:id/raw`，覆盖本地存储与 S3 两个分支，以及 Range 与条件请求。**AC 4 所指的请求者**下文简称「非所有者」，匿名与已登录普通用户适用同一规则。「所有者」指 `trips.user_id` 对应的账户，与 `routes/gallery.ts`、`routes/uploadsAccess.ts` 口径一致。
+
+依据分两类：
+- **已有条款**：AC 4、AC 5（曝光主规则）；AC 6（视频展示资格）；AC 7、AC 8（取值）；AC 12、AC 14（Derived_Artifact 须证明全部来源可曝光，provenance 不完整即不可曝光）。
+- **本轮新增裁定**：AC 16–23 本身。它们只覆盖上述三条文件入口，不得被引用为其他路由的依据。
+
+| 裁定 | AC | 内容 |
+| --- | --- | --- |
+| N1 | 16 | 入口范围与逐请求判定 |
+| N2 | 17 | 媒体状态 |
+| N3 | 18 | 原始入口、视频资格与 merged |
+| N4 | 19 | trip 条件 |
+| N5 | 20 | 拒绝响应 |
+| N6 | 21 | 缓存 |
+| N7 | 22 | 授权先于副作用 |
+| N8 | 23 | S3 分支 |
+
+16. THE 系统 SHALL 把上述三条文件入口视为曝光面，对每次请求按 AC 4、AC 5、AC 6、AC 12–14 与 AC 17–19 **独立**判定，SHALL NOT 以「该 id 曾由列表响应返回」作为放行依据。owner/admin 身份只来自 Auth_Middleware 解析的 `Authorization: Bearer`；令牌缺失或无效按匿名处理
+17. THE 系统 SHALL 按 `media_items.status` 判定：`deleted`（已永久删除）及 `active`/`trashed` 以外的任何取值，对**所有人**（含 admin）返回 404；所有者与管理员可访问 `active` 与 `trashed`（包括回收站缩略图）；非所有者只可访问 `active` 且 `visibility = 'public'` 的媒体。本条只约束文件入口，rejected / trashed / 永久删除 / 不进精选输出 四个概念的其他语义不变
+18. THE 系统 SHALL 对非所有者执行：
+    - `/raw` 与 `/original?original=true`（查询值恰为 `'true'` 时先归类为原始入口，再判定）一律 404，对 public 媒体亦然；
+    - 普通视频须 `compiled_path` 非空且非空串，且 `processing_status` 不为 `uploading`/`cancelled`（NULL 与历史默认值 `none` 视为通过）；还须 compiled **文件实际存在**；只返回 compiled 文件，SHALL NOT 回退到 preview proxy 或原始上传；任一条件不满足时 `/original` 与 `/thumbnail` 均 404；
+    - merged 视频（`media_source = 'merged'`）一律 404，列表侧 `GET /api/trips/:id/gallery` 亦不返回。依据 AC 12、AC 14：`merged_video_sources` 目前无法证明来源集合完整（见 G-20 附注 2026-10-29），只能 fail-closed。这是**降级策略**，不代表已实现来源校验；
+    - 图片保持既有展示文件选择（optimized 存在则用之，否则原图）。这**不是**原图或 EXIF/GPS 隔离；本条不做元数据清理。
+
+    所有者与管理员的文件选择保持不变（含 proxy 与原图回退、`?original=true`）
+19. THE 系统 SHALL 要求关联 trip 行存在：trip 行缺失时对**所有人**（含 admin）返回 404。trip 存在但 `visibility` 不属于 AC 7 的两个取值（含空串；数据库无 CHECK 约束，见 G-13）时，非所有者 404，所有者与管理员按 AC 17 判定。`public` 与 `unlisted` 对非所有者待遇完全相同
+    > 与术语 Trip_Visibility 的关系：Trip_Visibility 仍只控制可发现性，两个合法取值之间不产生任何访问差别。本条是有效性检查：trip 缺失或取值不合法时 fail-closed，不是按取值区分访问权限。
+20. THE 系统 SHALL 对「媒体不存在」与「被拒绝」返回同一响应：HTTP 404，body `{ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } }`，不使用 401/403，以免响应区分媒体是否存在。这是需求 7 AC 7 在这三条文件入口上的例外；其他业务 API 的 403 `FORBIDDEN` 不变。获准访问后文件缺失可返回 404 `FILE_NOT_FOUND`（只有获准者能看到）
+21. THE 系统 SHALL 在这三条入口的**所有**响应（200、206、302、304、404、500）上设置 `Cache-Control: private, no-store`，并以合并方式追加 `Vary: Authorization`，SHALL NOT 覆盖已有 Vary 值。条件请求 SHALL 先完成 AC 16–19 的判定，之后才可能得到 304
+    > 新响应头不能清除此前以 `public, max-age=86400`（缩略图）/ `public, max-age=3600`（本地 original）下发、已被浏览器或共享缓存保存的副本；应用层通过不等于线上历史缓存已清除。
+22. THE 系统 SHALL 在完成判定之后才执行任何存储检查、下载、缩略图生成、`UPDATE media_items`、签名、302、206 或 304。被拒请求 SHALL NOT 触发这些操作。获准访问的非所有者请求可保留按需生成缩略图
+23. WHEN `STORAGE_TYPE = 's3'` 时, THE 系统 SHALL 先完成判定再签名与 302；非所有者视频先确认 compiled 文件存在再签名。签名有效期保持 `expiresIn: 3600`（`storage/s3Provider.ts`），未签名 `ResponseCacheControl`
+    > 3600 秒是**已签发 URL 可用于发起请求的期限**，不是内容撤销上限：对象响应的缓存行为取决于对象元数据与中间缓存（未核实），已下载的副本可能保留更久。线上 bucket ACL、CDN、nginx 与实际存储模式未核实，G-22 部署部分继续开放。COS/OSS 模式不走 302，经 `downloadToTemp` 由服务端中转，同受 AC 16–22 约束。
+
+> **AC 16–23 状态（2026-10-29）**：已实施、**未验收**。实现：`server/src/helpers/mediaFileAccess.ts`（只读加载 `loadMediaFileAccessRow` + 纯判定 `decideMediaFileAccess` + 入口归类 `classifyMediaFileEntry`）、`server/src/routes/mediaServing.ts`、`server/src/routes/gallery.ts`（非所有者 merged 列表联动）；客户端以 `AuthorizedImage` / `VideoPlayer authorized` 携带 Bearer。浏览器验收、线上部署复核均未进行。
+
 ## 需求 10：密码与账户自服务
 
 **用户故事：** 作为用户，我希望能修改自己的密码，也能注销账户。
@@ -305,6 +343,7 @@
 5. THE 系统 SHALL 在 `routes/trips.test.ts`、`media.test.ts`、`trash.test.ts`、`gallery.test.ts` 中附带覆盖越权 403 行为
 6. THE 客户端 SHALL 目前**没有**针对 AuthContext 与 ProtectedRoute 的专门测试
 7. THE 系统 SHALL 在 `routes/trips.test.ts` 与 `routes/gallery.test.ts` 中覆盖需求 9 AC 9–11 的 Trip_Visibility 契约：Unlisted_Trip 对匿名访问者仍可经直接 id 读取元数据与画廊、公开列表不含 Unlisted_Trip、`public → unlisted` 切换后直链仍有效、且 Unlisted_Trip 的素材暴露仍只由素材可见性策略决定
+8. THE 系统 SHALL 在 `helpers/mediaFileAccess.test.ts`（纯判定）、`routes/mediaServing.test.ts`（本地分支：身份 × 状态矩阵、同一 URL 状态变化后 GET/HEAD/Range/条件请求重新拒绝、被拒请求无生成/UPDATE/存储调用）、`routes/mediaServing.s3.test.ts`（mock provider：授权先于 exists/签名/302）与 `routes/gallery.test.ts`（非所有者 merged 隐藏）中覆盖需求 9 AC 16–23。S3 测试只证明路由顺序，不证明真实 S3、CORS 或缓存行为
 
 ---
 
@@ -394,6 +433,14 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 附注（同一规则下的第二处违反）：`services/mergeEngine.ts` 的 `merge()` 在 INSERT 时把 merged 视频的 `visibility` 写成硬编码字面量 `'public'`，而 `validateSources()` 只校验 `status = 'active'` 与 `compiled_path IS NOT NULL`，不校验 source 的 visibility。合并若干 private 视频，产物为 public，直接违反 AC 12。但 merged 视频**有** provenance（`merged_video_sources`），所以它缺的是继承逻辑，而非可判定性 —— 与 tier slideshow 的缺口性质不同，修复成本也低得多。
 
+附注更正（2026-10-29，G-21 调查）：上段「merged 缺的是继承逻辑，而非可判定性」不成立。`merged_video_sources` **无法证明来源集合完整**：
+- `mergeEngine.ts` 先 INSERT merged 行（`active`、`public`），再逐条 INSERT 来源，两者不在同一事务；中途失败会留下前缀截断的来源集合，`sort_order` 仍连续。
+- 一条现实路径：来源在合并开始时校验，ffmpeg 拼接期间某来源被永久删除，开启外键检查（`database.ts`）后，该来源的 INSERT 失败，merged 行已留在库中。
+- 没有记录「应有来源数」或摘要，尾部截断无法发现。
+- `validateSources()` 与 `routes/merge.ts` 都不排除 `media_source = 'merged'` 作来源，嵌套合并可能存在；来源可来自同一所有者的其他 trip。
+
+因此 AC 14 第 2 点适用：merged 对非所有者不可曝光。G-21 据此在文件入口与公开画廊列表对非所有者 fail-closed（需求 9 AC 18）。这是降级策略：来源完整性记录（需 schema 变更，高风险）、可见性继承、历史回填与重新生成均未做，本附注仍开放。
+
 裁定前置项：AC 12/13 的落地需要先为 tier slideshow 建立 Artifact_Provenance（可照 `merged_video_sources` 的形状）。这属 schema 变更，风险等级为高，**需显式批准后另行立项**。在此之前 tier slideshow 文件路由保留现有 trip-level gate 作为粗粒度代理 —— 它不满足 AC 12，仅用于避免在无 provenance 的情况下扩大曝光面。读取的目标行为（public 与 unlisted 同一判定）见需求 9 AC 15（2026-09-21）；该 gate 对 unlisted 的拒绝属于过渡状态。
 
 独立的低风险缺陷（不属本条，另计）：`generateSlideshow()` 用 `mkdirSync(recursive)` 但不清空输出目录，重复 regenerate 会在同目录堆积多个 mp4；而 `getTierSlideshowUrls()` 取的是 `readdirSync` 结果中第一个 `.mp4`，并非 mtime 最新。故「用 regenerate 当作 invalidation 手段」亦不可靠。
@@ -407,6 +454,46 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 附带副作用：`/:id/thumbnail` 在缩略图缺失时会即时生成并执行 `UPDATE media_items SET thumbnail_path = ?`，即**未认证请求可触发写操作**。`STORAGE_TYPE === 's3'` 时该路由 302 跳转到 presigned URL，绕过服务端的范围更大。
 
 本条的暴露面比 G-20 更广：它不限于 tier 场景，作用于全部 media。裁定前需回答：公开画廊页面当前依赖这些 URL 匿名可取（`TierPhotoItem.thumbnailUrl` / `originalUrl` 即指向此处），因此直接加鉴权会破坏公开分享面，须先确定「匿名可读 public media、但拒绝 private/trashed」的判定点与缓存策略。**本轮只登记，不改实现。**
+
+**2026-10-29 状态更新：已实施、未验收。** 上文保留为登记时的记录。裁定见需求 9 AC 16–23。
+
+- 服务端：三条路由各自挂 `authMiddleware`，先设 `private, no-store` 与 `Vary: Authorization`，再单次只读 SELECT（media LEFT JOIN trips）与纯判定；被拒与不存在同为 404；判定通过后才做存储、生成、UPDATE、签名、302。非所有者的 merged 视频一律 404，并从 `GET /api/trips/:id/gallery` 的非所有者视频列表中移除（降级策略，见 G-20 附注 2026-10-29）。
+- 客户端：`AuthorizedImage`（新）只对同源 `/api/media/:id/{thumbnail,original,raw}` 附加 Bearer；外域、`blob:`、`data:` 与其他路径不发令牌。支持 `loading="lazy"`（接近视口才 fetch）；src 变化、登录/退出/切换账户、卸载时取消请求并释放 object URL。owner 播放器（`MyGalleryPage`）用 `VideoPlayer authorized`（复用 `AuthorizedVideo` 整文件 blob，无网络 Range 流式）；公开 `GalleryPage` 播放器保持 `<source src>`，其数据来自匿名获取的 gallery 列表。
+- **本条只关闭这三条路由的暴露面，不代表所有媒体文件出口已安全**：已登录的非所有者仍可经 G-24 的两条下载路由按 id 取得任意 compiled/merged 视频；`/uploads` 的规则与本条不同（见下）。
+
+与 `routes/uploadsAccess.ts`（G-22）的实际差异，本轮未修改 uploadsAccess：
+
+| 项 | `/api/media/:id/*`（本条） | `/uploads/*`（G-22） |
+| --- | --- | --- |
+| 缓存 | `private, no-store` | `private, no-cache`（允许私有缓存保存后重新验证） |
+| 非所有者取原始上传 | 拒绝（`/raw`、`?original=true`；视频只给 compiled） | **允许**：凡登记在可曝光行上的路径（含 `file_path` 原始上传、`preview_proxy_path`）都按路径提供 |
+| 非所有者视频 compiled 文件缺失 | 404，不回退 | 不适用（按请求路径提供） |
+| `processing_status` | 非所有者视频排除 `uploading`/`cancelled` | 不检查 |
+| 所有者/管理员与 `deleted` | 所有人 404 | 所有者/管理员在状态检查之前放行，`deleted` 行若文件仍在则可读 |
+| trip 行缺失 | 所有人 404 | 所有人 404（一致） |
+| trip visibility 异常 | 非所有者 404，所有者/管理员按状态 | 同 |
+| merged | 非所有者 404 | 非所有者 404（一致） |
+| 拒绝 body | `媒体文件不存在` | `文件不存在` |
+
+因此在本地存储模式下，public 媒体的原始上传仍可由非所有者经 `/uploads/<tripId>/originals/<id>.<ext>` 按路径取得（需知道 tripId、id 与扩展名）。是否把 AC 18 推广到 `/uploads` 需另行裁定。
+
+未验收项：浏览器回归（正常缓存与禁用缓存两组）、owner 大视频实测、AuthorizedImage 跟随 S3 302 的 CORS（PENDING）、线上部署复核。
+
+**2026-11-02 验收进展（仍为已实施、未验收）**：证据在 `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/`。
+- 第一轮那两次断言异常归为测试环境问题。在本机复现的机制是：supertest 的 `::` 临时端口与本机其他进程在 127.0.0.1 上占用的端口撞车，请求被别的进程接走（见 `docs/agent/known-issues.md` 12a）。支持这一归因的证据有四项：复现、与项目代码无关的独立对照、绑定 127.0.0.1 后结果稳定、反向验证（同一批测试对改动前代码仍然失败）。原始两次事件没有记录端口和响应头，所以结论是「与已复现机制高度吻合，原始两次未能逐一直接证实」；也不推广到所有 macOS 环境。两个 G-21 测试文件保留最小的连接修复：每个请求单独起一个绑定 127.0.0.1 的 server。服务端全量没有全绿：当前代码 13 个失败，HEAD 基线 28 个失败，均为同一类连接问题。其他测试文件不在本轮修改范围内。
+- 浏览器验收（headless Chrome 156，隔离环境）：禁用缓存组 51/51 PASS；正常缓存组 50/51，**R2 FAIL**。R2 的情形：在仍然打开着的页面上，V1 被改成 private 以后，重新打开它的普通 `<video src>` 播放器，视频照常播放，Network 中没有新请求。换到新文档后请求返回 404（R6 PASS）。需要裁定这是否属于 AC 21 注记中「已下发副本」的范围。
+- S3：本机没有隔离的 S3 环境，PENDING。
+
+**2026-11-02 R2 裁定**：上方原始结果保留不改，裁定在此追加。
+- R2 归入 AC 21 注记中「已下发副本无法撤回」的范围。观察到的现象是：同一文档内复用了已接收的视频数据，未观察到新网络请求；新文档请求返回 404（R6）。现有证据无法确定浏览器内部用的是哪种缓存或缓冲机制。本轮不修改播放器。
+- 裁定范围限于上述现象。以下情形**不**适用这一限制：撤回后新发起的 GET、HEAD、Range 或条件请求的权限检查；登出、切换账户时的资源清理。新请求越权成功、取得此前未下发的数据、跨账户残留，都不能套用。
+- 收尾记录：
+  - 禁用缓存：51 PASS；
+  - 正常缓存：50 PASS，1 ACCEPTED LIMITATION（R2，本次裁定）；
+  - 本地存储模式浏览器验收：通过，附上述限制；
+  - S3：PENDING；
+  - 大视频：只证明了本机回环环境下的播放、拖动和取消行为。真实网络下的等待时间没有实测，不能据此宣布性能达标；也不能从 RSS 增量推断 Blob 的存放位置。
+- **G-21 整体仍为已实施、未验收**，不宣称全部存储模式或线上已验收。
 
 **G-22 `/uploads` 静态路由无任何 access control，可按路径读取上传目录下的全部文件（安全缺陷，2026-10-06 登记，未修）**
 
@@ -440,7 +527,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 未核实：线上主机实际的 nginx 文件（可能被手工改过）、CDN 或负载均衡、生产是否运行在 `STORAGE_TYPE=s3`（S3 模式下 `/api/media` 会 302 到 presigned URL，bucket ACL 未查）。应用层修复只在部署后生效，需要对线上主机复核。
 
-本条不关闭 G-21：`/api/media/:id/*` 仍按 id 匿名提供任意 media，媒体文件仍可经该路由读取。
+本条不关闭 G-21：`/api/media/:id/*` 仍按 id 匿名提供任意 media，媒体文件仍可经该路由读取。（2026-10-29：G-21 已实施、未验收，见 G-21 条目；两条出口的规则差异见该条目表格。）
 
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
@@ -487,7 +574,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
-| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面 |
+| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**（浏览器、大视频、S3 CORS、线上复核均 PENDING） |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
@@ -534,7 +621,12 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | PUT | `/api/trips/:id/visibility` | 是 | 所有者或 admin |
 | PUT | `/api/trips/:id/cover` | 是 | 所有者或 admin |
 | DELETE | `/api/trips/:id` | 是 | 所有者或 admin |
-| GET | `/api/trips/:id/gallery` | 可选 | 公开（非所有者仅见 public 素材） |
+| GET | `/api/trips/:id/gallery` | 可选 | 公开（非所有者仅见 public 素材；非所有者不含 merged 视频，见需求 9 AC 18） |
+| GET/HEAD | `/api/media/:id/thumbnail` | 可选 | 共同拒绝（所有人含 admin，404）：媒体不存在、`deleted` 或非 `active`/`trashed` 状态、trip 行缺失。所有者/admin：`active` 与 `trashed`。其他人：trip visibility ∈ {public, unlisted}、`active`、`public`，图片；或普通视频（compiled 文件可用、非 uploading/cancelled），merged 除外。见需求 9 AC 16–22 |
+| GET/HEAD | `/api/media/:id/original` | 可选 | 同上一行；另：`?original=true` 仅所有者/admin；非所有者视频只返回 compiled 文件，无回退 |
+| GET/HEAD | `/api/media/:id/raw` | 可选 | 共同拒绝同上；仅所有者/admin |
+
+三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。
 
 ## 附录：涉及的环境变量名
 

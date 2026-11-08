@@ -51,6 +51,8 @@
 3. WHEN media_source 为 merged, THE GalleryPage SHALL 将合并视频与其他剪辑视频一起展示
 4. THE GalleryPage SHALL 使用 compiled_path 作为视频播放源地址
 
+> **2026-10-29 限定（multi-user-system G-21，需求 9 AC 18）**：AC 3 原文保留。对既非所有者也非管理员的请求者（匿名与普通非所有者），公开画廊**暂不返回** merged 视频，`/api/media/:id/{thumbnail,original}` 对其返回 404。原因：merged 是 Derived_Artifact，`merged_video_sources` 目前无法证明来源集合完整，按 multi-user-system 需求 9 AC 12、AC 14 只能 fail-closed。这是降级策略，不代表已实现来源校验；来源完整性与可见性继承另行立项（G-20 附注）。所有者与管理员不受影响，AC 3 对他们照常成立。实现见 `server/src/routes/gallery.ts` 的 `videoEligibilityClause`。
+
 ### Requirement 4: 多视频合并功能
 
 **User Story:** 作为用户，我希望选择多个剪辑后的视频合并为一个新视频，以便创建完整的旅行回顾。

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { authFetch } from '../contexts/AuthContext';
+import AuthorizedImage from './AuthorizedImage';
 
 export interface EditParams {
   brightness: number;  // -100 to 100, default 0
@@ -81,7 +82,7 @@ export default function ImageEditor({ mediaId, originalUrl, onClose, onSaved }: 
     >
       {/* Preview area */}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
-        <img
+        <AuthorizedImage
           src={originalUrl}
           alt="编辑预览"
           style={{

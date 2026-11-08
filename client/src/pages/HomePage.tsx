@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
+import AuthorizedImage from '../components/AuthorizedImage';
 
 export interface TripSummary {
   id: string;
@@ -82,7 +83,7 @@ export default function HomePage() {
               aria-label={trip.title}
               className="trip-card"
             >
-              <img
+              <AuthorizedImage
                 src={trip.coverImageUrl}
                 alt={`${trip.title} 封面`}
                 style={{ width: '100%', height: '200px', objectFit: 'cover' }}

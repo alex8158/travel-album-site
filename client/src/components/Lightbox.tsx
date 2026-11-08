@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState } from 'react';
+import AuthorizedImage from './AuthorizedImage';
 
 export interface LightboxImage {
   originalUrl: string;
@@ -100,7 +101,7 @@ export default function Lightbox({ images, currentIndex, onClose, onPrev, onNext
         </button>
       )}
 
-      <img
+      <AuthorizedImage
         src={current.originalUrl}
         alt={current.alt}
         data-testid="lightbox-image"

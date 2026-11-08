@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import axios from 'axios';
@@ -34,8 +34,21 @@ const sampleTrips: TripSummary[] = [
 ];
 
 describe('HomePage', () => {
+  let coverFetch: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    coverFetch = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true, status: 200, blob: async () => ({ from: String(input) }),
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', coverFetch);
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0 });
+    globalThis.URL.createObjectURL = vi.fn((b: { from: string }) => `blob:${b.from}`) as unknown as typeof URL.createObjectURL;
+    globalThis.URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('shows loading state initially', () => {
@@ -65,10 +78,32 @@ describe('HomePage', () => {
     expect(screen.getByText('42 个素材')).toBeDefined();
     expect(screen.getByText('18 个素材')).toBeDefined();
 
-    const images = screen.getAllByRole('img');
-    expect(images).toHaveLength(2);
-    expect(images[0]).toHaveAttribute('src', '/api/media/img1/thumbnail');
-    expect(images[1]).toHaveAttribute('src', '/api/media/img2/thumbnail');
+    // Covers are loaded through AuthorizedImage (G-21): the cover URL is fetched
+    // and shown from an object URL.
+    await waitFor(() => {
+      const images = screen.getAllByRole('img');
+      expect(images).toHaveLength(2);
+      expect(images[0]).toHaveAttribute('src', 'blob:/api/media/img1/thumbnail');
+      expect(images[1]).toHaveAttribute('src', 'blob:/api/media/img2/thumbnail');
+    });
+    expect(coverFetch.mock.calls.map((c) => String(c[0]))).toEqual([
+      '/api/media/img1/thumbnail', '/api/media/img2/thumbnail',
+    ]);
+  });
+
+  it('shows a placeholder instead of a broken image when the cover is not viewable (G-21)', async () => {
+    coverFetch.mockImplementation(async () => ({ ok: false, status: 404, blob: async () => ({}) }) as unknown as Response);
+    mockedAxios.get.mockResolvedValueOnce({ data: [{ ...sampleTrips[0], coverImageUrl: '/api/media/private/thumbnail' }, { ...sampleTrips[1], coverImageUrl: '' }] });
+    renderHomePage();
+
+    await waitFor(() => {
+      const covers = screen.getAllByRole('img');
+      expect(covers).toHaveLength(2);
+      expect(covers[0].tagName).toBe('DIV');
+      expect(covers[0]).toHaveAttribute('data-image-state', 'error');
+      expect(covers[1]).toHaveAttribute('data-image-state', 'empty');
+    });
+    expect(document.querySelector('img')).toBeNull();
   });
 
   it('displays description excerpt when available', async () => {

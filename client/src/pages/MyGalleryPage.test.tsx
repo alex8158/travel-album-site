@@ -8,7 +8,9 @@ import myGalleryPageSource from './MyGalleryPage.tsx?raw';
 
 // authFetch is the single request path for this page; mock the module so we can
 // observe the exact URL the download button asks for.
-vi.mock('../contexts/AuthContext', () => ({
+vi.mock('../contexts/AuthContext', async () => ({
+  // AuthorizedImage / VideoPlayer read the provider through this context (G-21).
+  AuthContext: (await import('react')).createContext(null),
   authFetch: vi.fn(),
   useAuth: () => ({
     token: 'test-token',

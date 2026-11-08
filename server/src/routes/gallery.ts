@@ -111,15 +111,22 @@ router.get('/:id/gallery', authMiddleware, (req: Request, res: Response) => {
     });
   }
 
-  // Get all videos — only return compiled or merged videos for public gallery
+  // Get all videos — only return compiled or merged videos for public gallery.
+  // Non-owner requesters do not get merged videos: their source set cannot be
+  // proven complete, so the file routes refuse them (需求 9 AC 12, AC 14, AC 18)
+  // and listing them would only show an unplayable item. Owner/admin unchanged.
   const videoParams: unknown[] = [tripId, 'video'];
   if (normalizedTag) videoParams.push(normalizedTag);
   if (category) videoParams.push(category);
 
+  const videoEligibilityClause = isOwnerOrAdmin
+    ? "AND (m.compiled_path IS NOT NULL OR m.media_source = 'merged')"
+    : "AND m.compiled_path IS NOT NULL AND m.compiled_path <> '' AND COALESCE(m.media_source, 'upload') <> 'merged'";
+
   const videoRows = db.prepare(
     `SELECT m.* FROM media_items m ${tagJoin} WHERE m.trip_id = ? AND m.media_type = ? AND m.status = 'active'
      AND (m.processing_status IS NULL OR m.processing_status NOT IN ('uploading', 'cancelled'))
-     AND (m.compiled_path IS NOT NULL OR m.media_source = 'merged')
+     ${videoEligibilityClause}
      ${visibilityClause} ${tagClause} ${categoryClause}`
   ).all(...videoParams) as MediaItemRow[];
 

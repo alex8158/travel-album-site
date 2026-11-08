@@ -4,6 +4,15 @@ import path from 'path';
 import { getDb } from '../database';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { getStorageProvider } from '../storage/factory';
+import { authMiddleware } from '../middleware/auth';
+import {
+  classifyMediaFileEntry,
+  decideMediaFileAccess,
+  loadMediaFileAccessRow,
+  type MediaFileAccessRow,
+  type MediaFileDecision,
+  type MediaFileRoute,
+} from '../helpers/mediaFileAccess';
 
 // ---------------------------------------------------------------------------
 // Range-aware video streaming for iOS Safari compatibility
@@ -36,15 +45,12 @@ function isVideoMime(mime: string): boolean {
 /**
  * Serve a file with Range request support (required for iOS Safari video playback).
  * For non-video files or requests without Range header, falls back to sendFile.
+ * Cache-Control is set by the caller (G-21: always `private, no-store`).
  */
-function serveFileWithRange(req: Request, res: Response, localPath: string, cacheControl?: string): void {
+function serveFileWithRange(req: Request, res: Response, localPath: string): void {
   const stat = fs.statSync(localPath);
   const fileSize = stat.size;
   const mime = getMimeType(localPath);
-
-  if (cacheControl) {
-    res.set('Cache-Control', cacheControl);
-  }
 
   // For video files, always support Range requests
   if (isVideoMime(mime)) {
@@ -77,8 +83,9 @@ function serveFileWithRange(req: Request, res: Response, localPath: string, cach
       fs.createReadStream(localPath).pipe(res);
     }
   } else {
-    // Non-video: use sendFile as before
-    res.sendFile(localPath);
+    // Non-video: sendFile handles conditional requests (304) and HEAD. It only
+    // runs after the access decision. cacheControl:false keeps our header.
+    res.sendFile(localPath, { cacheControl: false });
   }
 }
 
@@ -86,31 +93,65 @@ const router = Router();
 
 const usePresignedUrls = process.env.STORAGE_TYPE === 's3';
 
-interface MediaItemRow {
-  id: string;
-  trip_id: string;
-  file_path: string;
-  thumbnail_path: string | null;
-  media_type: string;
-  status: string;
-  trashed_reason: string | null;
-  processing_error: string | null;
-  optimized_path: string | null;
-  compiled_path: string | null;
-  preview_proxy_path: string | null;
+// ---------------------------------------------------------------------------
+// Access control (multi-user-system G-21, 需求 9 AC 16–23)
+//
+// Order for every request, GET and HEAD alike:
+//   1. authMiddleware: Bearer only, invalid token = anonymous.
+//   2. Cache-Control: private, no-store + Vary: Authorization (merged), before
+//      any branch, so 200 / 206 / 302 / 304 / 404 / 500 all carry them.
+//   3. One read-only SELECT (media LEFT JOIN trips), then the pure decision.
+//   4. Denied or missing: one identical 404. Nothing else has run: no storage
+//      lookup, no download, no thumbnail generation, no UPDATE, no signing.
+//   5. Only then storage work, thumbnail generation, signing, redirect, Range.
+// ---------------------------------------------------------------------------
+
+const NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: '媒体文件不存在' } };
+
+function setPrivateNoStore(res: Response): void {
+  res.set('Cache-Control', 'private, no-store');
+  res.vary('Authorization');
+}
+
+function sendMediaNotFound(res: Response): Response {
+  return res.status(404).json(NOT_FOUND_BODY);
+}
+
+type Authorized = { row: MediaFileAccessRow; decision: Extract<MediaFileDecision, { allowed: true }> };
+
+function authorize(req: Request, route: MediaFileRoute): Authorized | null {
+  const entry = classifyMediaFileEntry(route, req.query.original);
+  const row = loadMediaFileAccessRow(getDb(), req.params.id as string);
+  const decision = decideMediaFileAccess(row, req.user, entry);
+  if (!decision.allowed || !row) return null;
+  return { row, decision };
+}
+
+/**
+ * A non-owner video is served only from an available compiled file
+ * (AC 18). `compiled_path` being set is not enough; there is no fallback.
+ */
+async function compiledFileAvailable(row: MediaFileAccessRow): Promise<boolean> {
+  if (!row.compiled_path) return false;
+  try {
+    return await getStorageProvider().exists(row.compiled_path);
+  } catch {
+    return false;
+  }
 }
 
 // GET /api/media/:id/thumbnail — Serve thumbnail, generate on-the-fly if missing
-router.get('/:id/thumbnail', async (req: Request, res: Response) => {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT id, trip_id, file_path, thumbnail_path, media_type, status, trashed_reason, processing_error, optimized_path, compiled_path FROM media_items WHERE id = ?'
-  ).get(req.params.id) as MediaItemRow | undefined;
+router.get('/:id/thumbnail', authMiddleware, async (req: Request, res: Response) => {
+  setPrivateNoStore(res);
+  const auth = authorize(req, 'thumbnail');
+  if (!auth) return sendMediaNotFound(res);
+  const { row, decision } = auth;
 
-  if (!row) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
+  if (decision.compiledOnly && !(await compiledFileAvailable(row))) {
+    return sendMediaNotFound(res);
   }
 
+  const db = getDb();
   const storageProvider = getStorageProvider();
   let thumbLocalPath: string | null = null;
 
@@ -122,7 +163,6 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
         // S3: redirect to presigned URL for cached thumbnails
         if (usePresignedUrls) {
           const url = await storageProvider.getUrl(row.thumbnail_path);
-          res.set('Cache-Control', 'public, max-age=86400');
           return res.redirect(302, url);
         }
         thumbLocalPath = await storageProvider.downloadToTemp(row.thumbnail_path);
@@ -132,7 +172,7 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     }
   }
 
-  // Generate on-the-fly if no thumbnail yet
+  // Generate on-the-fly if no thumbnail yet (allowed requesters only)
   if (!thumbLocalPath) {
     try {
       const originalLocalPath = await storageProvider.downloadToTemp(row.file_path);
@@ -150,60 +190,63 @@ router.get('/:id/thumbnail', async (req: Request, res: Response) => {
     }
   }
 
-  res.set('Cache-Control', 'public, max-age=86400'); // 24h
-  return res.sendFile(thumbLocalPath);
+  return res.sendFile(thumbLocalPath, { cacheControl: false });
 });
 
 // GET /api/media/:id/original — Serve the best available version (optimized/compiled or original)
+// `?original=true` is the raw-upload entry and is owner/admin-only (AC 18).
 // For S3 storage: redirect to presigned URL (bypasses server as middleman)
-router.get('/:id/original', async (req: Request, res: Response) => {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT id, file_path, media_type, optimized_path, compiled_path, preview_proxy_path FROM media_items WHERE id = ?'
-  ).get(req.params.id) as Pick<MediaItemRow, 'id' | 'file_path' | 'media_type' | 'optimized_path' | 'compiled_path' | 'preview_proxy_path'> | undefined;
-
-  if (!row) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
-  }
+router.get('/:id/original', authMiddleware, async (req: Request, res: Response) => {
+  setPrivateNoStore(res);
+  const auth = authorize(req, 'original');
+  if (!auth) return sendMediaNotFound(res);
+  const { row, decision } = auth;
 
   const storageProvider = getStorageProvider();
 
   // Determine which file to serve
   let servePath: string | null = null;
 
-  // For videos: serve compiled version by default, unless ?original=true
-  if (row.media_type === 'video') {
-    const wantOriginal = req.query.original === 'true';
-    if (!wantOriginal && row.compiled_path) {
-      servePath = row.compiled_path;
-    } else if (!wantOriginal && row.preview_proxy_path) {
-      // Fallback to preview proxy (much smaller than original)
-      servePath = row.preview_proxy_path;
-    }
-  }
-
-  // For images: serve optimized version if available, verify it exists
-  if (!servePath && row.media_type === 'image' && row.optimized_path) {
-    try {
-      const exists = await storageProvider.exists(row.optimized_path);
-      if (exists) {
-        servePath = row.optimized_path;
+  if (decision.compiledOnly) {
+    // Non-owner video: the compiled file only. No preview proxy, no original.
+    if (!(await compiledFileAvailable(row))) return sendMediaNotFound(res);
+    servePath = row.compiled_path;
+  } else {
+    // For videos: serve compiled version by default, unless ?original=true
+    if (row.media_type === 'video') {
+      const wantOriginal = req.query.original === 'true';
+      if (!wantOriginal && row.compiled_path) {
+        servePath = row.compiled_path;
+      } else if (!wantOriginal && row.preview_proxy_path) {
+        // Fallback to preview proxy (much smaller than original)
+        servePath = row.preview_proxy_path;
       }
-    } catch {
-      // Fall through to original
+    }
+
+    // For images: serve optimized version if available, verify it exists
+    if (!servePath && row.media_type === 'image' && row.optimized_path) {
+      try {
+        const exists = await storageProvider.exists(row.optimized_path);
+        if (exists) {
+          servePath = row.optimized_path;
+        }
+      } catch {
+        // Fall through to original
+      }
+    }
+
+    // Fallback: original file
+    if (!servePath) {
+      servePath = row.file_path;
     }
   }
 
-  // Fallback: original file
-  if (!servePath) {
-    servePath = row.file_path;
-  }
+  if (!servePath) return sendMediaNotFound(res);
 
   // S3: redirect to presigned URL (browser downloads directly from S3)
   if (usePresignedUrls) {
     try {
       const url = await storageProvider.getUrl(servePath);
-      res.set('Cache-Control', 'private, max-age=3600');
       return res.redirect(302, url);
     } catch {
       return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
@@ -216,22 +259,19 @@ router.get('/:id/original', async (req: Request, res: Response) => {
     if (!fs.existsSync(localPath)) {
       return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
     }
-    return serveFileWithRange(req, res, localPath, 'public, max-age=3600');
+    return serveFileWithRange(req, res, localPath);
   } catch {
     return res.status(404).json({ error: { code: 'FILE_NOT_FOUND', message: '文件不存在' } });
   }
 });
 
-// GET /api/media/:id/raw — Always serve the original file regardless of optimized/compiled versions
-router.get('/:id/raw', async (req: Request, res: Response) => {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT id, file_path FROM media_items WHERE id = ?'
-  ).get(req.params.id) as Pick<MediaItemRow, 'id' | 'file_path'> | undefined;
-
-  if (!row) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
-  }
+// GET /api/media/:id/raw — Always serve the original file regardless of optimized/compiled versions.
+// Owner/admin only (AC 18).
+router.get('/:id/raw', authMiddleware, async (req: Request, res: Response) => {
+  setPrivateNoStore(res);
+  const auth = authorize(req, 'raw');
+  if (!auth) return sendMediaNotFound(res);
+  const { row } = auth;
 
   const storageProvider = getStorageProvider();
 

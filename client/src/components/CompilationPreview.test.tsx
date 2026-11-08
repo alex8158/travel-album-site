@@ -4,7 +4,9 @@ import userEvent from '@testing-library/user-event';
 import CompilationPreview from './CompilationPreview';
 
 // Mock authFetch
-vi.mock('../contexts/AuthContext', () => ({
+vi.mock('../contexts/AuthContext', async () => ({
+  // VideoPlayer reads the provider through this context (G-21).
+  AuthContext: (await import('react')).createContext(null),
   authFetch: vi.fn(),
 }));
 
