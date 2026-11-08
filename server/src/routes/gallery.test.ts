@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished } from 'vitest';
 import express from 'express';
+import http from 'http';
 import request from 'supertest';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
@@ -13,6 +14,27 @@ app.use(express.json());
 app.use(authMiddleware);
 app.use('/api/trips', tripsRouter);
 app.use('/api/trips', galleryRouter);
+// Per-request server bound to 127.0.0.1 (known-issues 12a). supertest's default
+// app.listen(0) binds the dual-stack `::` wildcard and then connects to 127.0.0.1;
+// when another process holds that port number on IPv4, the connection does not
+// reach this server. Resolves only once listening; a listen error rejects. The
+// server is closed when the current test finishes (onTestFinished runs even if
+// the test or an afterEach hook throws, and is awaited before the next test).
+async function local(): Promise<http.Server> {
+  const server = http.createServer(app);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  onTestFinished(() => new Promise<void>((resolve) => {
+    server.closeAllConnections();
+    server.close(() => resolve());
+  }));
+  return server;
+}
 
 function createTestUser(role: 'admin' | 'regular' = 'regular'): { userId: string; token: string } {
   const db = getDb();
@@ -100,7 +122,7 @@ describe('GET /api/trips/:id/gallery', () => {
   });
 
   it('should return 404 for non-existent trip', async () => {
-    const res = await request(app).get('/api/trips/non-existent-id/gallery');
+    const res = await request(await local()).get('/api/trips/non-existent-id/gallery');
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
   });
@@ -108,7 +130,7 @@ describe('GET /api/trips/:id/gallery', () => {
   it('should return empty images and videos for trip with no media', async () => {
     const tripId = createTrip(owner.userId);
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.trip.id).toBe(tripId);
     expect(res.body.images).toEqual([]);
@@ -123,7 +145,7 @@ describe('GET /api/trips/:id/gallery', () => {
     const vid1 = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid1.mp4` });
     const vid2 = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid2.mp4` });
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
 
     expect(res.body.images).toHaveLength(2);
@@ -163,7 +185,7 @@ describe('GET /api/trips/:id/gallery', () => {
     db.prepare('UPDATE media_items SET duplicate_group_id = ? WHERE id = ?').run(groupId, img1);
     db.prepare('UPDATE media_items SET duplicate_group_id = ? WHERE id = ?').run(groupId, img2);
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
 
     expect(res.body.images).toHaveLength(2);
@@ -186,7 +208,7 @@ describe('GET /api/trips/:id/gallery', () => {
     const tripId = createTrip(owner.userId);
     const imgId = createMediaItem(tripId, 'image');
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.images).toHaveLength(1);
     expect(res.body.images[0].thumbnailUrl).toBe(`/api/media/${imgId}/thumbnail`);
@@ -202,7 +224,7 @@ describe('GET /api/trips/:id/gallery', () => {
       `${tripId}/thumbnails/${vidId}_thumb.webp`, vidId
     );
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
     expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
@@ -212,7 +234,7 @@ describe('GET /api/trips/:id/gallery', () => {
     const tripId = createTrip(owner.userId);
     const vidId = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid.mp4` });
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
     expect(res.body.videos[0].thumbnailUrl).toBe(`/api/media/${vidId}/thumbnail`);
@@ -225,7 +247,7 @@ describe('GET /api/trips/:id/gallery', () => {
     const tripId = createTrip(owner.userId);
     const vidId = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/vid.mp4` });
 
-    const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+    const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
     expect(res.status).toBe(200);
     expect(res.body.videos).toHaveLength(1);
     expect(res.body.videos[0]).not.toHaveProperty('compiledUrl');
@@ -238,7 +260,7 @@ describe('GET /api/trips/:id/gallery', () => {
     const tripId = createTrip(owner.userId);
     createMediaItem(tripId, 'video', { mediaSource: 'merged' });
 
-    const res = await request(app)
+    const res = await request(await local())
       .get(`/api/trips/${tripId}/gallery`)
       .set('Authorization', `Bearer ${owner.token}`);
     expect(res.status).toBe(200);
@@ -257,8 +279,8 @@ describe('GET /api/trips/:id/gallery', () => {
       const other = createTestUser('regular');
       const admin = createTestUser('admin');
 
-      const anon = await request(app).get(`/api/trips/${tripId}/gallery`);
-      const nonOwner = await request(app)
+      const anon = await request(await local()).get(`/api/trips/${tripId}/gallery`);
+      const nonOwner = await request(await local())
         .get(`/api/trips/${tripId}/gallery`).set('Authorization', `Bearer ${other.token}`);
       for (const res of [anon, nonOwner]) {
         expect(res.status).toBe(200);
@@ -266,7 +288,7 @@ describe('GET /api/trips/:id/gallery', () => {
       }
 
       for (const token of [owner.token, admin.token]) {
-        const res = await request(app)
+        const res = await request(await local())
           .get(`/api/trips/${tripId}/gallery`).set('Authorization', `Bearer ${token}`);
         expect(res.status).toBe(200);
         expect(res.body.videos.map((v: { id: string }) => v.id).sort()).toEqual([plainVid, mergedVid].sort());
@@ -278,7 +300,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const vid = createMediaItem(tripId, 'video', { compiledPath: `${tripId}/compiled/a.mp4` });
       getDb().prepare('UPDATE media_items SET media_source = NULL, processing_status = NULL WHERE id = ?').run(vid);
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.body.videos.map((v: { id: string }) => v.id)).toEqual([vid]);
     });
 
@@ -286,7 +308,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const tripId = createTrip(owner.userId);
       createMediaItem(tripId, 'video', { compiledPath: '' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.body.videos).toHaveLength(0);
     });
   });
@@ -300,7 +322,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const publicVid = createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
       createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);
@@ -318,7 +340,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const other = createTestUser('regular');
-      const res = await request(app)
+      const res = await request(await local())
         .get(`/api/trips/${tripId}/gallery`)
         .set('Authorization', `Bearer ${other.token}`);
       expect(res.status).toBe(200);
@@ -337,7 +359,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
       createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
-      const res = await request(app)
+      const res = await request(await local())
         .get(`/api/trips/${tripId}/gallery`)
         .set('Authorization', `Bearer ${owner.token}`);
       expect(res.status).toBe(200);
@@ -355,7 +377,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
       const admin = createTestUser('admin');
-      const res = await request(app)
+      const res = await request(await local())
         .get(`/api/trips/${tripId}/gallery`)
         .set('Authorization', `Bearer ${admin.token}`);
       expect(res.status).toBe(200);
@@ -370,7 +392,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'image', { visibility: 'private' });
       createMediaItem(tripId, 'video', { visibility: 'private' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(0);
@@ -391,7 +413,7 @@ describe('GET /api/trips/:id/gallery', () => {
       makeUnlisted(tripId);
       const img = createMediaItem(tripId, 'image', { visibility: 'public' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
       expect(res.body.trip.id).toBe(tripId);
       expect(res.body.trip.visibility).toBe('unlisted');
@@ -407,7 +429,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const publicVid = createMediaItem(tripId, 'video', { visibility: 'public', compiledPath: 'compiled/v1.mp4' });
       createMediaItem(tripId, 'video', { visibility: 'private', compiledPath: 'compiled/v2.mp4' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
       expect(res.body.images).toHaveLength(1);
       expect(res.body.images[0].item.id).toBe(publicImg);
@@ -421,7 +443,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'image', { visibility: 'public' });
       createMediaItem(tripId, 'image', { visibility: 'private' });
 
-      const res = await request(app)
+      const res = await request(await local())
         .get(`/api/trips/${tripId}/gallery`)
         .set('Authorization', `Bearer ${owner.token}`);
       expect(res.status).toBe(200);
@@ -445,7 +467,7 @@ describe('GET /api/trips/:id/gallery', () => {
       setCategory(img2, 'people');
       setCategory(img3, 'landscape');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=landscape`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?category=landscape`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(2);
@@ -462,7 +484,7 @@ describe('GET /api/trips/:id/gallery', () => {
       setCategory(img1, 'landscape');
       setCategory(img2, 'people');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(2);
@@ -474,7 +496,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'image');
       setCategory(createMediaItem(tripId, 'image'), 'landscape');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=animal`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?category=animal`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(0);
@@ -486,7 +508,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'image');
       createMediaItem(tripId, 'image');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=invalid`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?category=invalid`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(2);
@@ -498,7 +520,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const img1 = createMediaItem(tripId, 'image');
       setCategory(img1, 'people');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);
@@ -513,7 +535,7 @@ describe('GET /api/trips/:id/gallery', () => {
       setCategory(vid1, 'animal');
       setCategory(vid2, 'landscape');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?category=animal`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?category=animal`);
       expect(res.status).toBe(200);
 
       expect(res.body.videos).toHaveLength(1);
@@ -529,7 +551,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const img2 = createMediaItem(tripId, 'image');
       createTag(img1, 'sunset');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=sunset`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?tag=sunset`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);
@@ -543,7 +565,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const vid2 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v2.mp4' });
       createTag(vid1, 'beach');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=beach`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?tag=beach`);
       expect(res.status).toBe(200);
 
       expect(res.body.videos).toHaveLength(1);
@@ -557,7 +579,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const img1 = createMediaItem(tripId, 'image');
       createTag(img1, 'mytrip');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=My Trip`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?tag=My Trip`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);
@@ -570,7 +592,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createMediaItem(tripId, 'image');
       createMediaItem(tripId, 'video');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=nonexistent`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?tag=nonexistent`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(0);
@@ -584,7 +606,7 @@ describe('GET /api/trips/:id/gallery', () => {
       const vid1 = createMediaItem(tripId, 'video', { compiledPath: 'compiled/v1.mp4' });
       createTag(img1, 'sunset');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);
@@ -600,7 +622,7 @@ describe('GET /api/trips/:id/gallery', () => {
       createTag(img1, '2024-01');
       createTag(vid1, '2024-01');
 
-      const res = await request(app).get(`/api/trips/${tripId}/gallery?tag=2024-01`);
+      const res = await request(await local()).get(`/api/trips/${tripId}/gallery?tag=2024-01`);
       expect(res.status).toBe(200);
 
       expect(res.body.images).toHaveLength(1);

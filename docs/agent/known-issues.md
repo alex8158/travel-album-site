@@ -270,6 +270,28 @@ Server tests fail at random, a different set on each run: about 8 s `ETIMEDOUT`,
 
 Do not treat these failures as product bugs, or as passes, without the response headers or an error with the port. Do not fix them by retrying, lengthening timeouts, or sharing one server. A per-request server bound to `127.0.0.1` avoids the problem; see `local()` in `server/src/routes/mediaServing.test.ts`. The other test files still use the default and remain exposed.
 
+### Update 2026-11-05 (round14–15)
+
+Confirmed for three failures only. Three `gallery.test.ts` timeouts reproduced in round14 (ports 49519, 49667, 52303) were captured with an `lsof` of the port taken at the moment of failure. In each one:
+
+* the test server was bound to `::` (IPv6, dual-stack) by supertest's `app.listen(0)`;
+* the client socket never completed its TCP connect to `127.0.0.1:<port>`, and failed with `ETIMEDOUT` after about 7.8 s;
+* the test server saw no TCP connection;
+* another local process (`MarsLinkProxy`) held an IPv4 `*:<same port>` socket that was bound but not listening (`lsof` state `CLOSED`).
+
+A controlled experiment that uses only sockets it creates itself reproduces this deterministically: an IPv4 bound-not-listening `*:p` plus a `::` listener on `p` gives `ETIMEDOUT` every time. The same occupier plus a `127.0.0.1` listener on `p` delivers every request to the right server. Evidence: `travel-album-acceptance/g21/20261102T023422Z/round14-test-timeout-diagnosis/` and `round15-gallery-local/`.
+
+Not confirmed: earlier failures, including round12's 121 no-response `ETIMEDOUT` records and the single `ECONNRESET`, match the same pattern but were not captured with a failure-time `lsof`. Keep them in their original categories. The five records that received another program's response are explained by a specific IPv4 listener on the port, and that explanation covers those five only.
+
+Fixed: `server/src/routes/gallery.test.ts` now uses its own `local()`. The helper creates a server per request with `listen(0, '127.0.0.1')`, resolves only once the server is listening, rejects on a listen error, and closes the server through `onTestFinished`, which also runs when the test or an `afterEach` throws. Verified in an isolated copy:
+
+* controlled collision: 5/5 requests reach the right server, against 5/5 `ETIMEDOUT` with the old bind;
+* three normal runs: 32/32 each;
+* no server is left open before any test or at the end of the file;
+* supplementary and standard type checks pass.
+
+Still open: the other 21 server test files that use `request(app)` remain exposed to this mechanism. A shared helper has not been extracted. The server full suite still fails: round15's single run had 9 `ETIMEDOUT` failures in 7 of those `request(app)` files, with no failure-time `lsof`, so their cause is unconfirmed.
+
 ## 12b. Server tests run against the local app database
 
 Registered 2026-11-05 (G-29 pre-commit review). Not fixed.
