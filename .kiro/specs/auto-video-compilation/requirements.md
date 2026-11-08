@@ -120,6 +120,9 @@
 6. IF 指定的 mediaId 不存在或无 video_segments 数据, THEN THE Compilation_Engine SHALL 返回 HTTP 404 错误及错误描述
 7. IF 已有剪辑任务正在执行（状态为 queued 或 running）, THEN THE Compilation_Engine SHALL 返回 HTTP 409 冲突错误及错误描述
 8. IF GET /api/media/:mediaId/compile/download 请求时 Compiled_Video 尚未生成, THEN THE Compilation_Engine SHALL 返回 HTTP 404 错误并说明剪辑尚未完成
+
+> **2026-11-03 限定（multi-user-system G-24，需求 9 AC 24）**：AC 3、AC 8 原文保留，现只对媒体所有者与管理员成立。未认证请求返回 401；已登录的非所有者得到与「媒体不存在」相同的 404 `NOT_FOUND`，不会看到 AC 8 的「剪辑尚未完成」；所有响应带 `Cache-Control: private, no-store` 与 `Vary: Authorization`。
+
 9. IF POST /api/media/:mediaId/compile 请求中 segmentIndices 为空数组或包含无效索引, THEN THE Compilation_Engine SHALL 返回 HTTP 400 错误并说明参数无效
 10. IF POST /api/media/:mediaId/compile 请求中 targetDuration 超出有效范围, THEN THE Compilation_Engine SHALL 返回 HTTP 400 错误并说明时长范围限制
 

@@ -285,6 +285,17 @@
 23. WHEN `STORAGE_TYPE = 's3'` 时, THE 系统 SHALL 先完成判定再签名与 302；非所有者视频先确认 compiled 文件存在再签名。签名有效期保持 `expiresIn: 3600`（`storage/s3Provider.ts`），未签名 `ResponseCacheControl`
     > 3600 秒是**已签发 URL 可用于发起请求的期限**，不是内容撤销上限：对象响应的缓存行为取决于对象元数据与中间缓存（未核实），已下载的副本可能保留更久。线上 bucket ACL、CDN、nginx 与实际存储模式未核实，G-22 部署部分继续开放。COS/OSS 模式不走 302，经 `downloadToTemp` 由服务端中转，同受 AC 16–22 约束。
 
+24. （2026-11-03 裁定，G-24）THE 系统 SHALL 仅允许媒体所有者与管理员访问 `GET /api/media/:mediaId/download-compiled`（`routes/clips.ts`）与 `GET /api/media/:mediaId/compile/download`（`routes/compile.ts`）。这两条是下载入口，不是曝光面：`public`、`unlisted` 或 `merged` 都不向普通非所有者开放。
+    - 未认证（无令牌或令牌无效）：401 `TOKEN_INVALID`，沿用 Require_Auth。
+    - 已登录的非所有者：与「媒体不存在」相同的 404，body 逐字节一致：`{ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } }`。这是需求 7 AC 7（越权返回 403 `FORBIDDEN`）在这两条路由上的例外，由本条授权。
+    - 判定沿用 AC 17、AC 19 的共同拒绝：媒体不存在、`deleted` 及 `active`/`trashed` 以外的状态、trip 行缺失，对所有人（含 admin）一律 404。所有者与管理员可下载 `active` 与 `trashed`。
+    - 判定先于 `downloadToTemp` 与任何文件读取。`NO_COMPILED`（download-compiled）与 `NOT_COMPILED`（compile/download）只在通过判定后返回。
+    - 所有响应分支（含 Require_Auth 提前返回的 401）设 `Cache-Control: private, no-store`，并以合并方式追加 `Vary: Authorization`。
+    - 获准访问后的文件名、`Content-Disposition`、Range（206）与错误契约不变。
+    - 实现：`server/src/helpers/ownerFileDownload.ts` 复用 `loadMediaFileAccessRow` + `decideMediaFileAccess(..., 'original-file')`，并在路由边界再要求 `asOwnerOrAdmin`。
+
+> **AC 24 状态（2026-11-03）**：已实施，服务端回归与本地存储模式浏览器验收已有证据（见 G-24 条目），**未验收**。S3 PENDING，线上未部署。
+
 > **AC 16–23 状态（2026-10-29）**：已实施、**未验收**。实现：`server/src/helpers/mediaFileAccess.ts`（只读加载 `loadMediaFileAccessRow` + 纯判定 `decideMediaFileAccess` + 入口归类 `classifyMediaFileEntry`）、`server/src/routes/mediaServing.ts`、`server/src/routes/gallery.ts`（非所有者 merged 列表联动）；客户端以 `AuthorizedImage` / `VideoPlayer authorized` 携带 Bearer。浏览器验收、线上部署复核均未进行。
 
 ## 需求 10：密码与账户自服务
@@ -459,7 +470,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 - 服务端：三条路由各自挂 `authMiddleware`，先设 `private, no-store` 与 `Vary: Authorization`，再单次只读 SELECT（media LEFT JOIN trips）与纯判定；被拒与不存在同为 404；判定通过后才做存储、生成、UPDATE、签名、302。非所有者的 merged 视频一律 404，并从 `GET /api/trips/:id/gallery` 的非所有者视频列表中移除（降级策略，见 G-20 附注 2026-10-29）。
 - 客户端：`AuthorizedImage`（新）只对同源 `/api/media/:id/{thumbnail,original,raw}` 附加 Bearer；外域、`blob:`、`data:` 与其他路径不发令牌。支持 `loading="lazy"`（接近视口才 fetch）；src 变化、登录/退出/切换账户、卸载时取消请求并释放 object URL。owner 播放器（`MyGalleryPage`）用 `VideoPlayer authorized`（复用 `AuthorizedVideo` 整文件 blob，无网络 Range 流式）；公开 `GalleryPage` 播放器保持 `<source src>`，其数据来自匿名获取的 gallery 列表。
-- **本条只关闭这三条路由的暴露面，不代表所有媒体文件出口已安全**：已登录的非所有者仍可经 G-24 的两条下载路由按 id 取得任意 compiled/merged 视频；`/uploads` 的规则与本条不同（见下）。
+- **本条只关闭这三条路由的暴露面，不代表所有媒体文件出口已安全**：已登录的非所有者仍可经 G-24 的两条下载路由按 id 取得任意 compiled/merged 视频；`/uploads` 的规则与本条不同（见下）。（2026-11-03：G-24 已按 AC 24 实施、未验收。）
 
 与 `routes/uploadsAccess.ts`（G-22）的实际差异，本轮未修改 uploadsAccess：
 
@@ -529,6 +540,27 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 本条不关闭 G-21：`/api/media/:id/*` 仍按 id 匿名提供任意 media，媒体文件仍可经该路由读取。（2026-10-29：G-21 已实施、未验收，见 G-21 条目；两条出口的规则差异见该条目表格。）
 
+**G-24 两条下载路由仅要求登录，不校验所有权（P0，安全缺陷，2026-10-29 登记，未修）**
+
+- `GET /api/media/:mediaId/download-compiled`（`routes/clips.ts`）
+- `GET /api/media/:mediaId/compile/download`（`routes/compile.ts`）
+
+两者都只挂 `authMiddleware` + `requireAuth`，按 id SELECT `compiled_path` 后直接返回文件，不查所有者、visibility、status 或 trip。**任何已登录用户都能按 id 下载任意 compiled 视频或 merged 视频**，包括 private、trashed 和他人的媒体。G-21 只关闭 `thumbnail`/`original`/`raw` 三条路由，这两条是仍存在的绕过入口。列为 G-21 之后的下一优先任务。
+
+**2026-11-03 状态更新：已实施、未验收。** 上文保留为登记时的记录。规则见需求 9 AC 24。
+
+任务记录：
+- [x] 两条路由加所有者/管理员判定（`helpers/ownerFileDownload.ts`，`routes/clips.ts`、`routes/compile.ts`）。
+- [x] 服务端回归 `routes/compiledDownload.test.ts`（两路由 × 匿名、无效令牌、普通非所有者、所有者、管理员 × public、unlisted trip、private、trashed、deleted、merged、trip 缺失、无 compiled），并做变异检查：对旧实现，非所有者拿到 200 与文件字节，用例失败。
+- [x] 客户端下载相关回归（`npm test` 全量）。
+- [x] 本地存储模式浏览器实测（证据见 `travel-album-acceptance/g21/20261102T023422Z/round3-g24/`）。
+- [ ] S3：PENDING（本机没有隔离 S3 环境）。
+- [ ] 验收、线上部署：未进行。
+
+实施时的契约细节：`download-compiled` 对不存在媒体原先返回 `媒体项不存在`，现改为与越权相同的 `媒体文件不存在`，以保证两者逐字节一致；`compile/download` 原本就是这条文案。
+
+本条只关闭这两条下载路由。`/uploads` 的规则差异见 G-21 条目。
+
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
 
@@ -575,6 +607,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**（浏览器、大视频、S3 CORS、线上复核均 PENDING） |
+| P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
@@ -625,8 +658,10 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | GET/HEAD | `/api/media/:id/thumbnail` | 可选 | 共同拒绝（所有人含 admin，404）：媒体不存在、`deleted` 或非 `active`/`trashed` 状态、trip 行缺失。所有者/admin：`active` 与 `trashed`。其他人：trip visibility ∈ {public, unlisted}、`active`、`public`，图片；或普通视频（compiled 文件可用、非 uploading/cancelled），merged 除外。见需求 9 AC 16–22 |
 | GET/HEAD | `/api/media/:id/original` | 可选 | 同上一行；另：`?original=true` 仅所有者/admin；非所有者视频只返回 compiled 文件，无回退 |
 | GET/HEAD | `/api/media/:id/raw` | 可选 | 共同拒绝同上；仅所有者/admin |
+| GET | `/api/media/:mediaId/download-compiled` | 是 | 仅所有者/admin（需求 9 AC 24）。未认证 401；非所有者与不存在同为 404 `NOT_FOUND`；共同拒绝同上 |
+| GET | `/api/media/:mediaId/compile/download` | 是 | 同上一行（需求 9 AC 24） |
 
-三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。
+三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。两条下载路由按 AC 24：未认证 401，其余拒绝 404，所有响应 `private, no-store` + `Vary: Authorization`。（2026-11-03 更新：上一版此处写「仅要求登录、无所有权检查（G-24）」，已由 AC 24 取代。）
 
 ## 附录：涉及的环境变量名
 

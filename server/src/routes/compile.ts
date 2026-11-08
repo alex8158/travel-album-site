@@ -12,6 +12,7 @@ import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
+import { authorizeOwnerFileDownload, OWNER_FILE_NOT_FOUND_BODY, privateNoStore } from '../helpers/ownerFileDownload';
 import { validateTargetDuration, validateSegmentIndices } from '../services/segmentSelector';
 import { CompilationEngine } from '../services/compilationEngine';
 import { getStorageProvider } from '../storage/factory';
@@ -160,8 +161,13 @@ router.get('/:mediaId/compile/status', authMiddleware, requireAuth, async (req: 
 // GET /api/media/:mediaId/compile/download — 下载编译结果
 // Requirements: 7.3, 7.8
 // ---------------------------------------------------------------------------
-router.get('/:mediaId/compile/download', authMiddleware, requireAuth, async (req: Request, res: Response) => {
+// Owner/admin only (multi-user-system G-24, 需求 9 AC 24). A non-owner gets the
+// same 404 as a missing media; the check runs before any storage access.
+router.get('/:mediaId/compile/download', authMiddleware, privateNoStore, requireAuth, async (req: Request, res: Response) => {
   const mediaId = req.params.mediaId as string;
+  if (!authorizeOwnerFileDownload(req, mediaId)) {
+    return res.status(404).json(OWNER_FILE_NOT_FOUND_BODY);
+  }
   const db = getDb();
 
   // Verify media exists and has compiled_path
@@ -170,9 +176,7 @@ router.get('/:mediaId/compile/download', authMiddleware, requireAuth, async (req
   ).get(mediaId) as { id: string; compiled_path: string | null } | undefined;
 
   if (!media) {
-    return res.status(404).json({
-      error: { code: 'NOT_FOUND', message: '媒体文件不存在' },
-    });
+    return res.status(404).json(OWNER_FILE_NOT_FOUND_BODY);
   }
 
   if (!media.compiled_path) {

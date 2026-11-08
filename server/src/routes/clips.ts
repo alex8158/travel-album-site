@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
+import { authorizeOwnerFileDownload, OWNER_FILE_NOT_FOUND_BODY, privateNoStore } from '../helpers/ownerFileDownload';
 import { getSegments } from '../helpers/videoSegmentStore';
 import { MediaItemRow } from '../helpers/mediaItemRow';
 import { analyzeVideo } from '../services/videoAnalyzer';
@@ -194,12 +195,18 @@ export default router;
 // ---------------------------------------------------------------------------
 // GET /api/media/:mediaId/download-compiled — download compiled/merged video
 // ---------------------------------------------------------------------------
+// Owner/admin only (multi-user-system G-24, 需求 9 AC 24). A non-owner gets the
+// same 404 as a missing media; the check runs before any storage access.
 router.get(
   '/:mediaId/download-compiled',
   authMiddleware,
+  privateNoStore,
   requireAuth,
   async (req: Request, res: Response) => {
     const mediaId = req.params.mediaId as string;
+    if (!authorizeOwnerFileDownload(req, mediaId)) {
+      return res.status(404).json(OWNER_FILE_NOT_FOUND_BODY);
+    }
     const db = getDb();
 
     const media = db.prepare(
@@ -207,7 +214,7 @@ router.get(
     ).get(mediaId) as Pick<MediaItemRow, 'id' | 'compiled_path' | 'original_filename' | 'media_type'> | undefined;
 
     if (!media) {
-      return res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体项不存在' } });
+      return res.status(404).json(OWNER_FILE_NOT_FOUND_BODY);
     }
 
     const compiledPath = media.compiled_path;
