@@ -517,6 +517,15 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
   - 大视频：只证明了本机回环环境下的播放、拖动和取消行为。真实网络下的等待时间没有实测，不能据此宣布性能达标；也不能从 RSS 增量推断 Blob 的存放位置。
 - **G-21 整体仍为已实施、未验收**，不宣称全部存储模式或线上已验收。
 
+**2026-11-05 浏览器验收（对应当前代码，仍为已实施、未验收）**：证据在 `travel-album-acceptance/g21/20261102T023422Z/round16-batch-local/g21-browser/`。
+- 代码：已提交的 `4ddab02`，干净隔离 clone，独立的数据库、uploads 与临时目录；源码与构建产物哈希见 `source-head.txt`、`key-source-sha256.txt`、`build-sha256.txt`。合成媒体重新生成，哈希见 `media-sha256.txt`。
+- 用同一套脚本与矩阵（round2 的 `g21.js`），headless Chrome 156.0.8078.81：
+  - 禁用缓存组：51/51 PASS；
+  - 正常缓存组：50 PASS，1 ACCEPTED LIMITATION（R2，2026-11-02 已裁定）。R2 本次的表现与 round2 相同：同一文档内重新打开播放器，没有新请求，视频照常播放。
+- 覆盖：匿名、普通非所有者、所有者、管理员对 public、private、trashed、merged、未剪辑、unlisted 媒体的访问；私有封面（首页显示占位，所有者 `/my` 与管理员页面能加载）；视频播放与拖动；`private, no-store` 且不从缓存读取；撤回后新请求返回 404；登出与切换账户时清理资源；大视频（270 MB，180 秒）只发一次 200 请求，关闭或离开时取消请求并释放 object URL。
+- 本地存储模式浏览器验收：通过，附 R2 限制。现在已能对应当前代码。
+- 仍为 PENDING：S3（含 AuthorizedImage 跟随 302 的 CORS）、线上部署复核。缩略图来源（known-issues 12g）待裁定，不在本次验收范围内。
+
 **G-22 `/uploads` 静态路由无任何 access control，可按路径读取上传目录下的全部文件（安全缺陷，2026-10-06 登记，未修）**
 
 `server/src/index.ts` 中 `app.use('/uploads', express.static(uploadsBase))` 把 `server/uploads/` 整个目录对外提供，不经过 `authMiddleware`，也不查任何 visibility 或 status。该目录包含原图（`${tripId}/originals/${mediaId}${ext}`）、tier slideshow 视频（`${tripId}/tier-slideshow/...`）等全部本地存储文件；`storage/localProvider.ts` 的 `getUrl()` 也生成 `/uploads/...` 形式的路径。
@@ -699,7 +708,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
-| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**（浏览器、大视频、S3 CORS、线上复核均 PENDING） |
+| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING |
 | P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
 | P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；`GET /segments`、`GET /compile/status` 仍开放 |
 | P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409；**未验收** |
