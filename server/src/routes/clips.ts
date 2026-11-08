@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import { authorizeOwnerFileDownload, OWNER_FILE_NOT_FOUND_BODY, privateNoStore } from '../helpers/ownerFileDownload';
+import { authorizeOwnerMediaWrite, OWNER_WRITE_FORBIDDEN_BODY } from '../helpers/ownerMediaWrite';
+import { createTripJobOrConflict } from '../helpers/tripJobCreation';
 import { getSegments } from '../helpers/videoSegmentStore';
 import { MediaItemRow } from '../helpers/mediaItemRow';
 import { analyzeVideo } from '../services/videoAnalyzer';
@@ -53,6 +54,14 @@ router.post(
   requireAuth,
   async (req: Request, res: Response) => {
     const mediaId = req.params.mediaId as string;
+    // Owner/admin only, decided on the URL media before anything else
+    // (multi-user-system G-27, 需求 7 AC 8).
+    const gate = authorizeOwnerMediaWrite(req, mediaId);
+    if (!gate.allowed) {
+      return gate.status === 403
+        ? res.status(403).json(OWNER_WRITE_FORBIDDEN_BODY)
+        : res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体项不存在' } });
+    }
     const db = getDb();
 
     // Verify media item exists and is a video
@@ -68,14 +77,21 @@ router.post(
     }
 
     // Create a processing job
-    const jobId = uuidv4();
-    const now = new Date().toISOString();
+    // One active job per trip (idx_processing_jobs_active_trip). A second
+    // request for the same trip is a 409, never an unhandled error (G-29).
     const tripId = media.trip_id;
-
-    db.prepare(
-      `INSERT INTO processing_jobs (id, trip_id, status, current_step, created_at)
-       VALUES (?, ?, 'queued', 'videoClip', ?)`,
-    ).run(jobId, tripId, now);
+    const job = createTripJobOrConflict(db, tripId, 'videoClip');
+    if (job.kind === 'conflict') {
+      return res.status(409).json({
+        error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中', existingJobId: job.existingJobId },
+      });
+    }
+    if (job.kind === 'error') {
+      const message = job.error instanceof Error ? job.error.message : String(job.error);
+      console.error(`[clips] route=clips tripId=${tripId} mediaId=${mediaId} job creation failed: ${message}`);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
+    }
+    const jobId = job.jobId;
 
     // Return jobId immediately
     res.status(202).json({ jobId, mediaId, status: 'queued' });
@@ -122,6 +138,14 @@ router.post(
   requireAuth,
   async (req: Request, res: Response) => {
     const mediaId = req.params.mediaId as string;
+    // Owner/admin only, decided on the URL media before anything else
+    // (multi-user-system G-27, 需求 7 AC 8).
+    const gate = authorizeOwnerMediaWrite(req, mediaId);
+    if (!gate.allowed) {
+      return gate.status === 403
+        ? res.status(403).json(OWNER_WRITE_FORBIDDEN_BODY)
+        : res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体项不存在' } });
+    }
     const db = getDb();
 
     // Validate body
@@ -146,14 +170,21 @@ router.post(
     }
 
     // Create a processing job
-    const jobId = uuidv4();
-    const now = new Date().toISOString();
+    // One active job per trip (idx_processing_jobs_active_trip). A second
+    // request for the same trip is a 409, never an unhandled error (G-29).
     const tripId = media.trip_id;
-
-    db.prepare(
-      `INSERT INTO processing_jobs (id, trip_id, status, current_step, created_at)
-       VALUES (?, ?, 'queued', 'videoMerge', ?)`,
-    ).run(jobId, tripId, now);
+    const job = createTripJobOrConflict(db, tripId, 'videoMerge');
+    if (job.kind === 'conflict') {
+      return res.status(409).json({
+        error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中', existingJobId: job.existingJobId },
+      });
+    }
+    if (job.kind === 'error') {
+      const message = job.error instanceof Error ? job.error.message : String(job.error);
+      console.error(`[clips] route=merge tripId=${tripId} mediaId=${mediaId} job creation failed: ${message}`);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
+    }
+    const jobId = job.jobId;
 
     // Return jobId immediately
     res.status(202).json({ jobId, mediaId, status: 'queued' });
@@ -251,6 +282,14 @@ router.post(
   requireAuth,
   async (req: Request, res: Response) => {
     const mediaId = req.params.mediaId as string;
+    // Owner/admin only, decided on the URL media before anything else
+    // (multi-user-system G-27, 需求 7 AC 8).
+    const gate = authorizeOwnerMediaWrite(req, mediaId);
+    if (!gate.allowed) {
+      return gate.status === 403
+        ? res.status(403).json(OWNER_WRITE_FORBIDDEN_BODY)
+        : res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体项不存在' } });
+    }
     const db = getDb();
 
     const media = db.prepare(
@@ -272,14 +311,21 @@ router.post(
     } = req.body ?? {};
 
     // Create a processing job
-    const jobId = uuidv4();
-    const now = new Date().toISOString();
+    // One active job per trip (idx_processing_jobs_active_trip). A second
+    // request for the same trip is a 409, never an unhandled error (G-29).
     const tripId = media.trip_id;
-
-    db.prepare(
-      `INSERT INTO processing_jobs (id, trip_id, status, current_step, created_at)
-       VALUES (?, ?, 'queued', 'videoReEdit', ?)`,
-    ).run(jobId, tripId, now);
+    const job = createTripJobOrConflict(db, tripId, 'videoReEdit');
+    if (job.kind === 'conflict') {
+      return res.status(409).json({
+        error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中', existingJobId: job.existingJobId },
+      });
+    }
+    if (job.kind === 'error') {
+      const message = job.error instanceof Error ? job.error.message : String(job.error);
+      console.error(`[clips] route=re-edit tripId=${tripId} mediaId=${mediaId} job creation failed: ${message}`);
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误' } });
+    }
+    const jobId = job.jobId;
 
     res.status(202).json({ jobId, mediaId, status: 'queued' });
 

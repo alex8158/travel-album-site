@@ -89,6 +89,8 @@
 8. IF 合并过程中发生错误, THEN THE Merge_Engine SHALL 返回包含错误描述的结果并清理临时文件
 9. THE Clip_Editor_UI SHALL 在架构上预留后续支持片段入点和出点微调的扩展能力
 
+> **2026-11-03 限定（multi-user-system G-27，需求 7 AC 8）**：本需求与需求 8 AC 6 的合并导出、再次合并，以及 tasks 中的 `POST /api/media/:mediaId/clips`、`POST /api/media/:mediaId/merge`，加上 `POST /api/media/:mediaId/re-edit`，现只允许媒体所有者与管理员对 `active` 媒体调用。未认证 401；普通非所有者 403 `FORBIDDEN`；非 `active`、不存在、已删除或 trip 缺失的媒体 404。片段索引只在 URL 指定的媒体内解析。
+
 ### 需求 6：片段过渡效果
 
 **用户故事：** 作为用户，我希望剪辑后的视频片段之间有平滑的过渡效果，音频拼接处无突兀断裂，以便观看体验流畅自然。

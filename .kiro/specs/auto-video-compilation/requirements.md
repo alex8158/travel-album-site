@@ -121,8 +121,9 @@
 7. IF 已有剪辑任务正在执行（状态为 queued 或 running）, THEN THE Compilation_Engine SHALL 返回 HTTP 409 冲突错误及错误描述
 8. IF GET /api/media/:mediaId/compile/download 请求时 Compiled_Video 尚未生成, THEN THE Compilation_Engine SHALL 返回 HTTP 404 错误并说明剪辑尚未完成
 
-> **2026-11-03 限定（multi-user-system G-24，需求 9 AC 24）**：AC 3、AC 8 原文保留，现只对媒体所有者与管理员成立。未认证请求返回 401；已登录的非所有者得到与「媒体不存在」相同的 404 `NOT_FOUND`，不会看到 AC 8 的「剪辑尚未完成」；所有响应带 `Cache-Control: private, no-store` 与 `Vary: Authorization`。
+> **2026-11-03 限定（multi-user-system G-24，需求 9 AC 24）**：AC 3、AC 8 原文保留，现只对媒体所有者与管理员成立。未认证请求返回 401；已登录的非所有者得到与「媒体不存在」相同的 404 `NOT_FOUND`，不会看到 AC 8 的「剪辑尚未完成」；所有响应带 `Cache-Control: private, no-store` 与 `Vary: Authorization`。本 spec 其余路由（`POST /compile`、`GET /compile/status`）的所有权问题登记为 multi-user-system G-27，未修。
 
+> **2026-11-03 限定（multi-user-system G-27，需求 7 AC 8）**：AC 1、AC 4–7、AC 9、AC 10 原文保留，现只对媒体所有者与管理员、且媒体为 `active` 时成立。未认证返回 401。普通非所有者先得到 403 `FORBIDDEN`，不会进入参数校验、片段查询（AC 6 的 `NO_SEGMENTS`）或任务冲突检查（AC 7 的 409）。所有者与管理员对非 `active` 媒体，以及所有人对不存在、已删除或 trip 缺失的媒体，均返回 404。`GET /compile/status` 不在此限定内，仍属 G-27 未修部分。
 9. IF POST /api/media/:mediaId/compile 请求中 segmentIndices 为空数组或包含无效索引, THEN THE Compilation_Engine SHALL 返回 HTTP 400 错误并说明参数无效
 10. IF POST /api/media/:mediaId/compile 请求中 targetDuration 超出有效范围, THEN THE Compilation_Engine SHALL 返回 HTTP 400 错误并说明时长范围限制
 

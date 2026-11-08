@@ -13,6 +13,7 @@ import fs from 'fs';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
 import { authorizeOwnerFileDownload, OWNER_FILE_NOT_FOUND_BODY, privateNoStore } from '../helpers/ownerFileDownload';
+import { authorizeOwnerMediaWrite, OWNER_WRITE_FORBIDDEN_BODY } from '../helpers/ownerMediaWrite';
 import { validateTargetDuration, validateSegmentIndices } from '../services/segmentSelector';
 import { CompilationEngine } from '../services/compilationEngine';
 import { getStorageProvider } from '../storage/factory';
@@ -26,6 +27,14 @@ const compilationEngine = new CompilationEngine();
 // ---------------------------------------------------------------------------
 router.post('/:mediaId/compile', authMiddleware, requireAuth, async (req: Request, res: Response) => {
   const mediaId = req.params.mediaId as string;
+  // Owner/admin only, decided on the URL media before validation, segment
+  // lookup, conflict check or job creation (multi-user-system G-27, 需求 7 AC 8).
+  const gate = authorizeOwnerMediaWrite(req, mediaId);
+  if (!gate.allowed) {
+    return gate.status === 403
+      ? res.status(403).json(OWNER_WRITE_FORBIDDEN_BODY)
+      : res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
+  }
   const { segmentIndices, targetDuration } = req.body;
   const db = getDb();
 

@@ -161,6 +161,17 @@
 5. WHEN 目标旅行不存在时, THE 系统 SHALL 返回 404，错误码 `NOT_FOUND`
 6. THE 系统 SHALL 在素材与回收站相关路由（`routes/media.ts`、`routes/trash.ts`）中同样执行 Owner_Or_Admin_Rule 并使用 `FORBIDDEN` 错误码
 7. THE 系统 SHALL 统一以 `FORBIDDEN` 作为越权访问的错误码（不区分资源类型）
+8. （2026-11-03 裁定，G-27）THE 系统 SHALL 只允许媒体所有者（`trips.user_id`）与管理员，对 `active` 媒体调用以下四条媒体处理写操作：`POST /api/media/:mediaId/clips`、`/merge`、`/re-edit`（`routes/clips.ts`）与 `POST /api/media/:mediaId/compile`（`routes/compile.ts`）。
+    - 未认证（无令牌或令牌无效）：401 `TOKEN_INVALID`（Require_Auth）。
+    - 媒体不存在、`status = 'deleted'` 或关联 trip 行缺失：对所有人（含管理员）返回 404 `NOT_FOUND`，沿用各路由原有文案。
+    - 其余媒体（含 trashed）的普通非所有者：403 `FORBIDDEN`（`无权操作此资源`），即本需求 AC 4、AC 7 的写操作契约。需求 9 AC 20、AC 24 的 404 例外**不**适用于这四条路由。
+    - 所有者与管理员请求 `trashed` 或其他非 `active` 媒体：404 `NOT_FOUND`。回收站媒体恢复为 `active` 后才可处理。
+    - 判定只依据 URL 中的 `:mediaId`，在 Require_Auth 之后立即执行，先于参数校验、片段查询、任务冲突检查、任务创建与任何文件读写。请求体中的片段索引在该媒体自身的片段内解析。
+    - 通过判定的请求保留既有业务响应（202、400、404 `NO_SEGMENTS`、409 任务冲突等）。
+    - 实现：`server/src/helpers/ownerMediaWrite.ts` 的 `decideOwnerMediaWrite`（纯判定）与 `authorizeOwnerMediaWrite`（复用 `loadMediaFileAccessRow`）。
+
+    > **AC 8 状态（2026-11-03）**：已实施、**未验收**。服务端回归与本地隔离浏览器回归已有证据，见 G-27 条目。
+
 ## 需求 8：个人空间接口
 
 **用户故事：** 作为用户，我需要看到自己的全部旅行，包括未公开的内容。
@@ -470,7 +481,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 - 服务端：三条路由各自挂 `authMiddleware`，先设 `private, no-store` 与 `Vary: Authorization`，再单次只读 SELECT（media LEFT JOIN trips）与纯判定；被拒与不存在同为 404；判定通过后才做存储、生成、UPDATE、签名、302。非所有者的 merged 视频一律 404，并从 `GET /api/trips/:id/gallery` 的非所有者视频列表中移除（降级策略，见 G-20 附注 2026-10-29）。
 - 客户端：`AuthorizedImage`（新）只对同源 `/api/media/:id/{thumbnail,original,raw}` 附加 Bearer；外域、`blob:`、`data:` 与其他路径不发令牌。支持 `loading="lazy"`（接近视口才 fetch）；src 变化、登录/退出/切换账户、卸载时取消请求并释放 object URL。owner 播放器（`MyGalleryPage`）用 `VideoPlayer authorized`（复用 `AuthorizedVideo` 整文件 blob，无网络 Range 流式）；公开 `GalleryPage` 播放器保持 `<source src>`，其数据来自匿名获取的 gallery 列表。
-- **本条只关闭这三条路由的暴露面，不代表所有媒体文件出口已安全**：已登录的非所有者仍可经 G-24 的两条下载路由按 id 取得任意 compiled/merged 视频；`/uploads` 的规则与本条不同（见下）。（2026-11-03：G-24 已按 AC 24 实施、未验收。）
+- **本条只关闭这三条路由的暴露面，不代表所有媒体文件出口已安全**：已登录的非所有者仍可经 G-24 的两条下载路由按 id 取得任意 compiled/merged 视频；`/uploads` 的规则与本条不同（见下）。（2026-11-03：G-24 已按 AC 24 实施、未验收；同文件其余路由见 G-27。）
 
 与 `routes/uploadsAccess.ts`（G-22）的实际差异，本轮未修改 uploadsAccess：
 
@@ -559,7 +570,89 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 实施时的契约细节：`download-compiled` 对不存在媒体原先返回 `媒体项不存在`，现改为与越权相同的 `媒体文件不存在`，以保证两者逐字节一致；`compile/download` 原本就是这条文案。
 
-本条只关闭这两条下载路由。`/uploads` 的规则差异见 G-21 条目。
+本条只关闭这两条下载路由。同文件的其余路由仍不校验所有权（G-27）；`/uploads` 的规则差异见 G-21 条目。
+
+**G-27 `clips.ts` / `compile.ts` 的其余路由仅要求登录，不校验所有权（2026-11-03 登记，代码核查，未修）**
+
+两个文件中 `user_id` 出现 0 次；以下路由只挂 `authMiddleware` + `requireAuth`，按 `:mediaId` 直接操作：
+
+| 路由 | 类型 | 风险 |
+| --- | --- | --- |
+| `GET /api/media/:mediaId/segments` | 读取 | 任意已登录用户可读他人视频的片段时间轴与评分 |
+| `GET /api/media/:mediaId/compile/status` | 读取 | 可读他人剪辑任务状态与错误信息 |
+| `POST /api/media/:mediaId/clips` | 触发写操作 | 创建 `processing_jobs`，对他人视频启动分析并写回片段 |
+| `POST /api/media/:mediaId/merge` | 触发写操作 | 创建任务，按片段合并他人视频并写入存储 |
+| `POST /api/media/:mediaId/re-edit` | 触发写操作 | 以自定义参数重新剪辑他人视频 |
+| `POST /api/media/:mediaId/compile` | 触发写操作 | 创建 `compile_jobs`，对他人视频启动编译并可能更新 `compiled_path` |
+
+写操作类风险更高：会消耗服务器资源，并可能改变他人媒体的派生文件。当前依据只是代码核查，未实测。本轮只登记；G-24 交付后优先单独核查写操作。
+
+**2026-11-03 状态更新**：上文保留为登记时的记录。本条按路由分开记录，整项**继续开放**。
+
+| 路由 | 状态 |
+| --- | --- |
+| `POST /clips`、`POST /merge`、`POST /re-edit`、`POST /compile` | 已按需求 7 AC 8 实施，**未验收** |
+| `GET /segments`、`GET /compile/status` | 未核查、未修 |
+
+只读核查（隔离探针，证据见 `travel-album-acceptance/g21/20261102T023422Z/round4-g27/`）在修复前证实了以下几点：
+- 普通非所有者对他人 `active` 视频调用这四条路由，与所有者得到相同的 202。
+- 前三条会在受害者的 trip 下创建 `processing_jobs`，并以受害者的 mediaId 和 tripId 调用处理入口；`/compile` 会调用编译引擎。
+- `POST /clips` 实际改写了受害者的 `video_segments`。
+- 请求体只携带片段索引，无法跨媒体引用他人片段。
+
+任务记录：
+- [x] 判定函数 `helpers/ownerMediaWrite.ts`，接入 `routes/clips.ts` 的三条路由与 `routes/compile.ts`。
+- [x] 服务端回归 `routes/mediaWriteOwnership.test.ts`（31 例）：四条路由（`/compile` 分自动、手动两种）× 匿名、无效令牌、普通非所有者、所有者、管理员。
+  - 普通非所有者在请求体无效、媒体无片段、已有任务时，都先得到 403。
+  - trashed：非所有者 403；所有者与管理员 404。
+  - 不存在、已删除、trip 缺失：所有人 404。
+  - 被拒请求不创建任务，不改动 `video_segments`，处理入口与 `downloadToTemp` 零调用。
+  - 所有者和管理员的合法请求返回 202；400、`NO_SEGMENTS`、409 保持原样。
+  - 变异检查：旧实现让非所有者得到 202，用例失败。
+  - 编译引擎在这组单元测试里是 stub，`compile_jobs` 的真实写入链没有运行；该链路由浏览器回归覆盖。
+- [x] 本地隔离浏览器回归：ClipEditor 合并与重新剪辑、CompilationPreview 生成剪辑、SegmentAdjuster 重新生成，均为所有者操作，使用真实处理与合成媒体；非所有者与匿名直接请求被拒，且没有新增任何任务。
+- [ ] S3、线上：未测。
+- [ ] 两条 GET 路由：另查。
+
+**G-29 同一 trip 已有进行中任务时，处理路由会使服务进程退出（2026-11-03 登记，未修，与 G-27 权限修复无关）**
+
+`processing_jobs` 有部分唯一索引 `idx_processing_jobs_active_trip`：同一 trip 只允许一条 `queued` 或 `running` 的任务（`database.ts`）。`routes/clips.ts` 的 `/clips`、`/merge`、`/re-edit` 在 `try` 块外执行 `INSERT INTO processing_jobs`，而这三个处理函数都是 async，所以唯一约束冲突会变成未处理的 Promise 拒绝，Node 进程随之退出。
+
+实测（隔离环境，2026-11-03）：浏览器驱动连续发出两次同 trip 的处理请求，第二条 `/merge` 抛出 `SqliteError: UNIQUE constraint failed: processing_jobs.trip_id`，服务进程退出，之后的请求全部 `ERR_CONNECTION_REFUSED`。退出前那条任务停在 `running`，需要人工清理。
+
+当时运行的是未包含 G-27 判定的旧构建，所以触发者是普通非所有者。G-27 之后只有所有者和管理员能触发，但插入代码未变；按代码推断，所有者在同一 trip 上并发发起两项处理仍会导致进程退出，这一点**未在新代码上复现**。
+
+**2026-11-04 状态更新：已在当前构建复现并修复，未验收。** 上文保留为登记时的记录。证据见 `travel-album-acceptance/g21/20261102T023422Z/round6-g29/`（修复前）与 `round7-g29-fix/`（修复后）。
+
+修复前（当前构建，含 G-27 判定，独立服务进程 + 真实 SQLite，只把耗时的媒体处理换成保持 8 s 的假实现）：
+- 普通非所有者 `POST /clips` 返回 403。
+- 所有者在同一 trip 上依次发起 `clips→clips`、`merge→merge`、`re-edit→re-edit`、`clips→merge`，四组都是第一项返回 202、任务进入 `running`；第二项抛出 `SqliteError: UNIQUE constraint failed: processing_jobs.trip_id`，客户端收到 socket 错误，服务进程以 exit code 1 退出，之后的请求 `ECONNREFUSED`。
+- 第一项任务停在 `running`，重启时被 `database.ts` 的启动清理改为 `failed`（`服务重启，任务中断`），结果丢失。
+- 不同 trip 的对照组都返回 202，进程存活。
+
+修复（仅 `routes/clips.ts` 的三条 POST）：新增 `helpers/tripJobCreation.ts` 的 `createTripJobOrConflict`，沿用 `routes/processJobs.ts` 的做法，在同一事务里先查该 trip 的活动任务再插入；部分唯一索引保留不动。
+- 同一 trip 已有 `queued` 或 `running` 任务时，返回 409 `{ error: { code: 'ALREADY_PROCESSING', message: '该旅行正在处理中', existingJobId } }`。能走到这一步的只有通过 G-27 判定的所有者和管理员，与 `GET /api/process-jobs/:jobId` 的读取权限一致。
+- 插入异常只有在确认是 `SQLITE_CONSTRAINT_UNIQUE` 且命中 `processing_jobs.trip_id`、**并且**能读到该 trip 的活动任务时，才映射为上述 409。
+- 其他插入错误返回 500 `INTERNAL_ERROR`，服务端记录 route、tripId、mediaId 和错误信息；进程不退出。
+- G-27 判定仍在最前面：普通非所有者在 trip 有活动任务时仍得到 403。冲突请求在建任务和媒体处理之前结束；第一项任务照常运行，202 之后的后台状态更新逻辑未改。
+
+修复后（同一套独立进程探针）：
+- 四组同 trip 组合中，第二项都返回 409，`existingJobId` 等于第一项任务；冲突请求没有新增任务，也没有调用媒体处理；进程继续响应；第一项最终 `completed`；第一项完成后，同 trip 重新提交返回 202 并完成。
+- 普通非所有者在 trip 有活动任务时返回 403。
+- 不同 trip 的对照组都返回 202 并完成。
+- 用测试 trigger 模拟其他插入错误：三条路由都返回 500，日志含 tripId 和 mediaId，进程存活；删除 trigger 后同 trip 请求返回 202。
+
+回归测试：`routes/clipsJobConflict.test.ts`，9 个用例，真实 SQLite。变异检查：对修复前的 `clips.ts`，5 个用例失败，并出现 4 个未处理的 `UNIQUE constraint failed` 拒绝。
+
+不在本条范围内（另行处理）：全局 `unhandledRejection` 兜底；进程退出到重启之间 trip 被锁住的恢复问题；`POST /compile` 的并发行为；`aiEditing.ts` 的任务插入（见 G-30）。
+
+**G-30 `aiEditing.ts` 的任务插入在同 trip 冲突时的行为（2026-11-04 登记，代码推断，待实测）**
+
+`routes/aiEditing.ts` 的 `createProcessingJob()` 直接执行 `INSERT INTO processing_jobs`，不先查活动任务。调用点在第 138、269、396 行。
+
+逐一核对代码后，三处都在各自处理函数的 `try` 块内，catch 返回 500 `INTERNAL_ERROR`。所以按代码推断，同 trip 冲突时会返回 500，**不会**让进程退出。上一轮报告里「第 269 行附近没看到 `try`，可能导致进程退出」的推断不成立，在此更正。
+
+尚未实测的问题：冲突时返回 500 而不是 409，与 `processJobs.ts` 和 G-29 修复后的契约不一致。是否统一需另行决定。
 
 **G-18 匿名 trip 响应包含 `userId`（待审计，TBD）**
 `rowToTrip()` 返回 8 个字段：`id`、`title`、`description`、`coverImageId`、`visibility`、`userId`、`createdAt`、`updatedAt`。其中 `userId`（所有者账户 id）在 `GET /api/trips` 的 `TripSummary` 契约中**不存在**，却经由 `GET /api/trips/:id` 与 `GET /api/trips/:id/gallery` 暴露给匿名调用者。
@@ -608,6 +701,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**（浏览器、大视频、S3 CORS、线上复核均 PENDING） |
 | P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
+| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；`GET /segments`、`GET /compile/status` 仍开放 |
+| P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409；**未验收** |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |
@@ -660,8 +755,12 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | GET/HEAD | `/api/media/:id/raw` | 可选 | 共同拒绝同上；仅所有者/admin |
 | GET | `/api/media/:mediaId/download-compiled` | 是 | 仅所有者/admin（需求 9 AC 24）。未认证 401；非所有者与不存在同为 404 `NOT_FOUND`；共同拒绝同上 |
 | GET | `/api/media/:mediaId/compile/download` | 是 | 同上一行（需求 9 AC 24） |
+| POST | `/api/media/:mediaId/clips` | 是 | 所有者或 admin，且媒体为 `active`（需求 7 AC 8）。非所有者 403 `FORBIDDEN`；不存在、已删除、trip 缺失 404；所有者/admin 遇非 `active` 404 |
+| POST | `/api/media/:mediaId/merge` | 是 | 同上一行（需求 7 AC 8） |
+| POST | `/api/media/:mediaId/re-edit` | 是 | 同上一行（需求 7 AC 8） |
+| POST | `/api/media/:mediaId/compile` | 是 | 同上一行（需求 7 AC 8） |
 
-三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。两条下载路由按 AC 24：未认证 401，其余拒绝 404，所有响应 `private, no-store` + `Vary: Authorization`。（2026-11-03 更新：上一版此处写「仅要求登录、无所有权检查（G-24）」，已由 AC 24 取代。）
+三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。两条下载路由按 AC 24：未认证 401，其余拒绝 404，所有响应 `private, no-store` + `Vary: Authorization`。（2026-11-03 更新：上一版此处写「仅要求登录、无所有权检查（G-24）」，已由 AC 24 取代。）同文件的四条 POST 按需求 7 AC 8 处理（拒绝时返回 403，不是 404）；`GET /segments`、`GET /compile/status` 仍不校验所有权，见 G-27。
 
 ## 附录：涉及的环境变量名
 
