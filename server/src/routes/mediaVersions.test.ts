@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import mediaVersionsRouter from './mediaVersions';
@@ -75,7 +76,7 @@ describe('Media Versions API', () => {
 
   describe('POST /api/media/:mediaId/versions', () => {
     it('should create a version record and return 201', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           version_type: 'thumbnail',
@@ -105,7 +106,7 @@ describe('Media Versions API', () => {
       const validTypes = ['original', 'thumbnail', 'preview', 'enhanced', 'ai_refined', 'proxy', 'segment', 'final_output'];
 
       for (const vtype of validTypes) {
-        const res = await request(app)
+        const res = await request(await listenLocal(app))
           .post(`/api/media/${mediaId}/versions`)
           .send({
             version_type: vtype,
@@ -118,7 +119,7 @@ describe('Media Versions API', () => {
     });
 
     it('should return 400 for invalid version_type', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           version_type: 'invalid_type',
@@ -132,7 +133,7 @@ describe('Media Versions API', () => {
     });
 
     it('should return 400 when version_type is missing', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           file_path: 'uploads/test.webp',
@@ -143,7 +144,7 @@ describe('Media Versions API', () => {
     });
 
     it('should return 400 when file_path is missing', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           version_type: 'thumbnail',
@@ -154,7 +155,7 @@ describe('Media Versions API', () => {
     });
 
     it('should default status to ready when not provided', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           version_type: 'original',
@@ -166,7 +167,7 @@ describe('Media Versions API', () => {
     });
 
     it('should allow custom status value', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({
           version_type: 'enhanced',
@@ -182,21 +183,21 @@ describe('Media Versions API', () => {
   describe('GET /api/media/:mediaId/versions', () => {
     it('should return all versions for a media item', async () => {
       // Create two versions
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({ version_type: 'thumbnail', file_path: 'uploads/thumb.webp' });
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({ version_type: 'preview', file_path: 'uploads/preview.webp' });
 
-      const res = await request(app).get(`/api/media/${mediaId}/versions`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions`);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
     });
 
     it('should return empty array when no versions exist', async () => {
-      const res = await request(app).get(`/api/media/${mediaId}/versions`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions`);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
@@ -205,14 +206,14 @@ describe('Media Versions API', () => {
     it('should only return versions for the specified media_id', async () => {
       const otherMediaId = createMedia(tripId, userId);
 
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({ version_type: 'thumbnail', file_path: 'uploads/thumb1.webp' });
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/media/${otherMediaId}/versions`)
         .send({ version_type: 'thumbnail', file_path: 'uploads/thumb2.webp' });
 
-      const res = await request(app).get(`/api/media/${mediaId}/versions`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions`);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
@@ -222,13 +223,13 @@ describe('Media Versions API', () => {
 
   describe('GET /api/media/:mediaId/versions/:versionId', () => {
     it('should return a single version record', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({ version_type: 'thumbnail', file_path: 'uploads/thumb.webp', file_size: 5000 });
 
       const versionId = createRes.body.id;
 
-      const res = await request(app).get(`/api/media/${mediaId}/versions/${versionId}`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions/${versionId}`);
 
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(versionId);
@@ -237,7 +238,7 @@ describe('Media Versions API', () => {
     });
 
     it('should return 404 for non-existent version', async () => {
-      const res = await request(app).get(`/api/media/${mediaId}/versions/non-existent-id`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions/non-existent-id`);
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
@@ -246,22 +247,22 @@ describe('Media Versions API', () => {
 
   describe('DELETE /api/media/:mediaId/versions/:versionId', () => {
     it('should delete a version record and return 204', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/versions`)
         .send({ version_type: 'thumbnail', file_path: 'uploads/thumb.webp' });
 
       const versionId = createRes.body.id;
 
-      const res = await request(app).delete(`/api/media/${mediaId}/versions/${versionId}`);
+      const res = await request(await listenLocal(app)).delete(`/api/media/${mediaId}/versions/${versionId}`);
       expect(res.status).toBe(204);
 
       // Verify it's gone
-      const getRes = await request(app).get(`/api/media/${mediaId}/versions/${versionId}`);
+      const getRes = await request(await listenLocal(app)).get(`/api/media/${mediaId}/versions/${versionId}`);
       expect(getRes.status).toBe(404);
     });
 
     it('should return 404 when deleting non-existent version', async () => {
-      const res = await request(app).delete(`/api/media/${mediaId}/versions/non-existent-id`);
+      const res = await request(await listenLocal(app)).delete(`/api/media/${mediaId}/versions/non-existent-id`);
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
     });

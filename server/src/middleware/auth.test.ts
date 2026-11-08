@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express, { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { signToken } from '../services/authService';
 import { authMiddleware, requireAuth, requireAdmin, requireOwnership } from './auth';
 
@@ -33,7 +34,7 @@ describe('authMiddleware', () => {
     const token = signToken({ userId: 'u1', role: 'admin' });
     const app = buildApp([authMiddleware]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', `Bearer ${token}`);
 
@@ -44,7 +45,7 @@ describe('authMiddleware', () => {
   it('should continue without req.user when no Authorization header', async () => {
     const app = buildApp([authMiddleware]);
 
-    const res = await request(app).get('/test');
+    const res = await request(await listenLocal(app)).get('/test');
 
     expect(res.status).toBe(200);
     expect(res.body.user).toBeNull();
@@ -53,7 +54,7 @@ describe('authMiddleware', () => {
   it('should continue without req.user when Authorization is not Bearer', async () => {
     const app = buildApp([authMiddleware]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', 'Basic abc123');
 
@@ -64,7 +65,7 @@ describe('authMiddleware', () => {
   it('should continue without req.user when token is invalid', async () => {
     const app = buildApp([authMiddleware]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', 'Bearer invalid.token.here');
 
@@ -77,7 +78,7 @@ describe('requireAuth', () => {
   it('should return 401 when req.user is not set', async () => {
     const app = buildApp([requireAuth]);
 
-    const res = await request(app).get('/test');
+    const res = await request(await listenLocal(app)).get('/test');
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('TOKEN_INVALID');
@@ -87,7 +88,7 @@ describe('requireAuth', () => {
     const token = signToken({ userId: 'u1', role: 'regular' });
     const app = buildApp([authMiddleware, requireAuth]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', `Bearer ${token}`);
 
@@ -100,7 +101,7 @@ describe('requireAdmin', () => {
   it('should return 401 when req.user is not set', async () => {
     const app = buildApp([requireAdmin]);
 
-    const res = await request(app).get('/test');
+    const res = await request(await listenLocal(app)).get('/test');
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('TOKEN_INVALID');
@@ -110,7 +111,7 @@ describe('requireAdmin', () => {
     const token = signToken({ userId: 'u1', role: 'regular' });
     const app = buildApp([authMiddleware, requireAdmin]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', `Bearer ${token}`);
 
@@ -122,7 +123,7 @@ describe('requireAdmin', () => {
     const token = signToken({ userId: 'u1', role: 'admin' });
     const app = buildApp([authMiddleware, requireAdmin]);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test')
       .set('Authorization', `Bearer ${token}`);
 
@@ -140,7 +141,7 @@ describe('requireOwnership', () => {
       res.json({ ok: true });
     });
 
-    const res = await request(app).get('/test?ownerId=u1');
+    const res = await request(await listenLocal(app)).get('/test?ownerId=u1');
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('TOKEN_INVALID');
@@ -154,7 +155,7 @@ describe('requireOwnership', () => {
       res.json({ ok: true });
     });
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test?ownerId=u1')
       .set('Authorization', `Bearer ${token}`);
 
@@ -170,7 +171,7 @@ describe('requireOwnership', () => {
       res.json({ ok: true });
     });
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test?ownerId=u1')
       .set('Authorization', `Bearer ${token}`);
 
@@ -186,7 +187,7 @@ describe('requireOwnership', () => {
       res.json({ ok: true });
     });
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .get('/test?ownerId=u1')
       .set('Authorization', `Bearer ${token}`);
 

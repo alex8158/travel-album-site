@@ -14,6 +14,7 @@ import path from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
@@ -100,11 +101,19 @@ type RequesterKind = 'anonymous' | 'non-owner' | 'owner' | 'admin';
 
 /** GET with an optional bearer token; video bodies are read as raw bytes. */
 function getAs(url: string, token: string | undefined, raw = false) {
-  let req = request(app).get(url);
+  let req = request(localServer()).get(url);
   if (raw) req = req.responseType('blob');
   return token ? req.set('Authorization', `Bearer ${token}`) : req;
 }
 
+// One server per test for request builders that callers await or chain
+// (known-issues 12a; see test-support/localServer.ts).
+let perTestServer: import('http').Server | undefined;
+beforeEach(async () => { perTestServer = await listenLocal(app); });
+function localServer(): import('http').Server {
+  if (!perTestServer) throw new Error('localServer() used outside a test');
+  return perTestServer;
+}
 describe('highlight/tier photo endpoints — media-level visibility (G-19)', () => {
   let owner: { userId: string; token: string };
 
@@ -142,7 +151,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const publicId = createHighlightPhoto(tripId, { visibility: 'public' });
       const privateId = createHighlightPhoto(tripId, { visibility: 'private' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${tripId}/highlight-photos`);
       expect(res.status).toBe(200);
       expect(idsOf(res.body)).toEqual([publicId]);
       // A leaked id is enough to fetch the file: the mediaServing routes perform
@@ -155,7 +164,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
 
-      const res = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
       expect(res.status).toBe(200);
       expect(idsOf(res.body)).toEqual([publicId]);
       expect(JSON.stringify(res.body)).not.toContain(privateId);
@@ -165,13 +174,13 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const tripId = createTrip(owner.userId, 'public');
       const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
 
-      const highlights = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
+      const highlights = await request(await listenLocal(app)).get(`/api/trips/${tripId}/highlight-photos`);
       expect(highlights.status).toBe(200);
       expect(idsOf(highlights.body)).toEqual([publicId]);
       expect(highlights.body.photos[0].thumbnailUrl).toBe(`/api/media/${publicId}/thumbnail`);
       expect(highlights.body.photos[0].originalUrl).toBe(`/api/media/${publicId}/original`);
 
-      const tier = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+      const tier = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
       expect(tier.status).toBe(200);
       expect(idsOf(tier.body)).toEqual([publicId]);
     });
@@ -180,12 +189,12 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const tripId = createTrip(owner.userId, 'public');
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
 
-      const highlights = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
+      const highlights = await request(await listenLocal(app)).get(`/api/trips/${tripId}/highlight-photos`);
       expect(highlights.status).toBe(200);
       expect(idsOf(highlights.body)).toEqual([]);
       expect(JSON.stringify(highlights.body)).not.toContain(privateId);
 
-      const tier = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+      const tier = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
       expect(tier.status).toBe(200);
       expect(idsOf(tier.body)).toEqual([]);
     });
@@ -198,7 +207,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
       const stranger = createTestUser('regular');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/tier-photos`)
         .set('Authorization', `Bearer ${stranger.token}`);
       expect(res.status).toBe(200);
@@ -213,13 +222,13 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
 
-      const highlights = await request(app)
+      const highlights = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/highlight-photos`)
         .set('Authorization', `Bearer ${owner.token}`);
       expect(highlights.status).toBe(200);
       expect(idsOf(highlights.body).sort()).toEqual([publicId, privateId].sort());
 
-      const tier = await request(app)
+      const tier = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/tier-photos`)
         .set('Authorization', `Bearer ${owner.token}`);
       expect(tier.status).toBe(200);
@@ -232,7 +241,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
       const admin = createTestUser('admin');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/tier-photos`)
         .set('Authorization', `Bearer ${admin.token}`);
       expect(res.status).toBe(200);
@@ -251,7 +260,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const publicId = createHighlightPhoto(tripId, { visibility: 'public' });
       const privateId = createHighlightPhoto(tripId, { visibility: 'private' });
 
-      const res = await request(app).get(`/api/trips/${tripId}/highlight-photos`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${tripId}/highlight-photos`);
 
       expect(res.status).toBe(200);
       expect(idsOf(res.body)).toEqual([publicId]);
@@ -263,7 +272,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const publicId = createHighlightPhoto(tripId, { visibility: 'public', tier: true });
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
 
-      const res = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
 
       expect(res.status).toBe(200);
       expect(idsOf(res.body)).toEqual([publicId]);
@@ -276,14 +285,14 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const privateId = createHighlightPhoto(tripId, { visibility: 'private', tier: true });
       const stranger = createTestUser('regular');
 
-      const highlights = await request(app)
+      const highlights = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/highlight-photos`)
         .set('Authorization', `Bearer ${stranger.token}`);
       expect(highlights.status).toBe(200);
       expect(idsOf(highlights.body)).toEqual([publicId]);
       expect(JSON.stringify(highlights.body)).not.toContain(privateId);
 
-      const tier = await request(app)
+      const tier = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/tier-photos`)
         .set('Authorization', `Bearer ${stranger.token}`);
       expect(tier.status).toBe(200);
@@ -303,7 +312,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
 
       try {
         // Proof the fixture is real and discoverable: the owner does get the URL.
-        const asOwner = await request(app)
+        const asOwner = await request(await listenLocal(app))
           .get(`/api/trips/${tripId}/tier-photos`)
           .set('Authorization', `Bearer ${owner.token}`);
         expect(asOwner.status).toBe(200);
@@ -311,12 +320,12 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
           `/api/trips/${tripId}/tier-slideshow/landscape/`,
         );
 
-        const anon = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+        const anon = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
         expect(anon.status).toBe(200);
         expect(anon.body.slideshowUrls).toEqual({});
 
         const stranger = createTestUser('regular');
-        const asStranger = await request(app)
+        const asStranger = await request(await listenLocal(app))
           .get(`/api/trips/${tripId}/tier-photos`)
           .set('Authorization', `Bearer ${stranger.token}`);
         expect(asStranger.status).toBe(200);
@@ -333,7 +342,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
 
       try {
-        const res = await request(app).get(
+        const res = await request(await listenLocal(app)).get(
           `/api/trips/${tripId}/tier-slideshow/landscape/tier.mp4`,
         );
         expect(res.status).toBe(404);
@@ -346,7 +355,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
 
   describe('behaviour this change deliberately leaves alone', () => {
     it('returns 404 for a trip that does not exist', async () => {
-      const res = await request(app).get('/api/trips/no-such-trip/highlight-photos');
+      const res = await request(await listenLocal(app)).get('/api/trips/no-such-trip/highlight-photos');
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
     });
@@ -360,7 +369,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
       const tripDir = writeTierSlideshowArtifact(tripId, 'landscape');
 
       try {
-        const asOwner = await request(app)
+        const asOwner = await request(await listenLocal(app))
           .get(`/api/trips/${tripId}/tier-photos`)
           .set('Authorization', `Bearer ${owner.token}`);
         expect(asOwner.status).toBe(200);
@@ -368,7 +377,7 @@ describe('highlight/tier photo endpoints — media-level visibility (G-19)', () 
           `/api/trips/${tripId}/tier-slideshow/landscape/`,
         );
 
-        const anon = await request(app).get(`/api/trips/${tripId}/tier-photos`);
+        const anon = await request(await listenLocal(app)).get(`/api/trips/${tripId}/tier-photos`);
         expect(anon.status).toBe(200);
         expect(anon.body.slideshowUrls).toEqual({});
       } finally {

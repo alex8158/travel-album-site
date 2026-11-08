@@ -290,7 +290,22 @@ Fixed: `server/src/routes/gallery.test.ts` now uses its own `local()`. The helpe
 * no server is left open before any test or at the end of the file;
 * supplementary and standard type checks pass.
 
-Still open: the other 21 server test files that use `request(app)` remain exposed to this mechanism. A shared helper has not been extracted. The server full suite still fails: round15's single run had 9 `ETIMEDOUT` failures in 7 of those `request(app)` files, with no failure-time `lsof`, so their cause is unconfirmed.
+Round15 left these open: the other 21 server test files that used `request(app)` were still exposed, and round15's single full run had 9 `ETIMEDOUT` failures in 7 of those files, with no failure-time `lsof`, so their cause is unconfirmed.
+
+### Update 2026-11-05 (round16)
+
+All 21 remaining server test files now start their test servers through the shared `server/test-support/localServer.ts` (`listenLocal(app)`). It uses the same bind and close rules as the gallery fix: `127.0.0.1`, port 0, resolves only once listening, a listen error rejects, and the server is closed via `onTestFinished`, where a close error fails the test.
+* Per-request use: `await request(await listenLocal(app))`.
+* The four files whose request-builder helpers return a supertest chain that callers await or chain use one server per test instead, started in a file-level `beforeEach`.
+* No server test file uses `request(app)` any more. `gallery.test.ts` keeps its own verified `local()`.
+
+Verified in an isolated copy, with 4000 IPv4 bound-not-listening ports held by the experiment script:
+* 200 of 200 `listenLocal` requests reached the right server on `127.0.0.1`; the `request(app)` control lost 4 of 200 to `ETIMEDOUT` (about 7.8 s each).
+* A test-body throw, an `afterEach` throw, a listen error and a close error each behave as described above, and no server is left listening before the next test.
+* The 22 affected files pass 406/406. One full server run passes 1593/1593.
+* The supplementary type check of all test files adds no new error compared with HEAD: the 286 pre-existing errors are missing vitest globals typings in `my.test.ts` and errors in unrelated service tests. `npx tsc --noEmit` passes.
+
+Still open: the single passing full run does not prove that the earlier unconfirmed failures had this cause. Their categories stay as recorded. Production code is unaffected: `index.ts` keeps `app.listen(PORT)`.
 
 ## 12b. Server tests run against the local app database
 

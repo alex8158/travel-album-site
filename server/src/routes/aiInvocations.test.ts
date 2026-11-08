@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import aiInvocationsRouter from './aiInvocations';
@@ -34,7 +35,7 @@ describe('AI Invocations API', () => {
 
   describe('POST /api/ai-invocations', () => {
     it('should create an invocation record and return 201', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({
           provider: 'bedrock',
@@ -63,7 +64,7 @@ describe('AI Invocations API', () => {
     });
 
     it('should create an invocation with optional media_id', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({
           media_id: null,
@@ -82,12 +83,12 @@ describe('AI Invocations API', () => {
     it('should return paginated list with default page=1, pageSize=20', async () => {
       // Create 3 records
       for (let i = 0; i < 3; i++) {
-        await request(app)
+        await request(await listenLocal(app))
           .post('/api/ai-invocations')
           .send({ provider: 'bedrock', task_type: 'image_analysis', status: 'completed' });
       }
 
-      const res = await request(app).get('/api/ai-invocations');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations');
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(3);
@@ -98,14 +99,14 @@ describe('AI Invocations API', () => {
 
     it('should filter by media_id', async () => {
       const mediaId = uuidv4();
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ media_id: mediaId, task_type: 'image_analysis', status: 'completed' });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ media_id: uuidv4(), task_type: 'image_analysis', status: 'completed' });
 
-      const res = await request(app).get(`/api/ai-invocations?media_id=${mediaId}`);
+      const res = await request(await listenLocal(app)).get(`/api/ai-invocations?media_id=${mediaId}`);
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(1);
@@ -114,17 +115,17 @@ describe('AI Invocations API', () => {
     });
 
     it('should filter by task_type', async () => {
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', status: 'completed' });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'pair_review', status: 'completed' });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', status: 'completed' });
 
-      const res = await request(app).get('/api/ai-invocations?task_type=image_analysis');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations?task_type=image_analysis');
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
@@ -133,17 +134,17 @@ describe('AI Invocations API', () => {
     });
 
     it('should filter by status', async () => {
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', status: 'completed' });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', status: 'failed' });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'pair_review', status: 'completed' });
 
-      const res = await request(app).get('/api/ai-invocations?status=completed');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations?status=completed');
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
@@ -154,12 +155,12 @@ describe('AI Invocations API', () => {
     it('should support pagination with page and pageSize', async () => {
       // Create 5 records
       for (let i = 0; i < 5; i++) {
-        await request(app)
+        await request(await listenLocal(app))
           .post('/api/ai-invocations')
           .send({ task_type: 'image_analysis', status: 'completed', input_tokens: i });
       }
 
-      const res = await request(app).get('/api/ai-invocations?page=2&pageSize=2');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations?page=2&pageSize=2');
 
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
@@ -171,7 +172,7 @@ describe('AI Invocations API', () => {
 
   describe('PUT /api/ai-invocations/:id', () => {
     it('should update status and response data', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({
           provider: 'bedrock',
@@ -182,7 +183,7 @@ describe('AI Invocations API', () => {
 
       const id = createRes.body.id;
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/ai-invocations/${id}`)
         .send({
           status: 'completed',
@@ -205,7 +206,7 @@ describe('AI Invocations API', () => {
     });
 
     it('should return 404 for non-existent id', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/ai-invocations/non-existent-id')
         .send({ status: 'completed' });
 
@@ -216,17 +217,17 @@ describe('AI Invocations API', () => {
 
   describe('GET /api/ai-invocations/summary', () => {
     it('should return aggregated statistics', async () => {
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', input_tokens: 500, output_tokens: 200, estimated_cost: 0.01 });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'pair_review', input_tokens: 1000, output_tokens: 400, estimated_cost: 0.03 });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', input_tokens: 300, output_tokens: 100, estimated_cost: 0.005 });
 
-      const res = await request(app).get('/api/ai-invocations/summary');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations/summary');
 
       expect(res.status).toBe(200);
       expect(res.body.total_invocations).toBe(3);
@@ -236,17 +237,17 @@ describe('AI Invocations API', () => {
     });
 
     it('should return correct by_task_type breakdown', async () => {
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', estimated_cost: 0.01 });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'image_analysis', estimated_cost: 0.02 });
-      await request(app)
+      await request(await listenLocal(app))
         .post('/api/ai-invocations')
         .send({ task_type: 'pair_review', estimated_cost: 0.05 });
 
-      const res = await request(app).get('/api/ai-invocations/summary');
+      const res = await request(await listenLocal(app)).get('/api/ai-invocations/summary');
 
       expect(res.status).toBe(200);
       expect(res.body.by_task_type).toBeDefined();

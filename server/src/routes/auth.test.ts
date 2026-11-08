@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
@@ -52,7 +53,7 @@ describe('Auth Routes', () => {
     it('should return token and user for valid active user', async () => {
       const user = seedUser({ username: 'alice', password: 'secret123', status: 'active' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'alice', password: 'secret123' });
 
@@ -64,7 +65,7 @@ describe('Auth Routes', () => {
     });
 
     it('should return 401 INVALID_CREDENTIALS for non-existent user', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'nobody', password: 'whatever' });
 
@@ -75,7 +76,7 @@ describe('Auth Routes', () => {
     it('should return 401 INVALID_CREDENTIALS for wrong password', async () => {
       seedUser({ username: 'bob', password: 'correct123', status: 'active' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'bob', password: 'wrongpass' });
 
@@ -86,7 +87,7 @@ describe('Auth Routes', () => {
     it('should return 403 ACCOUNT_PENDING for pending user', async () => {
       seedUser({ username: 'pending_user', password: 'secret123', status: 'pending' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'pending_user', password: 'secret123' });
 
@@ -97,7 +98,7 @@ describe('Auth Routes', () => {
     it('should return 403 ACCOUNT_DISABLED for disabled user', async () => {
       seedUser({ username: 'disabled_user', password: 'secret123', status: 'disabled' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'disabled_user', password: 'secret123' });
 
@@ -108,7 +109,7 @@ describe('Auth Routes', () => {
 
   describe('POST /api/auth/register', () => {
     it('should create a pending user and return 201', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: 'newuser', password: 'pass123456' });
 
@@ -120,7 +121,7 @@ describe('Auth Routes', () => {
     });
 
     it('should return 400 VALIDATION_ERROR for empty username', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: '', password: 'pass123456' });
 
@@ -129,7 +130,7 @@ describe('Auth Routes', () => {
     });
 
     it('should return 400 VALIDATION_ERROR for short password', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: 'newuser', password: '12345' });
 
@@ -140,7 +141,7 @@ describe('Auth Routes', () => {
     it('should return 409 USERNAME_TAKEN for duplicate username', async () => {
       seedUser({ username: 'taken' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: 'taken', password: 'pass123456' });
 
@@ -149,7 +150,7 @@ describe('Auth Routes', () => {
     });
 
     it('should accept password with exactly 6 characters', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: 'sixchar', password: '123456' });
 
@@ -157,7 +158,7 @@ describe('Auth Routes', () => {
     });
 
     it('should trim the username', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/auth/register')
         .send({ username: '  trimmed  ', password: 'pass123456' });
 
@@ -171,7 +172,7 @@ describe('Auth Routes', () => {
       const user = seedUser({ username: 'changer', password: 'oldpass123', status: 'active' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/auth/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ oldPassword: 'oldpass123', newPassword: 'newpass456' });
@@ -180,7 +181,7 @@ describe('Auth Routes', () => {
       expect(res.body.message).toBe('密码修改成功');
 
       // Verify new password works for login
-      const loginRes = await request(app)
+      const loginRes = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'changer', password: 'newpass456' });
       expect(loginRes.status).toBe(200);
@@ -190,7 +191,7 @@ describe('Auth Routes', () => {
       const user = seedUser({ username: 'wrongold', password: 'correct123', status: 'active' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/auth/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ oldPassword: 'wrongpass', newPassword: 'newpass456' });
@@ -203,7 +204,7 @@ describe('Auth Routes', () => {
       const user = seedUser({ username: 'shortpw', password: 'oldpass123', status: 'active' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/auth/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ oldPassword: 'oldpass123', newPassword: '12345' });
@@ -213,7 +214,7 @@ describe('Auth Routes', () => {
     });
 
     it('should return 401 without auth token', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/auth/password')
         .send({ oldPassword: 'old123', newPassword: 'new123456' });
 
@@ -226,7 +227,7 @@ describe('Auth Routes', () => {
       const user = seedUser({ username: 'deactivator', password: 'pass123456', status: 'active' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete('/api/auth/account')
         .set('Authorization', `Bearer ${token}`);
 
@@ -234,7 +235,7 @@ describe('Auth Routes', () => {
       expect(res.body.message).toBe('账户已注销');
 
       // Verify user is now disabled and cannot login
-      const loginRes = await request(app)
+      const loginRes = await request(await listenLocal(app))
         .post('/api/auth/login')
         .send({ username: 'deactivator', password: 'pass123456' });
       expect(loginRes.status).toBe(403);
@@ -242,7 +243,7 @@ describe('Auth Routes', () => {
     });
 
     it('should return 401 without auth token', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete('/api/auth/account');
 
       expect(res.status).toBe(401);

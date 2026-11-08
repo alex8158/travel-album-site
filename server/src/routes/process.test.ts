@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
@@ -110,7 +111,7 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should return 404 for non-existent trip', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/trips/non-existent/process')
       .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(404);
@@ -118,7 +119,7 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should return empty summary when trip has no images', async () => {
-    const trip = await request(app)
+    const trip = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Empty Trip' });
@@ -126,7 +127,7 @@ describe('POST /api/trips/:id/process', () => {
     const tripId = trip.body.id;
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post(`/api/trips/${tripId}/process`)
       .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(200);
@@ -150,7 +151,7 @@ describe('POST /api/trips/:id/process', () => {
 
   it('should return summary with correct counts for images', async () => {
     // Create trip
-    const trip = await request(app)
+    const trip = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Photo Trip' });
@@ -175,7 +176,7 @@ describe('POST /api/trips/:id/process', () => {
       dedupDeletedCount: 1,
     });
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post(`/api/trips/${tripId}/process`)
       .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(200);
@@ -190,7 +191,7 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should call pipeline with tripId string', async () => {
-    const trip = await request(app)
+    const trip = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Path Trip' });
@@ -205,7 +206,7 @@ describe('POST /api/trips/:id/process', () => {
 
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    await request(app)
+    await request(await listenLocal(app))
       .post(`/api/trips/${tripId}/process`)
       .set('Authorization', `Bearer ${authToken}`);
 
@@ -216,7 +217,7 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should return 409 when trip has an active job in the database', async () => {
-    const trip = await request(app)
+    const trip = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Concurrent Trip' });
@@ -232,7 +233,7 @@ describe('POST /api/trips/:id/process', () => {
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
     // POST should detect the active job and return 409
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post(`/api/trips/${tripId}/process`)
       .set('Authorization', `Bearer ${authToken}`);
     expect(res.status).toBe(409);
@@ -240,7 +241,7 @@ describe('POST /api/trips/:id/process', () => {
   });
 
   it('should pass videoResolution option to pipeline', async () => {
-    const trip = await request(app)
+    const trip = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${authToken}`)
       .send({ title: 'Video Trip' });
@@ -248,7 +249,7 @@ describe('POST /api/trips/:id/process', () => {
 
     mockRunPipeline.mockResolvedValue(makeEmptyResult(tripId));
 
-    await request(app)
+    await request(await listenLocal(app))
       .post(`/api/trips/${tripId}/process?videoResolution=720`)
       .set('Authorization', `Bearer ${authToken}`);
 

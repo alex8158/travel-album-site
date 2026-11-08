@@ -16,6 +16,7 @@ import crypto from 'crypto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 
 vi.mock('../services/slideshowGenerator', () => ({ generateSlideshow: vi.fn() }));
@@ -118,7 +119,7 @@ function writeHistorical(tripId: string, relUnderTier: string, bytes: string) {
 }
 
 function get(url: string, token?: string, raw = false) {
-  let r = request(app).get(url);
+  let r = request(localServer()).get(url);
   if (raw) r = r.responseType('blob');
   return token ? r.set('Authorization', `Bearer ${token}`) : r;
 }
@@ -130,6 +131,14 @@ function expectDenied(res: request.Response) {
   expect(JSON.parse(bodyText(res))).toEqual({ error: { code: 'NOT_FOUND', message: '旅行不存在' } });
 }
 
+// One server per test for request builders that callers await or chain
+// (known-issues 12a; see test-support/localServer.ts).
+let perTestServer: import('http').Server | undefined;
+beforeEach(async () => { perTestServer = await listenLocal(app); });
+function localServer(): import('http').Server {
+  if (!perTestServer) throw new Error('localServer() used outside a test');
+  return perTestServer;
+}
 describe('C2 tier slideshow provenance — HTTP exposure', () => {
   let owner: { userId: string; token: string };
   let tokens: Record<Kind, string | undefined>;
@@ -295,7 +304,7 @@ describe('C2 tier slideshow provenance — HTTP exposure', () => {
 
     it('HEAD, open-ended and unsatisfiable ranges on a verified artifact', async () => {
       const { art } = await publishedPublicArtifact();
-      const head = await request(app).head(art.url);
+      const head = await request(await listenLocal(app)).head(art.url);
       expect(head.status).toBe(200);
       expect(head.headers['content-length']).toBe('5');
       const tail = await get(art.url, undefined, true).set('Range', 'bytes=2-');
@@ -573,7 +582,7 @@ describe('C2 tier slideshow provenance — HTTP exposure', () => {
         return { success: true, outputPath: out, totalDuration: 15, skippedPhotos: [2] };
       });
 
-      const regen = await request(app)
+      const regen = await request(await listenLocal(app))
         .post(`/api/my/trips/${trip}/tier-slideshow/regenerate`)
         .set('Authorization', `Bearer ${owner.token}`);
       expect(regen.status).toBe(200);

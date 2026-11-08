@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
@@ -50,14 +51,14 @@ describe('Trips CRUD API', () => {
 
   describe('POST /api/trips', () => {
     it('should return 401 without auth token', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .send({ title: 'No Auth Trip' });
       expect(res.status).toBe(401);
     });
 
     it('should create a trip with title and description', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Tokyo Trip', description: 'Cherry blossoms' });
@@ -72,7 +73,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should create a trip without description', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Paris Trip' });
@@ -83,7 +84,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 when title is empty', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: '' });
@@ -93,7 +94,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 when title is whitespace only', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: '   ' });
@@ -102,7 +103,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 when title is missing', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ description: 'No title' });
@@ -111,7 +112,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should trim the title', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: '  Rome Trip  ' });
@@ -123,21 +124,21 @@ describe('Trips CRUD API', () => {
 
   describe('GET /api/trips', () => {
     it('should return empty array when no trips', async () => {
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
     });
 
     it('should return only public trips ordered by created_at DESC', async () => {
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'First' });
       await new Promise(r => setTimeout(r, 10));
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Second' });
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
       expect(res.body[0].title).toBe('Second');
@@ -145,10 +146,10 @@ describe('Trips CRUD API', () => {
     });
 
     it('should not return unlisted trips', async () => {
-      const created = await request(app).post('/api/trips')
+      const created = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Public Trip' });
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Unlisted Trip' });
 
@@ -158,18 +159,18 @@ describe('Trips CRUD API', () => {
       const unlistedTrip = allTrips.find(t => t.title === 'Unlisted Trip');
       db.prepare('UPDATE trips SET visibility = ? WHERE id = ?').run('unlisted', unlistedTrip!.id);
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(1);
       expect(res.body[0].title).toBe('Public Trip');
     });
 
     it('should return TripSummary format with required fields', async () => {
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip', description: 'A nice trip' });
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.status).toBe(200);
       const summary = res.body[0];
       expect(summary).toHaveProperty('id');
@@ -182,26 +183,26 @@ describe('Trips CRUD API', () => {
 
     it('should truncate long descriptions to excerpt', async () => {
       const longDesc = 'A'.repeat(150);
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip', description: longDesc });
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       const summary = res.body[0];
       expect(summary.descriptionExcerpt).toBe('A'.repeat(100) + '...');
     });
 
     it('should return undefined descriptionExcerpt when no description', async () => {
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.body[0].descriptionExcerpt).toBeUndefined();
     });
 
     it('should return coverImageUrl from cover_image_id', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
       const db = getDb();
@@ -213,21 +214,21 @@ describe('Trips CRUD API', () => {
       ).run(mediaId, trip.body.id, `${trip.body.id}/originals/${mediaId}.jpg`, 'image', 'image/jpeg', 'test.jpg', 1024, now);
       db.prepare('UPDATE trips SET cover_image_id = ? WHERE id = ?').run(mediaId, trip.body.id);
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.body[0].coverImageUrl).toBe(`/api/media/${mediaId}/thumbnail`);
     });
 
     it('should return empty coverImageUrl when no cover image', async () => {
-      await request(app).post('/api/trips')
+      await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.body[0].coverImageUrl).toBe('');
     });
 
     it('should return correct mediaCount', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
       const db = getDb();
@@ -240,26 +241,26 @@ describe('Trips CRUD API', () => {
         ).run(id, trip.body.id, `${trip.body.id}/originals/${id}.jpg`, 'image', 'image/jpeg', `test${i}.jpg`, 1024, now);
       }
 
-      const res = await request(app).get('/api/trips');
+      const res = await request(await listenLocal(app)).get('/api/trips');
       expect(res.body[0].mediaCount).toBe(3);
     });
   });
 
   describe('GET /api/trips/:id', () => {
     it('should return a trip by id', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Berlin Trip' });
 
-      const res = await request(app).get(`/api/trips/${created.body.id}`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${created.body.id}`);
       expect(res.status).toBe(200);
       expect(res.body.title).toBe('Berlin Trip');
       expect(res.body.id).toBe(created.body.id);
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app).get('/api/trips/non-existent-id');
+      const res = await request(await listenLocal(app)).get('/api/trips/non-existent-id');
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
     });
@@ -268,17 +269,17 @@ describe('Trips CRUD API', () => {
     // trip stays reachable by direct id/link. See multi-user-system 需求 9 AC 9/10
     // — do not "harden" this into an owner-only route.
     it('should return an unlisted trip to an anonymous visitor holding its id', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Unlisted Berlin Trip' });
 
-      await request(app)
+      await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}/visibility`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'unlisted' });
 
-      const res = await request(app).get(`/api/trips/${created.body.id}`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${created.body.id}`);
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(created.body.id);
       expect(res.body.title).toBe('Unlisted Berlin Trip');
@@ -288,25 +289,25 @@ describe('Trips CRUD API', () => {
     // 需求 9 AC 11: flipping public -> unlisted removes the trip from public
     // discovery but must not invalidate a direct link.
     it('should keep a direct link working after the trip is switched to unlisted', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Was Public' });
 
-      const before = await request(app).get(`/api/trips/${created.body.id}`);
+      const before = await request(await listenLocal(app)).get(`/api/trips/${created.body.id}`);
       expect(before.status).toBe(200);
 
-      await request(app)
+      await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}/visibility`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'unlisted' });
 
-      const after = await request(app).get(`/api/trips/${created.body.id}`);
+      const after = await request(await listenLocal(app)).get(`/api/trips/${created.body.id}`);
       expect(after.status).toBe(200);
       expect(after.body.id).toBe(created.body.id);
 
       // ...while public discovery no longer lists it (需求 9 AC 1).
-      const listed = await request(app).get('/api/trips');
+      const listed = await request(await listenLocal(app)).get('/api/trips');
       expect(listed.status).toBe(200);
       expect(listed.body.map((t: { id: string }) => t.id)).not.toContain(created.body.id);
     });
@@ -314,24 +315,24 @@ describe('Trips CRUD API', () => {
 
   describe('PUT /api/trips/:id', () => {
     it('should return 401 without auth token', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .send({ title: 'New Title' });
       expect(res.status).toBe(401);
     });
 
     it('should update trip title as owner', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Old Title' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'New Title' });
@@ -341,12 +342,12 @@ describe('Trips CRUD API', () => {
     });
 
     it('should update trip description as owner', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip', description: 'Old desc' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ description: 'New desc' });
@@ -357,13 +358,13 @@ describe('Trips CRUD API', () => {
     });
 
     it('should allow admin to update any trip', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Owner Trip' });
 
       const admin = createTestUser('admin');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${admin.token}`)
         .send({ title: 'Admin Updated' });
@@ -373,13 +374,13 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 403 when non-owner tries to update', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Owner Trip' });
 
       const other = createTestUser('regular');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ title: 'Hacked' });
@@ -389,12 +390,12 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 for empty title on update', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: '' });
@@ -403,12 +404,12 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 for whitespace-only title on update', async () => {
-      const created = await request(app)
+      const created = await request(await listenLocal(app))
         .post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${created.body.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: '   ' });
@@ -417,7 +418,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/trips/non-existent-id')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'New Title' });
@@ -439,23 +440,23 @@ describe('Trips CRUD API', () => {
     }
 
     it('should return 401 without auth token', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .send({ imageId: 'some-id' });
       expect(res.status).toBe(401);
     });
 
     it('should set cover image for a trip as owner', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
       const mediaId = createMediaItem(trip.body.id);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: mediaId });
@@ -465,13 +466,13 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 403 when non-owner tries to set cover', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
       const mediaId = createMediaItem(trip.body.id);
       const other = createTestUser('regular');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ imageId: mediaId });
@@ -480,7 +481,7 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/trips/non-existent-id/cover')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: 'some-id' });
@@ -489,11 +490,11 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 when imageId is missing', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({});
@@ -503,11 +504,11 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 404 when media item does not exist', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: 'non-existent-media' });
@@ -517,15 +518,15 @@ describe('Trips CRUD API', () => {
     });
 
     it('should return 400 when media item belongs to a different trip', async () => {
-      const trip1 = await request(app).post('/api/trips')
+      const trip1 = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip 1' });
-      const trip2 = await request(app).post('/api/trips')
+      const trip2 = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip 2' });
       const mediaId = createMediaItem(trip2.body.id);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip1.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: mediaId });
@@ -535,18 +536,18 @@ describe('Trips CRUD API', () => {
     });
 
     it('should allow changing cover image', async () => {
-      const trip = await request(app).post('/api/trips')
+      const trip = await request(await listenLocal(app)).post('/api/trips')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ title: 'Trip' });
       const mediaId1 = createMediaItem(trip.body.id);
       const mediaId2 = createMediaItem(trip.body.id);
 
-      await request(app)
+      await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: mediaId1 });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${trip.body.id}/cover`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ imageId: mediaId2 });

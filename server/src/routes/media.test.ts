@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -50,7 +51,7 @@ describe('Media Upload API', () => {
     ownerToken = owner.token;
     ownerUserId = owner.userId;
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/trips')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ title: 'Test Trip' });
@@ -69,7 +70,7 @@ describe('Media Upload API', () => {
   describe('POST /api/trips/:id/media', () => {
     it('should return 401 without auth token', async () => {
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
 
@@ -79,7 +80,7 @@ describe('Media Upload API', () => {
     it('should return 403 when non-owner tries to upload', async () => {
       const other = createTestUser('regular');
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${other.token}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -91,7 +92,7 @@ describe('Media Upload API', () => {
     it('should allow admin to upload to any trip', async () => {
       const admin = createTestUser('admin');
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${admin.token}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -102,7 +103,7 @@ describe('Media Upload API', () => {
 
     it('should upload a JPEG file successfully', async () => {
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -120,7 +121,7 @@ describe('Media Upload API', () => {
 
     it('should record user_id and default visibility=public', async () => {
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -138,7 +139,7 @@ describe('Media Upload API', () => {
 
     it('should upload a PNG file successfully', async () => {
       const buf = Buffer.from('fake png content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'image.png', contentType: 'image/png' });
@@ -150,7 +151,7 @@ describe('Media Upload API', () => {
 
     it('should upload a WebP file successfully', async () => {
       const buf = Buffer.from('fake webp content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'image.webp', contentType: 'image/webp' });
@@ -161,7 +162,7 @@ describe('Media Upload API', () => {
 
     it('should upload an MP4 video successfully', async () => {
       const buf = Buffer.from('fake mp4 content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'video.mp4', contentType: 'video/mp4' });
@@ -173,7 +174,7 @@ describe('Media Upload API', () => {
 
     it('should upload a MOV video successfully', async () => {
       const buf = Buffer.from('fake mov content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'video.mov', contentType: 'video/quicktime' });
@@ -184,7 +185,7 @@ describe('Media Upload API', () => {
 
     it('should accept file by extension even with generic mimetype', async () => {
       const buf = Buffer.from('fake heic content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.heic', contentType: 'application/octet-stream' });
@@ -196,7 +197,7 @@ describe('Media Upload API', () => {
 
     it('should accept .mkv file by extension', async () => {
       const buf = Buffer.from('fake mkv content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'video.mkv', contentType: 'application/octet-stream' });
@@ -207,7 +208,7 @@ describe('Media Upload API', () => {
 
     it('should reject unsupported file format with 400', async () => {
       const buf = Buffer.from('fake pdf content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'doc.pdf', contentType: 'application/pdf' });
@@ -219,7 +220,7 @@ describe('Media Upload API', () => {
 
     it('should reject .txt file', async () => {
       const buf = Buffer.from('hello world');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'notes.txt', contentType: 'text/plain' });
@@ -230,7 +231,7 @@ describe('Media Upload API', () => {
 
     it('should return 404 for non-existent trip', async () => {
       const buf = Buffer.from('fake jpeg content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/non-existent-id/media')
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -240,7 +241,7 @@ describe('Media Upload API', () => {
     });
 
     it('should return 400 when no file is provided', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({});
@@ -251,7 +252,7 @@ describe('Media Upload API', () => {
 
     it('should store file to uploads/{trip_id}/originals/ directory', async () => {
       const buf = Buffer.from('test file content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -268,7 +269,7 @@ describe('Media Upload API', () => {
 
     it('should create a media_items record in the database', async () => {
       const buf = Buffer.from('db test content');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -288,7 +289,7 @@ describe('Media Upload API', () => {
 
   describe('PUT /api/trips/:id/media/visibility', () => {
     it('should return 401 without auth token', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .send({ visibility: 'private' });
       expect(res.status).toBe(401);
@@ -296,7 +297,7 @@ describe('Media Upload API', () => {
 
     it('should return 403 when non-owner tries to batch change visibility', async () => {
       const other = createTestUser('regular');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ visibility: 'private' });
@@ -307,16 +308,16 @@ describe('Media Upload API', () => {
 
     it('should allow owner to batch change all media to private', async () => {
       const buf = Buffer.from('fake jpeg content');
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo1.jpg', contentType: 'image/jpeg' });
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo2.jpg', contentType: 'image/jpeg' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'private' });
@@ -336,12 +337,12 @@ describe('Media Upload API', () => {
     it('should allow admin to batch change visibility of any trip', async () => {
       const admin = createTestUser('admin');
       const buf = Buffer.from('fake jpeg content');
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .set('Authorization', `Bearer ${admin.token}`)
         .send({ visibility: 'private' });
@@ -351,7 +352,7 @@ describe('Media Upload API', () => {
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/trips/non-existent-id/media/visibility')
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'private' });
@@ -361,7 +362,7 @@ describe('Media Upload API', () => {
     });
 
     it('should return 400 for invalid visibility value', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'unlisted' });
@@ -372,7 +373,7 @@ describe('Media Upload API', () => {
 
     it('should only update active media items, not trashed ones', async () => {
       const buf = Buffer.from('fake jpeg content');
-      const uploadRes = await request(app)
+      const uploadRes = await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo.jpg', contentType: 'image/jpeg' });
@@ -380,12 +381,12 @@ describe('Media Upload API', () => {
       const db = getDb();
       db.prepare("UPDATE media_items SET status = 'trashed' WHERE id = ?").run(uploadRes.body.id);
 
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/trips/${tripId}/media`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .attach('file', buf, { filename: 'photo2.jpg', contentType: 'image/jpeg' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/visibility`)
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ visibility: 'private' });

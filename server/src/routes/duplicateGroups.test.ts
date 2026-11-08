@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import duplicateGroupsRouter from './duplicateGroups';
@@ -57,7 +58,7 @@ describe('PUT /api/duplicate-groups/:id/default', () => {
     const db = getDb();
     const { groupId, imageId2 } = seedGroup(db);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .put(`/api/duplicate-groups/${groupId}/default`)
       .send({ imageId: imageId2 });
 
@@ -67,7 +68,7 @@ describe('PUT /api/duplicate-groups/:id/default', () => {
   });
 
   it('should return 404 for non-existent group', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .put('/api/duplicate-groups/non-existent-id/default')
       .send({ imageId: 'some-image-id' });
 
@@ -87,7 +88,7 @@ describe('PUT /api/duplicate-groups/:id/default', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(outsideImageId, tripId, '/fake/other.jpg', 'image', 'image/jpeg', 'other.jpg', 500, now);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .put(`/api/duplicate-groups/${groupId}/default`)
       .send({ imageId: outsideImageId });
 
@@ -99,7 +100,7 @@ describe('PUT /api/duplicate-groups/:id/default', () => {
     const db = getDb();
     const { groupId } = seedGroup(db);
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .put(`/api/duplicate-groups/${groupId}/default`)
       .send({});
 

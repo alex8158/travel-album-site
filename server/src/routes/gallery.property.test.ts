@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fc from 'fast-check';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
@@ -116,7 +117,7 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
           db.exec('DELETE FROM trips');
 
           // Create a trip with auth
-          const tripRes = await request(app)
+          const tripRes = await request(await listenLocal(app))
             .post('/api/trips')
             .set('Authorization', `Bearer ${owner.token}`)
             .send({ title: 'Property Test Trip' });
@@ -154,7 +155,7 @@ describe('Property 13: Gallery 数据的图片/视频分区', () => {
           }
 
           // Fetch gallery as owner so all public media is visible
-          const res = await request(app)
+          const res = await request(await listenLocal(app))
             .get(`/api/trips/${tripId}/gallery`)
             .set('Authorization', `Bearer ${owner.token}`);
           expect(res.status).toBe(200);

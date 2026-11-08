@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express, { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { globalErrorHandler, AppError } from './errorHandler';
 
 function buildApp() {
@@ -41,7 +42,7 @@ describe('globalErrorHandler', () => {
 
   it('should return unified error format for AppError', async () => {
     const app = buildApp();
-    const res = await request(app).get('/app-error');
+    const res = await request(await listenLocal(app)).get('/app-error');
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
@@ -51,7 +52,7 @@ describe('globalErrorHandler', () => {
 
   it('should return 500 with generic message for unexpected errors', async () => {
     const app = buildApp();
-    const res = await request(app).get('/unexpected');
+    const res = await request(await listenLocal(app)).get('/unexpected');
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
@@ -63,7 +64,7 @@ describe('globalErrorHandler', () => {
 
   it('should handle synchronous throws and return 500', async () => {
     const app = buildApp();
-    const res = await request(app).get('/sync-throw');
+    const res = await request(await listenLocal(app)).get('/sync-throw');
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
@@ -74,7 +75,7 @@ describe('globalErrorHandler', () => {
 
   it('should not interfere with successful responses', async () => {
     const app = buildApp();
-    const res = await request(app).get('/ok');
+    const res = await request(await listenLocal(app)).get('/ok');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
@@ -83,7 +84,7 @@ describe('globalErrorHandler', () => {
   it('should log structured error for AppError', async () => {
     const errorSpy = vi.spyOn(console, 'error');
     const app = buildApp();
-    await request(app).get('/app-error');
+    await request(await listenLocal(app)).get('/app-error');
 
     expect(errorSpy).toHaveBeenCalled();
     const loggedJson = JSON.parse(errorSpy.mock.calls[0][0] as string);
@@ -97,7 +98,7 @@ describe('globalErrorHandler', () => {
   it('should log structured error for unexpected errors', async () => {
     const errorSpy = vi.spyOn(console, 'error');
     const app = buildApp();
-    await request(app).get('/unexpected');
+    await request(await listenLocal(app)).get('/unexpected');
 
     expect(errorSpy).toHaveBeenCalled();
     const loggedJson = JSON.parse(errorSpy.mock.calls[0][0] as string);
@@ -117,11 +118,11 @@ describe('globalErrorHandler', () => {
     });
     app.use(globalErrorHandler);
 
-    const res404 = await request(app).get('/not-found');
+    const res404 = await request(await listenLocal(app)).get('/not-found');
     expect(res404.status).toBe(404);
     expect(res404.body.error.code).toBe('NOT_FOUND');
 
-    const res413 = await request(app).get('/too-large');
+    const res413 = await request(await listenLocal(app)).get('/too-large');
     expect(res413.status).toBe(413);
     expect(res413.body.error.code).toBe('FILE_TOO_LARGE');
   });

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database';
 import { signToken } from '../services/authService';
@@ -94,14 +95,14 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   });
 
   it('should return 401 without auth token', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .send({ tripId: 'some-trip', photoIds: ['a', 'b'] });
     expect(res.status).toBe(401);
   });
 
   it('should return 400 when tripId is missing', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ photoIds: ['a', 'b'] });
@@ -110,7 +111,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   });
 
   it('should return 400 when photoIds is missing', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId });
@@ -120,7 +121,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
 
   it('should return 400 when photoIds has fewer than 2 items', async () => {
     const photoId = createTestPhoto(tripId, ownerUserId);
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photoId] });
@@ -129,7 +130,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   });
 
   it('should return 404 when trip does not exist', async () => {
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId: uuidv4(), photoIds: ['a', 'b'] });
@@ -139,7 +140,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
 
   it('should return 403 when user does not own the trip', async () => {
     const other = createTestUser('regular');
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${other.token}`)
       .send({ tripId, photoIds: ['a', 'b'] });
@@ -150,7 +151,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   it('should return 400 when photoIds contain non-existent IDs', async () => {
     const photo1 = createTestPhoto(tripId, ownerUserId);
     const fakeId = uuidv4();
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, fakeId] });
@@ -163,7 +164,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
     const otherTrip = createTestTrip(ownerUserId);
     const photo1 = createTestPhoto(tripId, ownerUserId);
     const photo2 = createTestPhoto(otherTrip, ownerUserId);
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, photo2] });
@@ -175,7 +176,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   it('should return 400 when photoIds contain non-image media', async () => {
     const photo1 = createTestPhoto(tripId, ownerUserId);
     const video1 = createTestVideo(tripId, ownerUserId);
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, video1] });
@@ -195,7 +196,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
        VALUES (?, ?, ?, 'running', ?, ?)`
     ).run(uuidv4(), tripId, ownerUserId, JSON.stringify([photo1, photo2]), new Date().toISOString());
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, photo2] });
@@ -206,7 +207,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
   it('should return 400 when audioTrackId does not exist', async () => {
     const photo1 = createTestPhoto(tripId, ownerUserId);
     const photo2 = createTestPhoto(tripId, ownerUserId);
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, photo2], audioTrackId: uuidv4() });
@@ -219,7 +220,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
     const audioId = createTestAudioTrack(other.userId);
     const photo1 = createTestPhoto(tripId, ownerUserId);
     const photo2 = createTestPhoto(tripId, ownerUserId);
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ tripId, photoIds: [photo1, photo2], audioTrackId: audioId });
@@ -242,7 +243,7 @@ describe('Slideshow API - POST /api/slideshow/generate', () => {
        VALUES (?, ?, ?, 'running', ?, ?)`
     ).run(uuidv4(), tripId, ownerUserId, JSON.stringify([photo1, photo2]), new Date().toISOString());
 
-    const res = await request(app)
+    const res = await request(await listenLocal(app))
       .post('/api/slideshow/generate')
       .set('Authorization', `Bearer ${admin.token}`)
       .send({ tripId, photoIds: [photo1, photo2] });

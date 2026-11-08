@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
@@ -76,7 +77,7 @@ describe('Trash API with auth', () => {
 
   describe('GET /api/trips/:id/trash', () => {
     it('should return 401 without auth token', async () => {
-      const res = await request(app).get(`/api/trips/${tripId}/trash`);
+      const res = await request(await listenLocal(app)).get(`/api/trips/${tripId}/trash`);
       expect(res.status).toBe(401);
     });
 
@@ -84,7 +85,7 @@ describe('Trash API with auth', () => {
       createMedia(tripId, owner.userId, 'trashed');
       createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/trash`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -94,7 +95,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return empty array when no trashed items', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/trips/${tripId}/trash`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -105,14 +106,14 @@ describe('Trash API with auth', () => {
 
   describe('DELETE /api/trips/:id/trash', () => {
     it('should return 401 without auth token', async () => {
-      const res = await request(app).delete(`/api/trips/${tripId}/trash`);
+      const res = await request(await listenLocal(app)).delete(`/api/trips/${tripId}/trash`);
       expect(res.status).toBe(401);
     });
 
     it('should return 403 when non-owner non-admin tries to batch delete', async () => {
       createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/trips/${tripId}/trash`)
         .set('Authorization', `Bearer ${other.token}`);
 
@@ -124,7 +125,7 @@ describe('Trash API with auth', () => {
       const m1 = createMedia(tripId, owner.userId, 'trashed');
       const m2 = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/trips/${tripId}/trash`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -142,7 +143,7 @@ describe('Trash API with auth', () => {
     it('should allow admin to batch delete trashed items of any trip', async () => {
       createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/trips/${tripId}/trash`)
         .set('Authorization', `Bearer ${admin.token}`);
 
@@ -151,7 +152,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete('/api/trips/non-existent-id/trash')
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -162,14 +163,14 @@ describe('Trash API with auth', () => {
   describe('PUT /api/trips/:id/media/trash', () => {
     it('should return 401 without auth token', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .send({ mediaIds: [mediaId] });
       expect(res.status).toBe(401);
     });
 
     it('should return 400 when mediaIds is empty', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: [] });
@@ -178,7 +179,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 400 when mediaIds is missing', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({});
@@ -187,7 +188,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 400 when mediaIds is not an array', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: 'not-an-array' });
@@ -196,7 +197,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 404 for non-existent trip', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/trips/non-existent-id/media/trash')
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: ['some-id'] });
@@ -205,7 +206,7 @@ describe('Trash API with auth', () => {
 
     it('should return 403 when non-owner non-admin tries to batch trash', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ mediaIds: [mediaId] });
@@ -217,7 +218,7 @@ describe('Trash API with auth', () => {
       const m1 = createMedia(tripId, owner.userId, 'active');
       const m2 = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: [m1, m2] });
@@ -238,7 +239,7 @@ describe('Trash API with auth', () => {
     it('should allow admin to batch trash media of any trip', async () => {
       const m1 = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${admin.token}`)
         .send({ mediaIds: [m1] });
@@ -251,7 +252,7 @@ describe('Trash API with auth', () => {
       const m1 = createMedia(tripId, owner.userId, 'active');
       const m2 = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: [m1, m2] });
@@ -265,7 +266,7 @@ describe('Trash API with auth', () => {
       const m1 = createMedia(tripId, owner.userId, 'active');
       const m2 = createMedia(otherTrip, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: [m1, m2] });
@@ -280,7 +281,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return trashedCount 0 when no matching active items', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ mediaIds: ['non-existent-id'] });
@@ -293,14 +294,14 @@ describe('Trash API with auth', () => {
   describe('PUT /api/media/:id/restore', () => {
     it('should return 401 without auth token', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
-      const res = await request(app).put(`/api/media/${mediaId}/restore`);
+      const res = await request(await listenLocal(app)).put(`/api/media/${mediaId}/restore`);
       expect(res.status).toBe(401);
     });
 
     it('should return 403 when non-owner non-admin tries to restore', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/restore`)
         .set('Authorization', `Bearer ${other.token}`);
 
@@ -311,7 +312,7 @@ describe('Trash API with auth', () => {
     it('should allow media owner to restore', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/restore`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -323,7 +324,7 @@ describe('Trash API with auth', () => {
       // Media uploaded by 'other' but in owner's trip
       const mediaId = createMedia(tripId, other.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/restore`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -334,7 +335,7 @@ describe('Trash API with auth', () => {
     it('should allow admin to restore any media', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/restore`)
         .set('Authorization', `Bearer ${admin.token}`);
 
@@ -343,7 +344,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 404 for non-existent media', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/media/non-existent-id/restore')
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -353,7 +354,7 @@ describe('Trash API with auth', () => {
     it('should return 400 when media is not trashed', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/restore`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -365,7 +366,7 @@ describe('Trash API with auth', () => {
   describe('PUT /api/media/:id/visibility', () => {
     it('should return 401 without auth token', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .send({ visibility: 'private' });
       expect(res.status).toBe(401);
@@ -374,7 +375,7 @@ describe('Trash API with auth', () => {
     it('should return 403 when non-owner non-admin tries to change visibility', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ visibility: 'private' });
@@ -386,7 +387,7 @@ describe('Trash API with auth', () => {
     it('should allow media owner to change visibility to private', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ visibility: 'private' });
@@ -405,7 +406,7 @@ describe('Trash API with auth', () => {
       const db = getDb();
       db.prepare('UPDATE media_items SET visibility = ? WHERE id = ?').run('private', mediaId);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ visibility: 'public' });
@@ -417,7 +418,7 @@ describe('Trash API with auth', () => {
     it('should allow trip owner to change visibility of media uploaded by another user', async () => {
       const mediaId = createMedia(tripId, other.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ visibility: 'private' });
@@ -429,7 +430,7 @@ describe('Trash API with auth', () => {
     it('should allow admin to change visibility of any media', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${admin.token}`)
         .send({ visibility: 'private' });
@@ -439,7 +440,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 404 for non-existent media', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put('/api/media/non-existent-id/visibility')
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ visibility: 'private' });
@@ -450,7 +451,7 @@ describe('Trash API with auth', () => {
     it('should return 400 for invalid visibility value', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/visibility`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ visibility: 'unlisted' });
@@ -463,14 +464,14 @@ describe('Trash API with auth', () => {
   describe('DELETE /api/media/:id', () => {
     it('should return 401 without auth token', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
-      const res = await request(app).delete(`/api/media/${mediaId}`);
+      const res = await request(await listenLocal(app)).delete(`/api/media/${mediaId}`);
       expect(res.status).toBe(401);
     });
 
     it('should return 403 when non-owner non-admin tries to delete', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/media/${mediaId}`)
         .set('Authorization', `Bearer ${other.token}`);
 
@@ -481,7 +482,7 @@ describe('Trash API with auth', () => {
     it('should allow media owner to permanently delete', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/media/${mediaId}`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -496,7 +497,7 @@ describe('Trash API with auth', () => {
     it('should allow trip owner to delete media uploaded by another user', async () => {
       const mediaId = createMedia(tripId, other.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/media/${mediaId}`)
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -507,7 +508,7 @@ describe('Trash API with auth', () => {
     it('should allow admin to delete any media', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'trashed');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/media/${mediaId}`)
         .set('Authorization', `Bearer ${admin.token}`);
 
@@ -516,7 +517,7 @@ describe('Trash API with auth', () => {
     });
 
     it('should return 404 for non-existent media', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete('/api/media/non-existent-id')
         .set('Authorization', `Bearer ${owner.token}`);
 
@@ -526,7 +527,7 @@ describe('Trash API with auth', () => {
     it('should return 400 when media is not trashed', async () => {
       const mediaId = createMedia(tripId, owner.userId, 'active');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .delete(`/api/media/${mediaId}`)
         .set('Authorization', `Bearer ${owner.token}`);
 

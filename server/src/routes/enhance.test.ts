@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const { mockEnhanceMedia, mockEnhanceBatch } = vi.hoisted(() => ({
@@ -36,7 +37,7 @@ describe('Enhancement API Routes', () => {
     it('should return 400 when media item does not exist', async () => {
       mockEnhanceMedia.mockRejectedValue(new Error('MEDIA_NOT_FOUND'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/non-existent-id/enhance')
         .send();
 
@@ -48,7 +49,7 @@ describe('Enhancement API Routes', () => {
     it('should return 400 when media item is not an image', async () => {
       mockEnhanceMedia.mockRejectedValue(new Error('INVALID_MEDIA_TYPE'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/video-media-id/enhance')
         .send();
 
@@ -60,7 +61,7 @@ describe('Enhancement API Routes', () => {
     it('should return 409 when enhancement is already in progress', async () => {
       mockEnhanceMedia.mockRejectedValue(new Error('ENHANCEMENT_IN_PROGRESS'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/busy-media-id/enhance')
         .send();
 
@@ -85,7 +86,7 @@ describe('Enhancement API Routes', () => {
       };
       mockEnhanceMedia.mockResolvedValue(mockResult);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/test-media-id/enhance')
         .send();
 
@@ -97,7 +98,7 @@ describe('Enhancement API Routes', () => {
     it('should return 500 on unexpected errors', async () => {
       mockEnhanceMedia.mockRejectedValue(new Error('Something unexpected'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/some-id/enhance')
         .send();
 
@@ -119,7 +120,7 @@ describe('Enhancement API Routes', () => {
       };
       mockEnhanceBatch.mockResolvedValue(emptySummary);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-123/enhance')
         .send();
 
@@ -154,7 +155,7 @@ describe('Enhancement API Routes', () => {
       };
       mockEnhanceBatch.mockResolvedValue(summary);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-123/enhance')
         .send();
 
@@ -182,7 +183,7 @@ describe('Enhancement API Routes', () => {
       };
       mockEnhanceBatch.mockResolvedValue(summary);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-456/enhance')
         .send({ maxQualityScore: 0.5, maxColorScore: 0.4 });
 
@@ -197,7 +198,7 @@ describe('Enhancement API Routes', () => {
     it('should return 500 on unexpected batch errors', async () => {
       mockEnhanceBatch.mockRejectedValue(new Error('Database connection lost'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-789/enhance')
         .send();
 

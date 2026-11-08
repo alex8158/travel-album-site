@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const { mockGenerateVersions, mockIsGenerating, mockDetectBlackFrames, mockDetectJunkClip } = vi.hoisted(() => ({
@@ -92,7 +93,7 @@ describe('Video Enhancement API Routes', () => {
 
   describe('POST /api/media/:mediaId/versions', () => {
     it('should return 404 when media not found', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/non-existent-id/versions')
         .send();
 
@@ -105,7 +106,7 @@ describe('Video Enhancement API Routes', () => {
       createTrip('trip-1');
       createMediaItem('media-img', 'trip-1', 'image/jpeg');
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/media-img/versions')
         .send();
 
@@ -119,7 +120,7 @@ describe('Video Enhancement API Routes', () => {
       createMediaItem('media-busy', 'trip-1', 'video/mp4');
       mockIsGenerating.mockReturnValue(true);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/media-busy/versions')
         .send();
 
@@ -148,7 +149,7 @@ describe('Video Enhancement API Routes', () => {
       };
       mockGenerateVersions.mockResolvedValue(mockResult);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/media-ok/versions')
         .send({ profiles: ['highlight'] });
 
@@ -162,7 +163,7 @@ describe('Video Enhancement API Routes', () => {
       createMediaItem('media-ok', 'trip-1', 'video/mp4');
       createVideoSegments('media-ok', 3);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/media-ok/versions')
         .send({ profiles: ['nonexistent_profile', 'another_bad'] });
 
@@ -183,7 +184,7 @@ describe('Video Enhancement API Routes', () => {
       };
       mockGenerateVersions.mockResolvedValue(mockResult);
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/media/media-ok/versions')
         .send();
 
@@ -196,7 +197,7 @@ describe('Video Enhancement API Routes', () => {
 
   describe('POST /api/trips/:tripId/video-enhance', () => {
     it('should return 404 when trip not found', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/non-existent-trip/video-enhance')
         .send();
 
@@ -235,7 +236,7 @@ describe('Video Enhancement API Routes', () => {
         errors: [],
       });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-1/video-enhance')
         .send();
 
@@ -280,7 +281,7 @@ describe('Video Enhancement API Routes', () => {
         })
         .mockRejectedValueOnce(new Error('FFmpeg encoding failed'));
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-1/video-enhance')
         .send();
 
@@ -318,7 +319,7 @@ describe('Video Enhancement API Routes', () => {
         errors: [],
       });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post('/api/trips/trip-1/video-enhance')
         .send();
 

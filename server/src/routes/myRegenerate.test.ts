@@ -30,6 +30,7 @@ import fs from 'fs';
 import path from 'path';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -161,10 +162,18 @@ function failureResult(error: string) {
 }
 
 function regenerate(tripId: string, token?: string) {
-  const req = request(app).post(`/api/my/trips/${tripId}/tier-slideshow/regenerate`);
+  const req = request(localServer()).post(`/api/my/trips/${tripId}/tier-slideshow/regenerate`);
   return token ? req.set('Authorization', `Bearer ${token}`) : req;
 }
 
+// One server per test for request builders that callers await or chain
+// (known-issues 12a; see test-support/localServer.ts).
+let perTestServer: import('http').Server | undefined;
+beforeEach(async () => { perTestServer = await listenLocal(app); });
+function localServer(): import('http').Server {
+  if (!perTestServer) throw new Error('localServer() used outside a test');
+  return perTestServer;
+}
 describe('POST /api/my/trips/:id/tier-slideshow/regenerate — terminal-state truth table', () => {
   beforeEach(() => {
     const db = getDb();

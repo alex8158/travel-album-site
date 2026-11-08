@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import duplicateGroupItemsRouter from './duplicateGroupItems';
@@ -88,7 +89,7 @@ describe('Duplicate Group Items API', () => {
 
   describe('POST /api/duplicate-groups/:groupId/items', () => {
     it('should create an item and return 201', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({
           media_id: mediaId,
@@ -111,12 +112,12 @@ describe('Duplicate Group Items API', () => {
 
     it('should return 409 when (group_id, media_id) already exists', async () => {
       // First insert
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId, similarity_score: 0.95 });
 
       // Duplicate insert
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId, similarity_score: 0.90 });
 
@@ -125,7 +126,7 @@ describe('Duplicate Group Items API', () => {
     });
 
     it('should return 400 when media_id is missing', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ similarity_score: 0.95 });
 
@@ -138,21 +139,21 @@ describe('Duplicate Group Items API', () => {
     it('should return all items in the group', async () => {
       const mediaId2 = createMedia(tripId, userId);
 
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId, similarity_score: 0.95 });
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId2, similarity_score: 0.88 });
 
-      const res = await request(app).get(`/api/duplicate-groups/${groupId}/items`);
+      const res = await request(await listenLocal(app)).get(`/api/duplicate-groups/${groupId}/items`);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(2);
     });
 
     it('should return empty array when no items exist', async () => {
-      const res = await request(app).get(`/api/duplicate-groups/${groupId}/items`);
+      const res = await request(await listenLocal(app)).get(`/api/duplicate-groups/${groupId}/items`);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
@@ -161,13 +162,13 @@ describe('Duplicate Group Items API', () => {
 
   describe('PUT /api/duplicate-groups/:groupId/items/:itemId', () => {
     it('should update recommendation and return updated record', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId, similarity_score: 0.95, recommendation: 'keep' });
 
       const itemId = createRes.body.id;
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/duplicate-groups/${groupId}/items/${itemId}`)
         .send({ recommendation: 'delete', reason: '质量较低' });
 
@@ -178,7 +179,7 @@ describe('Duplicate Group Items API', () => {
     });
 
     it('should return 404 for non-existent itemId', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/duplicate-groups/${groupId}/items/non-existent-id`)
         .send({ recommendation: 'delete' });
 
@@ -189,22 +190,22 @@ describe('Duplicate Group Items API', () => {
 
   describe('DELETE /api/duplicate-groups/:groupId/items/:itemId', () => {
     it('should delete an item and return 204', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post(`/api/duplicate-groups/${groupId}/items`)
         .send({ media_id: mediaId, similarity_score: 0.95 });
 
       const itemId = createRes.body.id;
 
-      const res = await request(app).delete(`/api/duplicate-groups/${groupId}/items/${itemId}`);
+      const res = await request(await listenLocal(app)).delete(`/api/duplicate-groups/${groupId}/items/${itemId}`);
       expect(res.status).toBe(204);
 
       // Verify it's gone
-      const getRes = await request(app).get(`/api/duplicate-groups/${groupId}/items`);
+      const getRes = await request(await listenLocal(app)).get(`/api/duplicate-groups/${groupId}/items`);
       expect(getRes.body).toHaveLength(0);
     });
 
     it('should return 404 for non-existent itemId', async () => {
-      const res = await request(app).delete(`/api/duplicate-groups/${groupId}/items/non-existent-id`);
+      const res = await request(await listenLocal(app)).delete(`/api/duplicate-groups/${groupId}/items/non-existent-id`);
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
     });

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
 import mediaAnalysisRouter from './mediaAnalysis';
@@ -75,7 +76,7 @@ describe('Media Analysis API', () => {
 
   describe('POST /api/media/:mediaId/analysis', () => {
     it('should create an analysis record and return 201', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/analysis`)
         .send({
           blur_score: 0.85,
@@ -117,7 +118,7 @@ describe('Media Analysis API', () => {
     });
 
     it('should create a record with minimal data (all optional fields null)', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/analysis`)
         .send({});
 
@@ -134,7 +135,7 @@ describe('Media Analysis API', () => {
   describe('GET /api/media/:mediaId/analysis', () => {
     it('should return the latest analysis record', async () => {
       // Create two analysis records with a small delay
-      await request(app)
+      await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/analysis`)
         .send({ quality_score: 0.5, analysis_version: 'v1.0' });
 
@@ -147,7 +148,7 @@ describe('Media Analysis API', () => {
          VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?, ?)`
       ).run(id2, mediaId, 0.9, 'v2.0', laterTime);
 
-      const res = await request(app).get(`/api/media/${mediaId}/analysis`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/analysis`);
 
       expect(res.status).toBe(200);
       expect(res.body.quality_score).toBe(0.9);
@@ -155,7 +156,7 @@ describe('Media Analysis API', () => {
     });
 
     it('should return 404 when no analysis exists', async () => {
-      const res = await request(app).get(`/api/media/${mediaId}/analysis`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/analysis`);
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
@@ -187,7 +188,7 @@ describe('Media Analysis API', () => {
          VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?, ?)`
       ).run(id3, mediaId, 0.9, 'v3.0', t3);
 
-      const res = await request(app).get(`/api/media/${mediaId}/analysis?history=true`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/analysis?history=true`);
 
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(3);
@@ -198,7 +199,7 @@ describe('Media Analysis API', () => {
     });
 
     it('should return empty array when no analysis exists with history=true', async () => {
-      const res = await request(app).get(`/api/media/${mediaId}/analysis?history=true`);
+      const res = await request(await listenLocal(app)).get(`/api/media/${mediaId}/analysis?history=true`);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
@@ -207,7 +208,7 @@ describe('Media Analysis API', () => {
 
   describe('PUT /api/media/:mediaId/analysis/:analysisId', () => {
     it('should update an analysis record and return updated data', async () => {
-      const createRes = await request(app)
+      const createRes = await request(await listenLocal(app))
         .post(`/api/media/${mediaId}/analysis`)
         .send({
           quality_score: 0.5,
@@ -218,7 +219,7 @@ describe('Media Analysis API', () => {
 
       const analysisId = createRes.body.id;
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/analysis/${analysisId}`)
         .send({
           quality_score: 0.9,
@@ -236,7 +237,7 @@ describe('Media Analysis API', () => {
     });
 
     it('should return 404 for non-existent analysisId', async () => {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/media/${mediaId}/analysis/non-existent-id`)
         .send({ quality_score: 0.9 });
 

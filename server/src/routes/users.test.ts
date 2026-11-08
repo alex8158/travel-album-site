@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
@@ -90,7 +91,7 @@ describe('User Space Routes', () => {
       const trip2 = seedTrip(user.id, { title: 'Unlisted Trip', visibility: 'unlisted' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get('/api/users/me/trips')
         .set('Authorization', `Bearer ${token}`);
 
@@ -108,7 +109,7 @@ describe('User Space Routes', () => {
       seedTrip(bob.id, { title: 'Bob Trip' });
       const token = signToken({ userId: alice.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get('/api/users/me/trips')
         .set('Authorization', `Bearer ${token}`);
 
@@ -130,7 +131,7 @@ describe('User Space Routes', () => {
       ).run(id2, 'Newer Trip', user.id, '2024-06-01T00:00:00.000Z', '2024-06-01T00:00:00.000Z');
 
       const token = signToken({ userId: user.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get('/api/users/me/trips')
         .set('Authorization', `Bearer ${token}`);
 
@@ -140,7 +141,7 @@ describe('User Space Routes', () => {
     });
 
     it('should return 401 without auth token', async () => {
-      const res = await request(app).get('/api/users/me/trips');
+      const res = await request(await listenLocal(app)).get('/api/users/me/trips');
       expect(res.status).toBe(401);
     });
 
@@ -148,7 +149,7 @@ describe('User Space Routes', () => {
       const user = seedUser({ username: 'empty' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get('/api/users/me/trips')
         .set('Authorization', `Bearer ${token}`);
 
@@ -165,7 +166,7 @@ describe('User Space Routes', () => {
       seedMedia(trip.id, user.id, { visibility: 'private' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/users/me/trips/${trip.id}/gallery`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -180,7 +181,7 @@ describe('User Space Routes', () => {
       const trip = seedTrip(bob.id);
       const token = signToken({ userId: alice.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/users/me/trips/${trip.id}/gallery`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -195,7 +196,7 @@ describe('User Space Routes', () => {
       seedMedia(trip.id, bob.id, { visibility: 'private' });
       const token = signToken({ userId: admin.id, role: 'admin' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/users/me/trips/${trip.id}/gallery`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -207,7 +208,7 @@ describe('User Space Routes', () => {
       const user = seedUser({ username: 'alice' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/users/me/trips/${uuidv4()}/gallery`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -215,7 +216,7 @@ describe('User Space Routes', () => {
     });
 
     it('should return 401 without auth token', async () => {
-      const res = await request(app).get(`/api/users/me/trips/${uuidv4()}/gallery`);
+      const res = await request(await listenLocal(app)).get(`/api/users/me/trips/${uuidv4()}/gallery`);
       expect(res.status).toBe(401);
     });
   });
@@ -228,7 +229,7 @@ describe('User Space Routes', () => {
       seedTrip(bob.id, { title: 'Bob Unlisted', visibility: 'unlisted' });
       const token = signToken({ userId: admin.id, role: 'admin' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/admin/users/${bob.id}/trips`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -242,7 +243,7 @@ describe('User Space Routes', () => {
       seedTrip(bob.id);
       const token = signToken({ userId: regular.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/admin/users/${bob.id}/trips`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -250,7 +251,7 @@ describe('User Space Routes', () => {
     });
 
     it('should return 401 without auth token', async () => {
-      const res = await request(app).get(`/api/admin/users/${uuidv4()}/trips`);
+      const res = await request(await listenLocal(app)).get(`/api/admin/users/${uuidv4()}/trips`);
       expect(res.status).toBe(401);
     });
 
@@ -259,7 +260,7 @@ describe('User Space Routes', () => {
       const bob = seedUser({ username: 'bob' });
       const token = signToken({ userId: admin.id, role: 'admin' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/admin/users/${bob.id}/trips`)
         .set('Authorization', `Bearer ${token}`);
 

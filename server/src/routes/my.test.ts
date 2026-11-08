@@ -1,5 +1,7 @@
 import express from 'express';
+import { beforeEach } from 'vitest';
 import request from 'supertest';
+import { listenLocal } from '../../test-support/localServer';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, closeDb } from '../database';
@@ -145,6 +147,14 @@ function fillTier(tripId: string, userId: string, category: string, n: number) {
   }
 }
 
+// One server per test for request builders that callers await or chain
+// (known-issues 12a; see test-support/localServer.ts).
+let perTestServer: import('http').Server | undefined;
+beforeEach(async () => { perTestServer = await listenLocal(app); });
+function localServer(): import('http').Server {
+  if (!perTestServer) throw new Error('localServer() used outside a test');
+  return perTestServer;
+}
 describe('My Space Routes — tier photo management', () => {
   beforeEach(() => {
     const db = getDb();
@@ -183,7 +193,7 @@ describe('My Space Routes — tier photo management', () => {
       expect(tierCount(trip.id, 'animal')).toBe(9);
 
       const token = signToken({ userId: user.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${candidate.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -210,7 +220,7 @@ describe('My Space Routes — tier photo management', () => {
       expect(tierCount(trip.id, 'animal')).toBe(12);
 
       const token = signToken({ userId: user.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${candidate.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -229,7 +239,7 @@ describe('My Space Routes — tier photo management', () => {
         const candidate = seedMedia(trip.id, user.id, { category: 'landscape' });
         seedHighlight(trip.id, candidate.id, false);
 
-        const res = await request(app)
+        const res = await request(await listenLocal(app))
           .put(`/api/my/trips/${trip.id}/tier-photos/${candidate.id}`)
           .set('Authorization', `Bearer ${token}`);
 
@@ -248,7 +258,7 @@ describe('My Space Routes — tier photo management', () => {
       seedHighlight(trip.id, candidate.id, false);
 
       const token = signToken({ userId: user.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${candidate.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -273,7 +283,7 @@ describe('My Space Routes — tier photo management', () => {
       const before = readHighlightRow(trip.id, photo.id)!;
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -301,7 +311,7 @@ describe('My Space Routes — tier photo management', () => {
       const before = readHighlightRow(trip.id, photo.id)!;
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -327,7 +337,7 @@ describe('My Space Routes — tier photo management', () => {
       expect(highlightRowCount(trip.id)).toBe(0);
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -348,7 +358,7 @@ describe('My Space Routes — tier photo management', () => {
       const photo = seedMedia(trip.id, user.id, { category: 'landscape' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      await request(app)
+      await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -376,7 +386,7 @@ describe('My Space Routes — tier photo management', () => {
 
     /** GET the pool and return the photo ids it contains. */
     async function fetchPoolIds(tripId: string, token: string): Promise<string[]> {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/my/trips/${tripId}/highlight-pool`)
         .set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
@@ -512,7 +522,7 @@ describe('My Space Routes — tier photo management', () => {
       const user = seedUser();
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/my/trips/${uuidv4()}/highlight-pool`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -526,7 +536,7 @@ describe('My Space Routes — tier photo management', () => {
       const trip = seedTrip(owner.id);
 
       const token = signToken({ userId: stranger.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/my/trips/${trip.id}/highlight-pool`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -540,13 +550,13 @@ describe('My Space Routes — tier photo management', () => {
     // and Property 1 ("Remove clears tier flag").
 
     function removeFromTier(tripId: string, photoId: string, token?: string) {
-      const req = request(app).delete(`/api/my/trips/${tripId}/tier-photos/${photoId}`);
+      const req = request(localServer()).delete(`/api/my/trips/${tripId}/tier-photos/${photoId}`);
       return token ? req.set('Authorization', `Bearer ${token}`) : req;
     }
 
     /** Read the tier photo ids the GET tier-photos endpoint reports. */
     async function fetchTierPhotoIds(tripId: string, token: string): Promise<string[]> {
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .get(`/api/my/trips/${tripId}/tier-photos`)
         .set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
@@ -629,7 +639,7 @@ describe('My Space Routes — tier photo management', () => {
       const token = signToken({ userId: user.id, role: 'regular' });
 
       // While in the tier it is excluded from the pool.
-      const poolBefore = await request(app)
+      const poolBefore = await request(await listenLocal(app))
         .get(`/api/my/trips/${trip.id}/highlight-pool`)
         .set('Authorization', `Bearer ${token}`);
       expect((poolBefore.body.photos as Array<{ id: string }>).map((p) => p.id)).not.toContain(
@@ -638,13 +648,13 @@ describe('My Space Routes — tier photo management', () => {
 
       await removeFromTier(trip.id, photo.id, token);
 
-      const poolAfter = await request(app)
+      const poolAfter = await request(await listenLocal(app))
         .get(`/api/my/trips/${trip.id}/highlight-pool`)
         .set('Authorization', `Bearer ${token}`);
       expect((poolAfter.body.photos as Array<{ id: string }>).map((p) => p.id)).toContain(photo.id);
 
       // And can be promoted back into the tier.
-      const readd = await request(app)
+      const readd = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
       expect(readd.status).toBe(200);
@@ -830,20 +840,20 @@ describe('My Space Routes — tier photo management', () => {
     }
 
     function trashPhoto(tripId: string, photoId: string, token: string) {
-      return request(app)
+      return request(localServer())
         .put(`/api/trips/${tripId}/media/trash`)
         .set('Authorization', `Bearer ${token}`)
         .send({ mediaIds: [photoId] });
     }
 
     function restorePhoto(photoId: string, token: string) {
-      return request(app)
+      return request(localServer())
         .put(`/api/media/${photoId}/restore`)
         .set('Authorization', `Bearer ${token}`);
     }
 
     function addToTier(tripId: string, photoId: string, token: string) {
-      return request(app)
+      return request(localServer())
         .put(`/api/my/trips/${tripId}/tier-photos/${photoId}`)
         .set('Authorization', `Bearer ${token}`);
     }
@@ -994,7 +1004,7 @@ describe('My Space Routes — tier photo management', () => {
       const user = seedUser();
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${uuidv4()}/tier-photos/${uuidv4()}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -1009,7 +1019,7 @@ describe('My Space Routes — tier photo management', () => {
       const foreignPhoto = seedMedia(otherTrip.id, user.id, { category: 'animal' });
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${foreignPhoto.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -1024,7 +1034,7 @@ describe('My Space Routes — tier photo management', () => {
       seedHighlight(trip.id, trashed.id, false);
       const token = signToken({ userId: user.id, role: 'regular' });
 
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${trashed.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -1041,7 +1051,7 @@ describe('My Space Routes — tier photo management', () => {
       seedHighlight(trip.id, photo.id, false);
 
       const token = signToken({ userId: stranger.id, role: 'regular' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -1058,7 +1068,7 @@ describe('My Space Routes — tier photo management', () => {
       seedHighlight(trip.id, photo.id, false);
 
       const token = signToken({ userId: admin.id, role: 'admin' });
-      const res = await request(app)
+      const res = await request(await listenLocal(app))
         .put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`)
         .set('Authorization', `Bearer ${token}`);
 
@@ -1071,7 +1081,7 @@ describe('My Space Routes — tier photo management', () => {
       const trip = seedTrip(user.id);
       const photo = seedMedia(trip.id, user.id, { category: 'animal' });
 
-      const res = await request(app).put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`);
+      const res = await request(await listenLocal(app)).put(`/api/my/trips/${trip.id}/tier-photos/${photo.id}`);
 
       expect(res.status).toBe(401);
     });
@@ -1086,7 +1096,7 @@ describe('My Space Routes — tier photo management', () => {
     // Implementation: server/src/routes/highlights.ts, GET /:id/highlight-photos.
 
     function getHighlightPhotos(tripId: string, token?: string) {
-      const req = request(app).get(`/api/trips/${tripId}/highlight-photos`);
+      const req = request(localServer()).get(`/api/trips/${tripId}/highlight-photos`);
       return token ? req.set('Authorization', `Bearer ${token}`) : req;
     }
 
