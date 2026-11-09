@@ -5,13 +5,40 @@ import { initDefaultData } from './services/userService';
 
 let db: Database.Database | null = null;
 
+/** The application database. Tests must never open it (docs/agent/known-issues.md 12b). */
+const DEFAULT_DB_PATH = path.join(__dirname, '..', 'data', 'travel-album.db');
+
+function realOrResolved(p: string): string {
+  try { return fs.realpathSync(p); } catch { /* not there yet */ }
+  try { return path.join(fs.realpathSync(path.dirname(p)), path.basename(p)); } catch { return path.resolve(p); }
+}
+
+/**
+ * Outside vitest: the default application path, unchanged.
+ * Under vitest (`VITEST` is set by the test runner): the path in
+ * `TRAVEL_ALBUM_TEST_DB_PATH`, which server/vitest.config.ts sets to a fresh
+ * per-run directory. A test run without it, or with it pointing at the
+ * application database, is refused before anything is opened or written.
+ */
+export function resolveDbPath(): string {
+  if (!process.env.VITEST) return DEFAULT_DB_PATH;
+  const configured = process.env.TRAVEL_ALBUM_TEST_DB_PATH;
+  if (!configured) {
+    throw new Error('[database] refusing to open a database under vitest without TRAVEL_ALBUM_TEST_DB_PATH (see server/vitest.config.ts)');
+  }
+  const target = path.resolve(configured);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (realOrResolved(target) === realOrResolved(DEFAULT_DB_PATH)) {
+    throw new Error(`[database] refusing to open the application database under vitest: ${target}`);
+  }
+  return target;
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
-  const dataDir = path.join(__dirname, '..', 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  const dbPath = path.join(dataDir, 'travel-album.db');
+  const dbPath = resolveDbPath();
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   db = new Database(dbPath);
 
   // Enable WAL mode for better concurrency

@@ -330,6 +330,23 @@ Running `npm test` inside the repository checkout would read and write the devel
 
 Until tests get their own database, run server tests only in an isolated copy with its own `server/data`, `server/uploads` and `TEMP_DIR` (pattern: `travel-album-acceptance/g21/20261102T023422Z/round10-g29-beforeeach/tests/sync.sh`).
 
+### Update 2026-11-05 (round17): test database isolated
+
+* `server/vitest.config.ts` creates a fresh directory per test run, `os.tmpdir()/travel-album-vitest-<pid>`, and passes three settings to the single fork worker through `test.env`, unless they are already set:
+  * `TRAVEL_ALBUM_TEST_DB_PATH` (`<dir>/data/travel-album.db`);
+  * `TEMP_DIR` (`<dir>/tmp`);
+  * `JWT_SECRET`.
+* `server/src/database.ts` `resolveDbPath()`:
+  * without `VITEST`, it returns the unchanged default `server/data/travel-album.db`;
+  * under vitest, it opens only `TRAVEL_ALBUM_TEST_DB_PATH`;
+  * before opening anything, it throws if that variable is missing or resolves (through realpath) to the application database.
+* So a standard `npm test` no longer writes the application database. Whole-table deletes, test users and the restart clean-up all run against the per-run test database. The application `server/.tmp` and `server/data/.jwt-secret` are not touched either.
+* Verified in an isolated copy against a mock application database holding sentinel rows (evidence `round17-read-routes-db-isolation/`).
+
+Still open:
+* Tests still write files under `server/uploads/<test trip id>` (fresh random ids) and delete only those directories. Several test files and four production modules hard-code that path. They do not overwrite or delete other trips' files, but a killed run can leave such directories behind.
+* The 264 whole-table `DELETE` statements are unchanged; they now hit only the test database.
+
 ## 12c. A killed test run can leave the `g29_test_block` trigger behind
 
 Registered 2026-11-05. Not fixed.
@@ -342,7 +359,7 @@ Registered 2026-11-05. Not fixed.
 
 ### Trigger condition and impact
 
-The trigger survives only if the test process is killed (time limit, SIGKILL, crash) between lines 210 and 220. Normal completion and thrown errors both reach `finally`. Once it survives, every later job insert in the same database file fails, until this test file runs again and its `beforeEach` drops the trigger. Test files that run before it in the same run are affected. Because of 12b, this would include the local app database if tests were run inside the repository.
+The trigger survives only if the test process is killed (time limit, SIGKILL, crash) between lines 210 and 220. Normal completion and thrown errors both reach `finally`. Once it survives, every later job insert in the same database file fails, until this test file runs again and its `beforeEach` drops the trigger. Test files that run before it in the same run are affected. Because of 12b, this would include the local app database if tests were run inside the repository. (Since round17 the test database is a separate per-run file, so a leftover trigger can no longer reach the application database; it can still affect later files in the same run.)
 
 ### Rule
 
