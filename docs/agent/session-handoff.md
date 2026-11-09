@@ -1,81 +1,77 @@
 # Session Handoff
 
-Last updated: 2026-11-05 (round16, done). Update this file as work lands.
+Last updated: 2026-11-05 (round17). Update this file as work lands.
 
 ## Code baseline
 
-- Branch `v2-smart-media`. Nothing is pushed: local commits are ahead of `origin/v2-smart-media`.
-- HEAD at round16 start: `bfecd3beaf778ef2858650b2ce0640197459c684`. Round16 adds the two commits at the bottom of the table; the docs commit is the new HEAD (`git log -1`).
-- Local commits from this work stream (oldest first). All are **not pushed**:
+- Branch `v2-smart-media`. Local commits are ahead of `origin/v2-smart-media`. Nothing is merged or deployed.
+- Remote backup branch: `origin/backup/v2-smart-media-20261109`. It is only ever fast-forwarded. No workflow triggers on `backup/**`: deploy runs on `main`/`dev`, acceptance on `acceptance/**`, release on `v*` tags.
+- Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
+- Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
 | Commit | Content | Status |
 | --- | --- | --- |
 | `83cb457` | G-21 media file access control | implemented, not accepted |
 | `57eff8b` | G-24 owner/admin-only download routes | implemented, not accepted |
-| `8c1dfc0` | G-27 + G-29 (write-route gate; 409 instead of crash) | implemented, not accepted |
-| `bfecd3b` | `gallery.test.ts` binds test servers to 127.0.0.1 (known-issues 12a) | verified in isolation |
-| `4ddab02` | remaining 21 server test files use the shared `server/test-support/localServer.ts` (127.0.0.1) | verified in isolation: 22 affected files 406/406; one full server run 1593/1593 |
-| docs commit | G-21 browser acceptance on `4ddab02` recorded in `requirements.md`; this handoff file | see below |
+| `8c1dfc0` | G-27 write routes + G-29 (409 instead of crash) | implemented, not accepted |
+| `bfecd3b` | `gallery.test.ts` binds test servers to 127.0.0.1 (12a) | verified |
+| `4ddab02` | other 21 test files use `server/test-support/localServer.ts` | verified: 1593/1593 |
+| `6c823dd` | G-21 browser acceptance on `4ddab02` recorded; first handoff | docs |
+| `d34eb3c` | G-27: `GET /segments`, `GET /compile/status` owner/admin only | verified: 116/116 affected, 1604/1604 full |
+| `087a4c2` | test DB isolated from the application DB (12b) | verified with a mock app DB and sentinels |
 
 ## Working-tree changes that must stay uncommitted
 
-These 10 items predate this work, or were explicitly kept out of commits. Do not stage them. Do not use `git add .`.
+These 10 items predate this work, or were explicitly kept out of commits. Do not stage them. Do not use `git add .`. Stage paths one by one; for mixed files, write the intended blob with `git update-index --cacheinfo`.
 
-- `.kiro/specs/multi-user-system/requirements.md`: entries G-23, G-25, G-26 and G-28 only.
-- `client/src/pages/AdminUserTripsPage.tsx`, `client/src/pages/UserSpacePage.tsx`: wording change "不公开" → "仅通过链接访问" only.
+- `.kiro/specs/multi-user-system/requirements.md`: the registrations G-23, G-25, G-26 and G-28 only (26 lines).
+- `client/src/pages/AdminUserTripsPage.tsx`, `client/src/pages/UserSpacePage.tsx`: wording "不公开" → "仅通过链接访问" only.
 - `client/src/pages/SettingsPage.tsx`, `client/src/pages/UploadPage.tsx`: the user's earlier wording changes.
 - Untracked: `.kiro/specs/_check_api_contract.py`, `.kiro/steering/risk-levels.md`, `client/src/pages/SettingsPage.test.tsx`, `client/src/pages/UploadPage.test.tsx`, `docs/ec2-new-resource-alert.md`.
 
-Six protected files must keep their working-tree content: `AdminUserTripsPage.tsx`, `SettingsPage.tsx`, `UploadPage.tsx`, `UserSpacePage.tsx`, `SettingsPage.test.tsx`, `UploadPage.test.tsx`. Their SHA-1 reference is `travel-album-acceptance/g21/20261102T023422Z/round13-planb-commit/snapshot/protected-sha1-after.txt`.
+Six protected files must keep their working-tree content: `AdminUserTripsPage.tsx`, `SettingsPage.tsx`, `UploadPage.tsx`, `UserSpacePage.tsx`, `SettingsPage.test.tsx`, `UploadPage.test.tsx`. SHA-1 reference: `travel-album-acceptance/g21/20261102T023422Z/round13-planb-commit/snapshot/protected-sha1-after.txt`.
 
-## Must-read files
-
-- `AGENTS.md`, `docs/agent/change-boundaries.md`, `docs/agent/verify-commands.md`.
-- `docs/agent/known-issues.md`:
-  - 12a: test port collision;
-  - 12b–12e: test DB, trigger, clean-up and `markRunning` issues, registered and not fixed;
-  - 12f: type checking does not cover tests;
-  - 12g: thumbnail source, pending decision.
-- `.kiro/specs/multi-user-system/requirements.md`: 需求 7 AC 8, 需求 9 AC 16–24, and entries G-21 to G-30.
+Avoid: `git add .`, force push, rewriting reviewed commits, pushing to `main`/`v2-smart-media`/`acceptance/**` without explicit approval, deploys, printing `.env`/secrets.
 
 ## Commands that work
 
-- Server: `cd server && npx tsc --noEmit`, `npm run build`, `npm test` (vitest `--run`).
+- Server: `cd server && npx tsc --noEmit`, `npm run build`, `npm test`.
+  - Since `087a4c2`, `npm test` uses a fresh per-run database under `os.tmpdir()/travel-album-vitest-<pid>`, with its own `TEMP_DIR` and `JWT_SECRET`. It refuses to open `server/data/travel-album.db`.
+  - Tests still create and delete `server/uploads/<test trip id>` directories (known-issues 12b). Prefer an isolated copy for long runs.
 - Client: `cd client && npx tsc -b`, `npm run build`, `npm test`.
 - No lint script and no smoke script exist.
-- **Do not run server tests in this checkout.** Tests open `server/data/travel-album.db`, the local app database (known-issues 12b). Use an isolated copy instead:
-  `zsh <evidence>/round16-batch-local/tools/sync-isolated.sh /tmp/<dir>`. It copies the repository without the DB, uploads or secrets, and symlinks `node_modules`. Then run with `TEMP_DIR=/tmp/<dir>/tmp`.
-- `tools/run.py <limit_s> <log> -- <cmd>` runs a command with a hard time limit and snapshots 127.0.0.1 listeners.
-- Request-arrival probe: add `tools/diag-setup.ts` and `tools/vitest.g21diag.config.ts` to the isolated copy, and set `G21_DIAG_OUT=<file>`.
-- Failure classification: `python3 tools/classify-failures.py <vitest log> <diag jsonl>`.
-- Supplementary test type check: an isolated `tsconfig.*.json` that extends `server/tsconfig.json` with an explicit `include` list (the repository tsconfig excludes `*.test.ts`).
+- Isolated copy: `git clone --no-hardlinks <repo> /tmp/<dir> && git -C /tmp/<dir> remote remove origin`, check out the commit, then symlink `server/node_modules` and `client/node_modules`. Alternatively, `<evidence>/round16-batch-local/tools/sync-isolated.sh /tmp/<dir>` copies the working tree, including the 10 kept changes.
+- Tools (persistent copies in `<evidence>/round16-batch-local/tools/`):
+  - `run.py <limit_s> <log> -- <cmd>`: run with a time limit and listener snapshots;
+  - `diag-setup.ts` + `vitest.g21diag.config.ts`: request-arrival probe;
+  - `classify-failures.py`: failure classification.
+- Supplementary test type check: an isolated `tsconfig.*.json` that extends `server/tsconfig.json` with an explicit `include` list. The baseline is 286 pre-existing errors; compare new against baseline, and never widen excludes.
+- G-21 browser matrix: `<evidence>/round16-batch-local/g21-browser/` (`seed-env.js`, `g21.js`, `cdp.js`). The scripts expect `/tmp/g21-r2/env` (committed code, built, `server/public` = client dist), media in `/tmp/g21-r2/media` and a server on 127.0.0.1:3131.
+
+## Acceptance status (2026-11-05)
+
+| Item | Done, with evidence | Still missing |
+| --- | --- | --- |
+| G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation) | S3 (incl. AuthorizedImage CORS after 302), production check, CI run on the SHA; 12g thumbnail source is pending a decision and is not counted as passed |
+| G-24 | server tests (17/17), local-storage browser (round3) | S3, production, CI on the SHA |
+| G-27 | POST routes: server tests 31/31 + browser (round5, older code); GET routes: server tests 11/11 (round17) | browser regression of owner editing flows on current code, S3, production, CI on the SHA |
+| G-29 | reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17) | CI on the SHA (C2 precedent); no S3/production dependency |
+
+R2 decision source: `.kiro/specs/multi-user-system/requirements.md`, G-21 entry, paragraph "**2026-11-02 R2 裁定**", and `<evidence>/README.md` § "结论与裁定（2026-11-02）". The ruling was made by the user in the session of 2026-11-02 and recorded in both places. It covers the same-document reuse only; new requests after revocation must still be refused.
 
 ## Evidence
 
-Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/`. It contains `README.md` (per-round index) and `MANIFEST.sha256` (re-generate it after adding files; never rewrite historical files).
+Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/`. It contains `README.md` (per-round index) and `MANIFEST.sha256` (re-generate after adding files; never rewrite historical files).
 
 - round9: G-29 concurrency.
-- round10–13: plan-B candidate commits and the commit records.
-- round14: diagnosis of the port collision.
-- round15: gallery fix.
-- round16: this batch. Copies of the tools are in `round16-batch-local/tools/`.
+- round10–13: plan-B commits.
+- round14–15: port collision and the gallery fix.
+- round16: localServer batch, G-21 browser, tools.
+- round17: read routes and test DB isolation, push and backup records.
 
-## Remaining tasks
+## Next steps for a new session
 
-Done in round16:
-- No server test file uses `request(app)` any more; one full run passed 1593/1593. The earlier unconfirmed failures keep their categories.
-- G-21 browser acceptance on committed code `4ddab02`:
-  - no-cache group 51/51 PASS;
-  - normal-cache group 50 PASS plus R2, the accepted AC 21 limitation.
-  - Evidence: `round16-batch-local/g21-browser/`.
-- G-21 is still implemented, not accepted: S3 and production are PENDING, and 12g is pending a decision.
-
-Next tasks, directly executable:
-1. Push decision: 25+ local commits are ahead of origin; nothing has been pushed.
-2. S3 acceptance for G-21/G-24 (needs a real isolated S3 bucket). Production nginx/CDN check for G-22.
-3. Decisions needed before code:
-   - test DB isolation (12b);
-   - thumbnail source (12g);
-   - G-23, G-25, G-26, G-28, G-30;
-   - G-27 `GET /segments` and `GET /compile/status`;
-   - S3, production and deployment checks.
+1. CI on the current SHA, if approved: push the same commit to an `acceptance/**` branch. That workflow is tests-only and is the C2 precedent for "accepted".
+2. Browser regression of the owner editing flows (ClipEditor, SegmentAdjuster, CompilationPreview) on current code, reusing `<evidence>/round5-g27-impl/scripts/g27.js`.
+3. S3 acceptance for G-21/G-24 and the production nginx/CDN check for G-22. These need a real isolated bucket and host access; do not create paid resources without approval.
+4. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).

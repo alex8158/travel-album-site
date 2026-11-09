@@ -601,7 +601,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | 路由 | 状态 |
 | --- | --- |
 | `POST /clips`、`POST /merge`、`POST /re-edit`、`POST /compile` | 已按需求 7 AC 8 实施，**未验收** |
-| `GET /segments`、`GET /compile/status` | 未核查、未修 |
+| `GET /segments`、`GET /compile/status` | 2026-11-05 已按同一规则（需求 7 AC 8）实施，**未验收**：未认证 401；不存在、已删除、trip 缺失 404；普通非所有者 403；所有者/管理员遇非 `active` 404；被拒响应不含片段与任务数据 |
 
 只读核查（隔离探针，证据见 `travel-album-acceptance/g21/20261102T023422Z/round4-g27/`）在修复前证实了以下几点：
 - 普通非所有者对他人 `active` 视频调用这四条路由，与所有者得到相同的 202。
@@ -621,7 +621,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
   - 编译引擎在这组单元测试里是 stub，`compile_jobs` 的真实写入链没有运行；该链路由浏览器回归覆盖。
 - [x] 本地隔离浏览器回归：ClipEditor 合并与重新剪辑、CompilationPreview 生成剪辑、SegmentAdjuster 重新生成，均为所有者操作，使用真实处理与合成媒体；非所有者与匿名直接请求被拒，且没有新增任何任务。
 - [ ] S3、线上：未测。
-- [ ] 两条 GET 路由：另查。
+- [x] 两条 GET 路由（2026-11-05，提交 `d34eb3c`）：调用方只有所有者侧编辑界面（MyGalleryPage、ClipEditor、SegmentAdjuster、CompilationPreview），没有公开读取用途，所以沿用写操作的所有者/管理员判定。回归测试 `routes/mediaReadOwnership.test.ts`（11 例）；隔离副本中受影响的测试 116/116，服务端全量 1604/1604。证据 `travel-album-acceptance/g21/20261102T023422Z/round17-read-routes-db-isolation/`。
+- [ ] 当前代码上的浏览器回归（所有者编辑流程会读取这两条路由；round5 的浏览器回归是在旧代码上做的）：未重做。
 
 **G-29 同一 trip 已有进行中任务时，处理路由会使服务进程退出（2026-11-03 登记，未修，与 G-27 权限修复无关）**
 
@@ -654,6 +655,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 回归测试：`routes/clipsJobConflict.test.ts`，9 个用例，真实 SQLite。变异检查：对修复前的 `clips.ts`，5 个用例失败，并出现 4 个未处理的 `UNIQUE constraint failed` 拒绝。
 
 不在本条范围内（另行处理）：全局 `unhandledRejection` 兜底；进程退出到重启之间 trip 被锁住的恢复问题；`POST /compile` 的并发行为；`aiEditing.ts` 的任务插入（见 G-30）。
+
+**2026-11-05 验收条件核对（仍为已实施、未验收）**：条目中列出的修复后检查全部有证据。其中独立进程的四组同 trip 组合、不同 trip 对照、模拟其他插入错误见 round7；真实并发 18 组见 round9；回归测试与测试清理边界见 round10；当前代码上服务端全量 1604/1604 见 round17。按 C2 验收的先例，尚缺一项：在对应提交上跑一次 CI。G-29 不依赖 S3 或线上环境。
 
 **G-30 `aiEditing.ts` 的任务插入在同 trip 冲突时的行为（2026-11-04 登记，代码推断，待实测）**
 
@@ -710,7 +713,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING |
 | P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
-| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；`GET /segments`、`GET /compile/status` 仍开放 |
+| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。剩余：当前代码上的浏览器回归、S3、线上 |
 | P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409；**未验收** |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
@@ -769,7 +772,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | POST | `/api/media/:mediaId/re-edit` | 是 | 同上一行（需求 7 AC 8） |
 | POST | `/api/media/:mediaId/compile` | 是 | 同上一行（需求 7 AC 8） |
 
-三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。两条下载路由按 AC 24：未认证 401，其余拒绝 404，所有响应 `private, no-store` + `Vary: Authorization`。（2026-11-03 更新：上一版此处写「仅要求登录、无所有权检查（G-24）」，已由 AC 24 取代。）同文件的四条 POST 按需求 7 AC 8 处理（拒绝时返回 403，不是 404）；`GET /segments`、`GET /compile/status` 仍不校验所有权，见 G-27。
+三条 `/api/media/:id/*` 文件入口的拒绝一律为 404 `NOT_FOUND`（需求 9 AC 20），响应头 `Cache-Control: private, no-store` + `Vary: Authorization`（AC 21）；S3 分支先判定再签名（AC 23）。两条下载路由按 AC 24：未认证 401，其余拒绝 404，所有响应 `private, no-store` + `Vary: Authorization`。（2026-11-03 更新：上一版此处写「仅要求登录、无所有权检查（G-24）」，已由 AC 24 取代。）同文件的四条 POST 按需求 7 AC 8 处理（拒绝时返回 403，不是 404）；`GET /segments`、`GET /compile/status` 自 2026-11-05 起按同一规则（拒绝时返回 403 或 404），见 G-27。
 
 ## 附录：涉及的环境变量名
 
