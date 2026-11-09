@@ -135,6 +135,14 @@ router.post('/:mediaId/compile', authMiddleware, requireAuth, async (req: Reques
 // ---------------------------------------------------------------------------
 router.get('/:mediaId/compile/status', authMiddleware, requireAuth, async (req: Request, res: Response) => {
   const mediaId = req.params.mediaId as string;
+  // Owner/admin only, same rule as POST /compile (multi-user-system G-27,
+  // 需求 7 AC 8): job status and error text belong to the editing workflow.
+  const gate = authorizeOwnerMediaWrite(req, mediaId);
+  if (!gate.allowed) {
+    return gate.status === 403
+      ? res.status(403).json(OWNER_WRITE_FORBIDDEN_BODY)
+      : res.status(404).json({ error: { code: 'NOT_FOUND', message: '媒体文件不存在' } });
+  }
   const db = getDb();
 
   // Verify media exists
