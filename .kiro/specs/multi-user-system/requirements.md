@@ -658,6 +658,15 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 **2026-11-05 验收条件核对（仍为已实施、未验收）**：条目中列出的修复后检查全部有证据。其中独立进程的四组同 trip 组合、不同 trip 对照、模拟其他插入错误见 round7；真实并发 18 组见 round9；回归测试与测试清理边界见 round10；当前代码上服务端全量 1604/1604 见 round17。按 C2 验收的先例，尚缺一项：在对应提交上跑一次 CI。G-29 不依赖 S3 或线上环境。
 
+**2026-11-10 更新（G-29 验收）**：上段所缺一项已有通过证据，G-29 **已验收**。
+- CI：run https://github.com/alex8158/travel-album-site/actions/runs/42746181669 ，workflow「Acceptance (tests only, no deploy)」，分支 `acceptance/g29-20261110`，head SHA `687903c1d9966e5038e44502bf9ec20417257ef5`（checkout 拉取的就是这个 SHA）。4 个 job 全部 success：
+  - server suite 运行 3 次，每次 1604/1604 通过、0 失败、0 跳过，其中 `clipsJobConflict.test.ts` 9/9、真实 ffmpeg 用例 2/2；
+  - client：`tsc -b`、测试 289/289、构建全部通过。
+  - 证据：`travel-album-acceptance/g21/20261102T023422Z/round18-g29-ci/`。
+- 本地证据沿用上段：round6、round7、round9、round10、round17。
+- 验收范围：`routes/clips.ts` 三条 POST 的同 trip 冲突（返回 409）与其他插入错误（返回 500，进程不退出）。不包括上文「不在本条范围内」所列各项，也不代表 G-21、G-24、G-27 已验收。
+- 通过本次 CI 的代码 SHA 是 `687903c`。记录本段的文档提交在其之后，没有经过这次 CI。
+
 **G-30 `aiEditing.ts` 的任务插入在同 trip 冲突时的行为（2026-11-04 登记，代码推断，待实测）**
 
 `routes/aiEditing.ts` 的 `createProcessingJob()` 直接执行 `INSERT INTO processing_jobs`，不先查活动任务。调用点在第 138、269、396 行。
@@ -714,7 +723,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING |
 | P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
 | P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。剩余：当前代码上的浏览器回归、S3、线上 |
-| P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409；**未验收** |
+| P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409。2026-11-10：**已验收**（CI run 42746181669 @ `687903c`，见 G-29 条目） |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
 | P0 | G-7 | 未保护的前端路由，改动面小（原与 G-6 同列，G-6 已于 2026-09-02 裁定为非缺陷，见上） |

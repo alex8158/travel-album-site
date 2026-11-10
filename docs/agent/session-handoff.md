@@ -1,11 +1,12 @@
 # Session Handoff
 
-Last updated: 2026-11-05 (round17). Update this file as work lands.
+Last updated: 2026-11-10 (round18). Update this file as work lands.
 
 ## Code baseline
 
 - Branch `v2-smart-media`. Local commits are ahead of `origin/v2-smart-media`. Nothing is merged or deployed.
 - Remote backup branch: `origin/backup/v2-smart-media-20261109`. It is only ever fast-forwarded. No workflow triggers on `backup/**`: deploy runs on `main`/`dev`, acceptance on `acceptance/**`, release on `v*` tags.
+- CI acceptance branch: `origin/acceptance/g29-20261110` = `687903c` (tests only; run 42746181669, all success).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -19,6 +20,8 @@ Last updated: 2026-11-05 (round17). Update this file as work lands.
 | `6c823dd` | G-21 browser acceptance on `4ddab02` recorded; first handoff | docs |
 | `d34eb3c` | G-27: `GET /segments`, `GET /compile/status` owner/admin only | verified: 116/116 affected, 1604/1604 full |
 | `087a4c2` | test DB isolated from the application DB (12b) | verified with a mock app DB and sentinels |
+| `687903c` | docs: G-27 read routes, G-29 condition check, handoff | **the code SHA that passed CI run 42746181669** |
+| round18 docs commit | G-29 marked accepted; this handoff | docs only, after CI; not itself CI-tested |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -48,14 +51,14 @@ Avoid: `git add .`, force push, rewriting reviewed commits, pushing to `main`/`v
 - Supplementary test type check: an isolated `tsconfig.*.json` that extends `server/tsconfig.json` with an explicit `include` list. The baseline is 286 pre-existing errors; compare new against baseline, and never widen excludes.
 - G-21 browser matrix: `<evidence>/round16-batch-local/g21-browser/` (`seed-env.js`, `g21.js`, `cdp.js`). The scripts expect `/tmp/g21-r2/env` (committed code, built, `server/public` = client dist), media in `/tmp/g21-r2/media` and a server on 127.0.0.1:3131.
 
-## Acceptance status (2026-11-05)
+## Acceptance status (2026-11-10)
 
 | Item | Done, with evidence | Still missing |
 | --- | --- | --- |
 | G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation) | S3 (incl. AuthorizedImage CORS after 302), production check, CI run on the SHA; 12g thumbnail source is pending a decision and is not counted as passed |
 | G-24 | server tests (17/17), local-storage browser (round3) | S3, production, CI on the SHA |
 | G-27 | POST routes: server tests 31/31 + browser (round5, older code); GET routes: server tests 11/11 (round17) | browser regression of owner editing flows on current code, S3, production, CI on the SHA |
-| G-29 | reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17) | CI on the SHA (C2 precedent); no S3/production dependency |
+| G-29 | **accepted 2026-11-10**: reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17), CI run 42746181669 @ `687903c` (3× server 1604/1604, client 289/289; round18) | nothing for its scope; items listed as out of scope in the G-29 entry stay open |
 
 R2 decision source: `.kiro/specs/multi-user-system/requirements.md`, G-21 entry, paragraph "**2026-11-02 R2 裁定**", and `<evidence>/README.md` § "结论与裁定（2026-11-02）". The ruling was made by the user in the session of 2026-11-02 and recorded in both places. It covers the same-document reuse only; new requests after revocation must still be refused.
 
@@ -68,10 +71,11 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round14–15: port collision and the gallery fix.
 - round16: localServer batch, G-21 browser, tools.
 - round17: read routes and test DB isolation, push and backup records.
+- round18: G-29 CI run (run.json, job logs, artifacts with vitest-results.json).
 
 ## Next steps for a new session
 
-1. CI on the current SHA, if approved: push the same commit to an `acceptance/**` branch. That workflow is tests-only and is the C2 precedent for "accepted".
+1. G-21/G-24/G-27 also need a CI run on their final SHA; `687903c` already contains their code and passed CI run 42746181669. Their other missing items (S3, production, the G-27 browser regression) still block acceptance.
 2. Browser regression of the owner editing flows (ClipEditor, SegmentAdjuster, CompilationPreview) on current code, reusing `<evidence>/round5-g27-impl/scripts/g27.js`.
 3. S3 acceptance for G-21/G-24 and the production nginx/CDN check for G-22. These need a real isolated bucket and host access; do not create paid resources without approval.
 4. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
