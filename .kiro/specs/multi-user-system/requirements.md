@@ -641,6 +641,9 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
   - 第 19 轮证据 `travel-album-acceptance/g21/20261102T023422Z/round19-g27-browser/`（最终结果在 `attempt3/`；前两次失败是测试脚本和测试数据问题，原样保留）。
   - 第 20 轮（2026-11-12，代码 `fc37c4e`）：G-26 最小修复，CompilationPreview 的预览 `VideoPlayer` 加上 `authorized`，复用所有者弹窗已有的带令牌播放方式（`AuthorizedVideo`）；没有改服务端鉴权、可见性规则、文件路由或其他播放器。之后用相同的 seed 和媒体重跑同一 25 项，25/25 通过。公开、仅链接访问两类相册中，CompilationPreview 自带播放器的 `GET /compile/download` 都是 200 且带令牌，没有 401 或 403；播放时间持续前进，跳到 30 秒后继续播放。测试脚本只观察，不注入播放凭据。匿名、非所有者、管理员行为不变。证据 `travel-album-acceptance/g21/20261102T023422Z/round20-g26-fix-browser/`。
   - 本项只代表本地浏览器验收通过，G-27 整体仍为已实施、未验收。CI run 42746181669 测的是 `687903c`，不含 `fc37c4e` 的修复，只能作为历史依据。
+- [x] 修复后最终 SHA 的 CI（2026-11-12，第 21 轮）：被测提交 `3aa8581a98d505d521acf65fbef1b1129344d9db`（包含修复 `fc37c4e`，两者之间只差文档），分支 `acceptance/final-3aa8581-20261112`，run 43151750642（https://github.com/alex8158/travel-album-site/actions/runs/43151750642 ，workflow「Acceptance (tests only, no deploy)」）。四个 job 的检出日志都是该 SHA，全部 success：服务端三次各 1604/1604（其中 `mediaWriteOwnership` 31/31、`mediaReadOwnership` 11/11），客户端 289/289，类型检查与构建通过。证据 `travel-album-acceptance/g21/20261102T023422Z/round21-final-sha-ci/`。G-27 的修复后 CI 条件已满足。
+  - 浏览器复验仍是第 20 轮在 `fc37c4e` 上执行的结果，没有在 `3aa8581` 上重跑；两者代码相同。
+  - 记录本段的文档提交在 `3aa8581` 之后，本身没有运行 CI；上述 CI success 只绑定 `3aa8581`。
 
 **G-29 同一 trip 已有进行中任务时，处理路由会使服务进程退出（2026-11-03 登记，未修，与 G-27 权限修复无关）**
 
@@ -740,7 +743,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
 | P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING |
 | P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
-| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。2026-11-11 第 19 轮：当前代码上的所有者编辑流程浏览器回归 23/25，O7-T1/T2 因 G-26 阻塞；2026-11-12 第 20 轮：G-26 最小修复（`fc37c4e`）后 25/25，本地浏览器验收通过。剩余：S3、线上、修复后最终 SHA 上的 CI |
+| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。2026-11-11 第 19 轮：当前代码上的所有者编辑流程浏览器回归 23/25，O7-T1/T2 因 G-26 阻塞；2026-11-12 第 20 轮：G-26 最小修复（`fc37c4e`）后 25/25，本地浏览器验收通过；2026-11-12 第 21 轮：修复后最终 SHA `3aa8581` 的 CI run 43151750642 全部 success。剩余：S3、线上 |
 | P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409。2026-11-10：**已验收**（CI run 42746181669 @ `687903c`，见 G-29 条目） |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |

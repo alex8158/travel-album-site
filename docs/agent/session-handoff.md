@@ -1,12 +1,14 @@
 # Session Handoff
 
-Last updated: 2026-11-12 (round20). Update this file as work lands.
+Last updated: 2026-11-12 (round22). Update this file as work lands.
 
 ## Code baseline
 
 - Branch `v2-smart-media`. Local commits are ahead of `origin/v2-smart-media`. Nothing is merged or deployed.
 - Remote backup branch: `origin/backup/v2-smart-media-20261109`. It is only ever fast-forwarded. No workflow triggers on `backup/**`: deploy runs on `main`/`dev`, acceptance on `acceptance/**`, release on `v*` tags.
-- CI acceptance branch: `origin/acceptance/g29-20261110` = `687903c` (tests only; run 42746181669, all success).
+- CI acceptance branches (tests only, never moved after the run):
+  - `origin/acceptance/g29-20261110` = `687903c` (run 42746181669, all success; history);
+  - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -23,8 +25,10 @@ Last updated: 2026-11-12 (round20). Update this file as work lands.
 | `687903c` | docs: G-27 read routes, G-29 condition check, handoff | **the code SHA that passed CI run 42746181669** |
 | `4ac669a` | G-29 marked accepted; handoff (round18) | docs only, after CI; not itself CI-tested |
 | `24e81a9` | G-27 browser regression on `4ac669a` recorded (round19) | docs only |
-| `fc37c4e` | G-26 fix: CompilationPreview preview player uses `authorized` (one line, client only) | verified: client tsc, 289/289, build; browser 25/25 (round20); **not CI-tested** |
-| round20 docs commit | round20 results; this handoff | docs only |
+| `fc37c4e` | G-26 fix: CompilationPreview preview player uses `authorized` (one line, client only) | verified: client tsc, 289/289, build; browser 25/25 (round20, run on this SHA) |
+| `a92f60e` | round20 results; handoff | docs only |
+| `3aa8581` | G-26 registration updated (round21) | docs only; **the code SHA that passed CI run 43151750642** (same code as `fc37c4e`) |
+| round22 docs commit | round21 CI recorded; this handoff | docs only, after CI; not itself CI-tested |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -61,7 +65,7 @@ Avoid: `git add .`, force push, rewriting reviewed commits, pushing to `main`/`v
 | --- | --- | --- |
 | G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation) | S3 (incl. AuthorizedImage CORS after 302), production check, CI run on the SHA; 12g thumbnail source is pending a decision and is not counted as passed |
 | G-24 | server tests (17/17), local-storage browser (round3) | S3, production, CI on the SHA |
-| G-27 | POST routes: server tests 31/31; GET routes: server tests 11/11 (round17; both in CI run 42746181669 @ `687903c`); local browser acceptance of owner editing flows: round19 on `4ac669a` 23/25 with O7-T1/T2 blocked by G-26; round20 on `fc37c4e` (G-26 fixed) 25/25 | S3, production, CI on the final SHA after the fix (run 42746181669 tested `687903c` and is history only) |
+| G-27 | POST routes: server tests 31/31; GET routes: server tests 11/11 (round17; both in CI run 42746181669 @ `687903c`); local browser acceptance of owner editing flows: round19 on `4ac669a` 23/25 with O7-T1/T2 blocked by G-26; round20 on `fc37c4e` (G-26 fixed) 25/25; post-fix CI: run 43151750642 @ `3aa8581` (3× server 1604/1604, client 289/289, typecheck and build; round21) | S3, production |
 | G-29 | **accepted 2026-11-10**: reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17), CI run 42746181669 @ `687903c` (3× server 1604/1604, client 289/289; round18) | nothing for its scope; items listed as out of scope in the G-29 entry stay open |
 
 R2 decision source: `.kiro/specs/multi-user-system/requirements.md`, G-21 entry, paragraph "**2026-11-02 R2 裁定**", and `<evidence>/README.md` § "结论与裁定（2026-11-02）". The ruling was made by the user in the session of 2026-11-02 and recorded in both places. It covers the same-document reuse only; new requests after revocation must still be refused.
@@ -78,10 +82,12 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round18: G-29 CI run (run.json, job logs, artifacts with vitest-results.json).
 - round19: G-27 browser regression on current code (attempt1/2 = driver and test-data problems, kept; attempt3 = final, 23/25, O7 blocked by G-26).
 - round20: G-26 fix `fc37c4e` and the same 25 items re-run: 25/25.
+- round21: G-26 registration commit `3aa8581` and its CI run 43151750642 (run.json, job logs, artifacts).
+- round22: byte-level proof that the kept G-23/G-25/G-28 paragraphs are unchanged; S3 and production acceptance plan.
 
 ## Next steps for a new session
 
-1. G-21/G-24/G-27 also need a CI run on their final SHA; `687903c` contains their code and passed CI run 42746181669, but the client fix `fc37c4e` has not been through CI. Their other missing items (S3, production) still block acceptance.
+1. G-27: the post-fix CI condition is met by run 43151750642 @ `3aa8581`; S3 and production remain. G-21/G-24: status unchanged by this round; their S3 and production items still block acceptance.
 2. G-26 was confirmed in the browser (round19 O7: no token, 401) and fixed in `fc37c4e` (approved 2026-11-12; round20 O7 25/25). Its registration was updated and committed in round21 (status: fixed, local browser re-check passed; full acceptance still follows the original conditions).
-3. S3 acceptance for G-21/G-24 and the production nginx/CDN check for G-22. These need a real isolated bucket and host access; do not create paid resources without approval.
+3. S3 and production acceptance: plan and read-only findings in `<evidence>/round22-docs-s3-prod-plan/S3-PROD-PLAN.md`. S3 must use a new dedicated bucket: the app has no key-prefix setting and `7181-travel-album` holds data. Production host and running SHA are unconfirmed; the last successful auto-deploy was `f071202` (2026-04-22, before all fixes). Needs approval: test bucket and credentials, production host identity plus read-only SSH, and a deploy of the fixed code. Do not create resources or deploy without approval.
 4. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
