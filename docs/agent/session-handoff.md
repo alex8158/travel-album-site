@@ -30,7 +30,7 @@ Last updated: 2026-11-12 (round20). Update this file as work lands.
 
 These 10 items predate this work, or were explicitly kept out of commits. Do not stage them. Do not use `git add .`. Stage paths one by one; for mixed files, write the intended blob with `git update-index --cacheinfo`.
 
-- `.kiro/specs/multi-user-system/requirements.md`: the registrations G-23, G-25, G-26 and G-28 only (26 lines).
+- `.kiro/specs/multi-user-system/requirements.md`: the registrations G-23, G-25 and G-28 only (20 lines; G-26 was committed in round21 with user approval).
 - `client/src/pages/AdminUserTripsPage.tsx`, `client/src/pages/UserSpacePage.tsx`: wording "不公开" → "仅通过链接访问" only.
 - `client/src/pages/SettingsPage.tsx`, `client/src/pages/UploadPage.tsx`: the user's earlier wording changes.
 - Untracked: `.kiro/specs/_check_api_contract.py`, `.kiro/steering/risk-levels.md`, `client/src/pages/SettingsPage.test.tsx`, `client/src/pages/UploadPage.test.tsx`, `docs/ec2-new-resource-alert.md`.
@@ -82,6 +82,6 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 ## Next steps for a new session
 
 1. G-21/G-24/G-27 also need a CI run on their final SHA; `687903c` contains their code and passed CI run 42746181669, but the client fix `fc37c4e` has not been through CI. Their other missing items (S3, production) still block acceptance.
-2. G-26 was confirmed in the browser (round19 O7: no token, 401) and fixed in `fc37c4e` (approved 2026-11-12; round20 O7 25/25). Its registration text sits in the 26 kept working-tree lines of `requirements.md` and still reads "代码推断、未实测"; updating it needs the user to decide on those kept lines.
+2. G-26 was confirmed in the browser (round19 O7: no token, 401) and fixed in `fc37c4e` (approved 2026-11-12; round20 O7 25/25). Its registration was updated and committed in round21 (status: fixed, local browser re-check passed; full acceptance still follows the original conditions).
 3. S3 acceptance for G-21/G-24 and the production nginx/CDN check for G-22. These need a real isolated bucket and host access; do not create paid resources without approval.
 4. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).

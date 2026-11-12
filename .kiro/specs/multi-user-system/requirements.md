@@ -581,6 +581,19 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 本条只关闭这两条下载路由。同文件的其余路由仍不校验所有权（G-27）；`/uploads` 的规则差异见 G-21 条目。
 
+**G-26 CompilationPreview 的预览播放恒失败（2026-10-29 登记；2026-11-12 已修复，本地浏览器复验通过）**
+
+`client/src/components/CompilationPreview.tsx` 用 `VideoPlayer videoUrl="/api/media/<id>/compile/download"`，即普通 `<source src>`，不会携带 `Authorization`。而该路由有 `requireAuth`，按代码应返回 401，预览播放不了。未在浏览器中复现。G-21 没有改这里：`VideoPlayer` 的默认模式保持不变。
+
+（2026-11-03：G-24 本轮未改 `CompilationPreview`；G-24 之后该路由对未带令牌的请求同样返回 401。仍为「代码推断，待浏览器实测」。）
+
+（2026-11-12）状态：**已修复，本地浏览器复验通过**。完整验收状态仍按原验收条件判定，本条不写成已验收。
+
+- 根因已核实：`CompilationPreview` 没有给 `VideoPlayer` 传 `authorized`，播放器走普通 `<source src>`，请求不携带令牌。第 19 轮浏览器实测该请求得到 401，播放停在 0 秒。
+- 修复提交 `fc37c4e`：生产代码只增加一行 `authorized`，复用所有者弹窗已有的带令牌播放方式（`AuthorizedVideo`：带令牌请求，再用 blob 播放）。服务端鉴权、可见性规则、文件路由和其他播放器未改。
+- 第 20 轮隔离本地浏览器复验 25/25 通过。public、unlisted 两类相册的 O7 均证明：`GET /compile/download` 带令牌返回 200，blob 播放时间持续前进，设置播放位置到 30 秒后继续播放。证据 `travel-album-acceptance/g21/20261102T023422Z/round20-g26-fix-browser/`。
+- 跳转由脚本设置 `currentTime` 完成，未验证用鼠标拖动原生进度条。
+
 **G-27 `clips.ts` / `compile.ts` 的其余路由仅要求登录，不校验所有权（2026-11-03 登记，代码核查，未修）**
 
 两个文件中 `user_id` 出现 0 次；以下路由只挂 `authMiddleware` + `requireAuth`，按 `:mediaId` 直接操作：
