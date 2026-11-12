@@ -229,6 +229,7 @@ export default function CompilationPreview({
         )}
         {showPlayer && (
           <VideoPlayer
+            authorized
             videoUrl={`/api/media/${mediaId}/compile/download`}
             mimeType="video/mp4"
             onClose={() => setShowPlayer(false)}
