@@ -305,7 +305,7 @@
     - 获准访问后的文件名、`Content-Disposition`、Range（206）与错误契约不变。
     - 实现：`server/src/helpers/ownerFileDownload.ts` 复用 `loadMediaFileAccessRow` + `decideMediaFileAccess(..., 'original-file')`，并在路由边界再要求 `asOwnerOrAdmin`。
 
-> **AC 24 状态（2026-11-03）**：已实施，服务端回归与本地存储模式浏览器验收已有证据（见 G-24 条目），**未验收**。S3 PENDING，线上未部署。
+> **AC 24 状态（2026-11-03）**：已实施，服务端回归与本地存储模式浏览器验收已有证据（见 G-24 条目），**未验收**。S3 PENDING，线上未部署。（2026-11-14：隔离 S3 验收通过，见 G-24 条目；线上仍未部署。）
 
 > **AC 16–23 状态（2026-10-29）**：已实施、**未验收**。实现：`server/src/helpers/mediaFileAccess.ts`（只读加载 `loadMediaFileAccessRow` + 纯判定 `decideMediaFileAccess` + 入口归类 `classifyMediaFileEntry`）、`server/src/routes/mediaServing.ts`、`server/src/routes/gallery.ts`（非所有者 merged 列表联动）；客户端以 `AuthorizedImage` / `VideoPlayer authorized` 携带 Bearer。浏览器验收、线上部署复核均未进行。
 
@@ -526,6 +526,12 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 - 本地存储模式浏览器验收：通过，附 R2 限制。现在已能对应当前代码。
 - 仍为 PENDING：S3（含 AuthorizedImage 跟随 302 的 CORS）、线上部署复核。缩略图来源（known-issues 12g）待裁定，不在本次验收范围内。
 
+**2026-11-14 隔离 S3 验收（第 23 轮，仍为已实施、未验收）**：被测代码 `3aa8581`，在本轮专用的 bucket 与只限该 bucket 的临时角色上运行，结束后均已删除。证据 `travel-album-acceptance/g21/20261102T023422Z/round23-s3/`。
+- 直连矩阵（AC 16–23 的 S3 分支）：112 个拒绝请求均为 404，body 逐字节一致，无 `Location`，带 `private, no-store` 与 `Vary: Authorization`；176 个获准请求均 302 到预期对象的预签名链接（`X-Amz-Expires=3600`），302 本身带同样的响应头；37 次不带令牌跟随预签名链接，均 200 且字节一致；非所有者视频在 compiled 对象缺失时先返回 404，不签名。
+- 浏览器：匿名与所有者页面的缩略图、大图、视频经 302 跨域从 S3 取回（200，不向 S3 发送 Authorization，响应带 `Access-Control-Allow-Origin: *`）；AuthorizedImage / AuthorizedVideo 跟随 302 的 CORS 通过；视频播放时间持续前进，跳到 6 秒后继续播放；`/raw` 下载内容哈希一致。
+- 撤回：改为 private 后，匿名与非所有者的新请求（GET/HEAD，original/thumbnail）均 404，新页面不再列出。撤回前签发的预签名链接在撤回后仍返回 200，在 `X-Amz-Expires=3600` 的窗口内；这属于 AC 23 注记已写明的行为（3600 秒是可发起请求的期限，不是撤销上限），不登记新缺口。用临时凭据签名的链接还会在凭据过期时失效。
+- 本项结论：S3 分支隔离验收通过。线上复核仍为 PENDING；G-21 整体仍为已实施、未验收。
+
 **G-22 `/uploads` 静态路由无任何 access control，可按路径读取上传目录下的全部文件（安全缺陷，2026-10-06 登记，未修）**
 
 `server/src/index.ts` 中 `app.use('/uploads', express.static(uploadsBase))` 把 `server/uploads/` 整个目录对外提供，不经过 `authMiddleware`，也不查任何 visibility 或 status。该目录包含原图（`${tripId}/originals/${mediaId}${ext}`）、tier slideshow 视频（`${tripId}/tier-slideshow/...`）等全部本地存储文件；`storage/localProvider.ts` 的 `getUrl()` 也生成 `/uploads/...` 形式的路径。
@@ -574,7 +580,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 - [x] 服务端回归 `routes/compiledDownload.test.ts`（两路由 × 匿名、无效令牌、普通非所有者、所有者、管理员 × public、unlisted trip、private、trashed、deleted、merged、trip 缺失、无 compiled），并做变异检查：对旧实现，非所有者拿到 200 与文件字节，用例失败。
 - [x] 客户端下载相关回归（`npm test` 全量）。
 - [x] 本地存储模式浏览器实测（证据见 `travel-album-acceptance/g21/20261102T023422Z/round3-g24/`）。
-- [ ] S3：PENDING（本机没有隔离 S3 环境）。
+- [x] S3（2026-11-14，第 23 轮隔离环境，代码 `3aa8581`）：两条路由在 S3 模式下由服务端从 S3 取回后返回。匿名 401 `TOKEN_INVALID`，非所有者 404 且 body 逐字节一致，所有者与管理员 200 且字节一致，Range 206，未剪辑返回 `NO_COMPILED` / `NOT_COMPILED`，所有响应 `private, no-store` + `Vary: Authorization`；浏览器经剪辑标签页下载的内容哈希一致。另见第 23 轮性能记录：同一环境下服务端 S3 传输在并发时明显变慢，有一次该下载超过 60 秒。证据 `travel-album-acceptance/g21/20261102T023422Z/round23-s3/`。
 - [ ] 验收、线上部署：未进行。
 
 实施时的契约细节：`download-compiled` 对不存在媒体原先返回 `媒体项不存在`，现改为与越权相同的 `媒体文件不存在`，以保证两者逐字节一致；`compile/download` 原本就是这条文案。
@@ -633,7 +639,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
   - 变异检查：旧实现让非所有者得到 202，用例失败。
   - 编译引擎在这组单元测试里是 stub，`compile_jobs` 的真实写入链没有运行；该链路由浏览器回归覆盖。
 - [x] 本地隔离浏览器回归：ClipEditor 合并与重新剪辑、CompilationPreview 生成剪辑、SegmentAdjuster 重新生成，均为所有者操作，使用真实处理与合成媒体；非所有者与匿名直接请求被拒，且没有新增任何任务。
-- [ ] S3、线上：未测。
+- [ ] S3（2026-11-14，第 23 轮隔离环境，代码 `3aa8581`）：**未通过**。第 20 轮的 25 项在 S3 模式下第一次 22/25（O7-T2、O10、O11 失败），第二次 15/21 且 owner 会话中断；两次中匿名、非所有者、管理员各项全部通过。失败都是在等待服务端的 S3 传输：合并、生成剪辑、重新生成和 `/compile/download` 都由服务端把整个对象下载到临时目录，测试时有 9–12 个下载同时进行，每个只有约 30–60 KB/s，没有超时，也不随浏览器放弃而取消；同一时间 AWS CLI 26 MB 只用 5 秒。功能结果本身正确（例如 O10 的重新生成在约 613 秒后完成，片段 [0,2,4]，15.04 秒），但超出了验收等待时间，界面也出现过「合并超时，请稍后查看」。根因未确定（本机到 us-east-1 的网络与 Node HTTP 栈，或服务端整文件中转的设计），最小修复方案待裁定，未改代码。证据 `travel-album-acceptance/g21/20261102T023422Z/round23-s3/`。
+- [ ] 线上：PENDING（线上主机与实际运行的 SHA 未确认；最后一次成功的自动部署记录是 `f071202`）。
 - [x] 两条 GET 路由（2026-11-05，提交 `d34eb3c`）：调用方只有所有者侧编辑界面（MyGalleryPage、ClipEditor、SegmentAdjuster、CompilationPreview），没有公开读取用途，所以沿用写操作的所有者/管理员判定。回归测试 `routes/mediaReadOwnership.test.ts`（11 例）；隔离副本中受影响的测试 116/116，服务端全量 1604/1604。证据 `travel-album-acceptance/g21/20261102T023422Z/round17-read-routes-db-isolation/`。
 - [x] 当前代码上的本地浏览器回归（所有者编辑流程）：第 20 轮 25/25 通过。
   - 第 19 轮（2026-11-11，代码 `4ac669a`；它与 CI run 42746181669 测过的 `687903c` 只差文档）：浏览器执行及归档完成，23/25 通过，O7-T1/T2 因 G-26 阻塞。覆盖范围：公开与仅链接访问两类相册，所有者在 MyGalleryPage、ClipEditor、SegmentAdjuster、CompilationPreview 中打开、修改、保存、重新进入、发起处理、轮询到完成并播放结果。浏览器发出的 `GET /segments`、`GET /compile/status` 全部带 Authorization、返回 200，轮询正常结束，界面没有卡住。管理员从用户相册页面进入（走界面）同样通过。匿名得到 401，非所有者得到 403，均不泄露片段或任务信息。
@@ -741,9 +748,9 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 | 优先级 | 条目 | 理由 |
 | --- | --- | --- |
 | P0 | G-22 | 应用层已于 2026-10-06 修复；剩余项是核实线上 nginx、CDN 与存储模式，并在部署后复测 |
-| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING |
-| P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**（S3 PENDING） |
-| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。2026-11-11 第 19 轮：当前代码上的所有者编辑流程浏览器回归 23/25，O7-T1/T2 因 G-26 阻塞；2026-11-12 第 20 轮：G-26 最小修复（`fc37c4e`）后 25/25，本地浏览器验收通过；2026-11-12 第 21 轮：修复后最终 SHA `3aa8581` 的 CI run 43151750642 全部 success。剩余：S3、线上 |
+| P0 | G-21 | 需求 9 AC 4 在文件服务表面被完全绕过，影响全部 media；但需先确定匿名可读 public media 的判定点，否则会破坏公开分享面。2026-10-29：已按需求 9 AC 16–23 实施，**未验收**。2026-11-05：本地存储模式浏览器验收已对应当前代码 `4ddab02`（禁用缓存组 51/51；正常缓存组 50/51，另 1 项为已裁定的 R2 限制）；S3 CORS、线上复核仍 PENDING。2026-11-14：隔离 S3 验收通过（第 23 轮，`3aa8581`），线上复核仍 PENDING |
+| P0 | G-24 | 已登录非所有者可经两条下载路由按 id 取得任意 compiled/merged 视频；G-21 之后的下一优先任务。2026-11-03：已按需求 9 AC 24 实施，**未验收**。2026-11-14：隔离 S3 验收通过（第 23 轮）；线上未部署 |
+| P0 | G-27 | `clips.ts` / `compile.ts` 其余路由不校验所有权。2026-11-03：四条写操作已按需求 7 AC 8 实施、**未验收**；2026-11-05：`GET /segments`、`GET /compile/status` 已按同一规则实施，**未验收**。2026-11-11 第 19 轮：当前代码上的所有者编辑流程浏览器回归 23/25，O7-T1/T2 因 G-26 阻塞；2026-11-12 第 20 轮：G-26 最小修复（`fc37c4e`）后 25/25，本地浏览器验收通过；2026-11-12 第 21 轮：修复后最终 SHA `3aa8581` 的 CI run 43151750642 全部 success；2026-11-14 第 23 轮：隔离 S3 下所有者编辑流程未通过（服务端 S3 传输过慢导致超时，根因未定）。剩余：S3、线上 |
 | P1 | G-29 | 同一 trip 已有进行中任务时，`/clips`、`/merge`、`/re-edit` 的任务插入抛出未捕获异常，导致整个服务进程退出。2026-11-04：当前构建已复现并修复，返回 409。2026-11-10：**已验收**（CI run 42746181669 @ `687903c`，见 G-29 条目） |
 | P1 | G-20 | 2026-10-09 已实现、未验收：剩余项是 CI 上真实 ffmpeg 测试与浏览器实测。merged 视频的继承缺陷（同条附注）仍未处理。2026-10-28：tier slideshow 部分已关闭、已验收（CI run 38045557514 @ `c17be30` + 浏览器实测，见 `acceptance/c2-browser-acceptance.md`）；merged 视频继承缺陷、孤儿文件清理与性能遗留项仍开放 |
 | P0 | G-12 | 纯前端修复，无安全风险，直接改善错误提示 |
