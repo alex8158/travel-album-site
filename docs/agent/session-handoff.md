@@ -1,6 +1,6 @@
 # Session Handoff
 
-Last updated: 2026-11-14 (round23). Update this file as work lands.
+Last updated: 2026-11-15 (round26). Update this file as work lands.
 
 ## Code baseline
 
@@ -29,7 +29,10 @@ Last updated: 2026-11-14 (round23). Update this file as work lands.
 | `a92f60e` | round20 results; handoff | docs only |
 | `3aa8581` | G-26 registration updated (round21) | docs only; **the code SHA that passed CI run 43151750642** (same code as `fc37c4e`) |
 | `e1fea54` | round21 CI recorded; handoff (round22) | docs only, after CI; not itself CI-tested |
-| round23 docs commit | isolated S3 results recorded; this handoff | docs only; S3 runs used code `3aa8581` |
+| `9cfe8ac` | isolated S3 results recorded (round23) | docs only; S3 runs used code `3aa8581` |
+| `49e7c1e` | round24 fact corrections, round25 near-end status | docs only |
+| `58a08cd` | in-flight de-dup of on-demand video thumbnail generation (`server/src/routes/mediaServing.ts` + `mediaServing.thumbnailDedup.test.ts`) | verified locally: tsc, mediaServing tests 40/40, server 1608/1608 (isolated clone, 3aa8581 + this change); **not CI-tested, not run near-end with sufficient CPU** |
+| round26 docs commit | this handoff | docs only |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -87,12 +90,17 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round22: byte-level proof that the kept G-23/G-25/G-28 paragraphs are unchanged; S3 and production acceptance plan (production wording corrected in round23 `PLAN-CORRECTION.md`).
 - round23: isolated S3 acceptance (dedicated bucket + bucket-only role session, both deleted afterwards; `RESULTS.md`, `resources/`, `cleanup/`).
 - round24: S3 timeout diagnosis (`FINDINGS.md`, `ROUND23-CORRECTION.md`, `analysis/`, `bench/`): direct Node/SDK path from this machine ~13-21 KB/s per stream vs 2-8 MB/s through the macOS system proxy that the AWS CLI uses; thumbnail-generation download amplification in round23 (attributed by temp-file time and size).
+- round26: de-dup review and commit `58a08cd` (`REVIEW-DEDUP.md`, `verify/`), option 3 design v2 (`DESIGN-OPTION3.v2.md`), next near-end rerun plan (`NEAR-END-RERUN-PLAN.md`).
 - round25: near-end re-test on a t3.medium in us-east-1 (all resources deleted; `RESULTS.md`): 26 MB direct download ~1 s; G-27 25 items 19 pass on both baseline `3aa8581` and the thumbnail de-dup candidate (uncommitted), O6-T2 compile timed out and 5 items did not run; the instance was CPU-credit throttled to 20 %, so the run does not isolate the app. Option 3 design in `DESIGN-OPTION3.md`.
 
 ## Next steps for a new session
 
 1. G-27: the post-fix CI condition is met by run 43151750642 @ `3aa8581`; S3 and production remain. G-21/G-24: status unchanged by this round; their S3 and production items still block acceptance.
 2. G-26 was confirmed in the browser (round19 O7: no token, 401) and fixed in `fc37c4e` (approved 2026-11-12; round20 O7 25/25). Its registration was updated and committed in round21 (status: fixed, local browser re-check passed; full acceptance still follows the original conditions).
-3. S3: round23 done (`<evidence>/round23-s3/RESULTS.md`). G-21 and G-24 S3 passed. G-27 owner flows did not pass in S3 mode: server-side whole-object S3 transfers (merge, compile, re-edit, `/compile/download`, `download-compiled`) ran 9-12 at once at ~30-60 KB/s with no timeout or cancellation, while the AWS CLI was fast; root cause not established. Round24: the server path to S3 from this machine is direct and very slow, the CLI comparison went through the system proxy, and on-demand video thumbnails downloaded whole originals repeatedly. Round25 near-end: downloads are fast there, but the compile step timed out on a CPU-throttled t3 instance (credits exhausted), so the flow is still unproven; a rerun needs unthrottled CPU (cost above the approved 0.2 USD; see round25 `RESULTS.md`). The thumbnail de-dup candidate (`server/src/routes/mediaServing.ts` + `mediaServing.thumbnailDedup.test.ts`) is in the working tree, not committed. Minimal fix options (timeout + abort; 302 for the two download routes, which changes the AC 24 contract; re-measure near us-east-1) need a decision. Re-run S3 setup with `round23-s3/resources/` (setup.sh, test-env.sh, cleanup.sh).
+3. S3: round23 done (`<evidence>/round23-s3/RESULTS.md`): G-21 and G-24 S3 passed; G-27 owner flows did not pass in S3 mode. What is known now:
+   - local evidence supports the de-dup behaviour (`58a08cd`: 5 concurrent requests -> 1 original download instead of 5; failures retried; per process only);
+   - round25 near-end (us-east-1) had fast downloads (~1 s for 26 MB) but ran on a CPU-credit-throttled t3 (20 %) with a leftover ffmpeg from the base run at the start of the cand run, so it cannot show whether G-27 passes with sufficient CPU; 19/25 on both versions, O6-T2 failed, O7-T2, O8-T2, O9, O10, O11 never ran;
+   - next rerun: `<evidence>/round26-dedup-commit-design/NEAR-END-RERUN-PLAN.md` (non-burstable CPU, residue checks; needs an instance-type / watchdog / budget decision);
+   - option 3 (timeouts, cancellation): design v2 only, not implemented; proposed env variable names and defaults await approval.
 4. Production: host and running SHA unconfirmed. The last successful auto-deploy record is `f071202` (2026-04-22); a manual deploy cannot be excluded. The `keycloak` instance (uses `travel-album-key` / `travel-album-sg`) answered 502 on port 80; this is not attributed to the album service. Needs: host identity, read-only SSH approval, a deploy decision for the fixed code, production test accounts. Do not log into unconfirmed instances.
 5. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
