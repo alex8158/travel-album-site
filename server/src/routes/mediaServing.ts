@@ -140,6 +140,38 @@ async function compiledFileAvailable(row: MediaFileAccessRow): Promise<boolean> 
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-flight de-duplication of on-demand video thumbnail generation.
+// The result depends only on the source file (file_path), the trip and the media id
+// (output key `${trip_id}/thumbnails/${id}_thumb.webp`, fixed size and format), so those
+// form the key. Callers reach this only after the access decision above. While one
+// generation runs, further requests for the same key await the same promise: one
+// original download, one ffmpeg run (which also avoids two runs sharing the same temp
+// file names). The entry is removed when the promise settles, so a failure can be
+// retried by the next request and a success is served from thumbnail_path from then on.
+// Scope: one Node process only. Requests handled by other processes, pm2 workers or hosts
+// are not de-duplicated. A waiter that disconnects does not cancel or remove the shared job.
+// ---------------------------------------------------------------------------
+const inflightVideoThumbnails = new Map<string, Promise<string>>();
+
+function generateVideoThumbnailOnce(row: MediaFileAccessRow): Promise<string> {
+  const key = `${row.trip_id}\u0000${row.id}\u0000${row.file_path}`;
+  const existing = inflightVideoThumbnails.get(key);
+  if (existing) return existing;
+  const job = (async () => {
+    const originalLocalPath = await getStorageProvider().downloadToTemp(row.file_path);
+    const thumbRelPath = await generateVideoThumbnail(originalLocalPath, row.trip_id, row.id);
+    getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
+    return thumbRelPath;
+  })();
+  inflightVideoThumbnails.set(key, job);
+  job.then(
+    () => { if (inflightVideoThumbnails.get(key) === job) inflightVideoThumbnails.delete(key); },
+    () => { if (inflightVideoThumbnails.get(key) === job) inflightVideoThumbnails.delete(key); },
+  );
+  return job;
+}
+
 // GET /api/media/:id/thumbnail — Serve thumbnail, generate on-the-fly if missing
 router.get('/:id/thumbnail', authMiddleware, async (req: Request, res: Response) => {
   setPrivateNoStore(res);
@@ -175,11 +207,15 @@ router.get('/:id/thumbnail', authMiddleware, async (req: Request, res: Response)
   // Generate on-the-fly if no thumbnail yet (allowed requesters only)
   if (!thumbLocalPath) {
     try {
-      const originalLocalPath = await storageProvider.downloadToTemp(row.file_path);
-      const thumbRelPath = row.media_type === 'video'
-        ? await generateVideoThumbnail(originalLocalPath, row.trip_id, row.id)
-        : await generateThumbnail(originalLocalPath, row.trip_id, row.id);
-      db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
+      let thumbRelPath: string;
+      if (row.media_type === 'video') {
+        // Concurrent requests for the same video share one generation (one original download).
+        thumbRelPath = await generateVideoThumbnailOnce(row);
+      } else {
+        const originalLocalPath = await storageProvider.downloadToTemp(row.file_path);
+        thumbRelPath = await generateThumbnail(originalLocalPath, row.trip_id, row.id);
+        db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
+      }
       thumbLocalPath = await storageProvider.downloadToTemp(thumbRelPath);
     } catch (err) {
       console.error(`[MediaServing] On-the-fly thumbnail generation failed for ${row.id}:`, err);
