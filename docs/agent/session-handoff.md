@@ -1,6 +1,6 @@
 # Session Handoff
 
-Last updated: 2026-11-15 (round26). Update this file as work lands.
+Last updated: 2026-11-15 (round27). Update this file as work lands.
 
 ## Code baseline
 
@@ -8,7 +8,8 @@ Last updated: 2026-11-15 (round26). Update this file as work lands.
 - Remote backup branch: `origin/backup/v2-smart-media-20261109`. It is only ever fast-forwarded. No workflow triggers on `backup/**`: deploy runs on `main`/`dev`, acceptance on `acceptance/**`, release on `v*` tags.
 - CI acceptance branches (tests only, never moved after the run):
   - `origin/acceptance/g29-20261110` = `687903c` (run 42746181669, all success; history);
-  - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`).
+  - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`);
+  - `origin/acceptance/dedup-58a08cd-20261115` = `58a08cd692523f7742cf9daa98427f388e9b0895` (run 43725014890, all success; round27).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -31,8 +32,9 @@ Last updated: 2026-11-15 (round26). Update this file as work lands.
 | `e1fea54` | round21 CI recorded; handoff (round22) | docs only, after CI; not itself CI-tested |
 | `9cfe8ac` | isolated S3 results recorded (round23) | docs only; S3 runs used code `3aa8581` |
 | `49e7c1e` | round24 fact corrections, round25 near-end status | docs only |
-| `58a08cd` | in-flight de-dup of on-demand video thumbnail generation (`server/src/routes/mediaServing.ts` + `mediaServing.thumbnailDedup.test.ts`) | verified locally: tsc, mediaServing tests 40/40, server 1608/1608 (isolated clone, 3aa8581 + this change); **not CI-tested, not run near-end with sufficient CPU** |
-| round26 docs commit | this handoff | docs only |
+| `58a08cd` | in-flight de-dup of on-demand video thumbnail generation (`server/src/routes/mediaServing.ts` + `mediaServing.thumbnailDedup.test.ts`) | verified locally: tsc, mediaServing tests 40/40, server 1608/1608 (isolated clone, 3aa8581 + this change); **CI run 43725014890 success** (client 289/289, 3× server 1608/1608); near-end c7i.large 25/25 (round27) |
+| `ee67690` | round26 handoff | docs only |
+| round27 docs commit | this handoff | docs only |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -69,7 +71,7 @@ Avoid: `git add .`, force push, rewriting reviewed commits, pushing to `main`/`v
 | --- | --- | --- |
 | G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation); isolated S3 on `3aa8581` passed (round23: direct matrix, cross-origin fetch after 302, playback, revocation) | production check, CI run on the SHA; 12g thumbnail source is pending a decision and is not counted as passed |
 | G-24 | server tests (17/17), local-storage browser (round3); isolated S3 on `3aa8581` passed (round23) | production, CI on the SHA |
-| G-27 | POST routes: server tests 31/31; GET routes: server tests 11/11 (round17; both in CI run 42746181669 @ `687903c`); local browser acceptance of owner editing flows: round19 on `4ac669a` 23/25 with O7-T1/T2 blocked by G-26; round20 on `fc37c4e` (G-26 fixed) 25/25; post-fix CI: run 43151750642 @ `3aa8581` (3× server 1604/1604, client 289/289, typecheck and build; round21) | S3: round23 isolated run **not passed** (22/25, then 15/21 + blocked; timeouts waiting for server-side S3 transfers, root cause open); production |
+| G-27 | POST routes: server tests 31/31; GET routes: server tests 11/11 (round17; both in CI run 42746181669 @ `687903c`); local browser acceptance of owner editing flows: round19 on `4ac669a` 23/25 with O7-T1/T2 blocked by G-26; round20 on `fc37c4e` (G-26 fixed) 25/25; post-fix CI: run 43151750642 @ `3aa8581` (3× server 1604/1604, client 289/289, typecheck and build; round21) | S3: round23 isolated run **not passed** (22/25, then 15/21 + blocked; timeouts waiting for server-side S3 transfers); round25 t3 near-end 19/25 (CPU-credit throttled, inconclusive); round27 near-end on c7i.large: 25/25 on both `3aa8581` and `58a08cd` (isolated bucket, us-east-1). **Not accepted**: S3 acceptance is decided only against the full original requirements (user decision pending); production |
 | G-29 | **accepted 2026-11-10**: reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17), CI run 42746181669 @ `687903c` (3× server 1604/1604, client 289/289; round18) | nothing for its scope; items listed as out of scope in the G-29 entry stay open |
 
 R2 decision source: `.kiro/specs/multi-user-system/requirements.md`, G-21 entry, paragraph "**2026-11-02 R2 裁定**", and `<evidence>/README.md` § "结论与裁定（2026-11-02）". The ruling was made by the user in the session of 2026-11-02 and recorded in both places. It covers the same-document reuse only; new requests after revocation must still be refused.
@@ -91,6 +93,7 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round23: isolated S3 acceptance (dedicated bucket + bucket-only role session, both deleted afterwards; `RESULTS.md`, `resources/`, `cleanup/`).
 - round24: S3 timeout diagnosis (`FINDINGS.md`, `ROUND23-CORRECTION.md`, `analysis/`, `bench/`): direct Node/SDK path from this machine ~13-21 KB/s per stream vs 2-8 MB/s through the macOS system proxy that the AWS CLI uses; thumbnail-generation download amplification in round23 (attributed by temp-file time and size).
 - round26: de-dup review and commit `58a08cd` (`REVIEW-DEDUP.md`, `verify/`), option 3 design v2 (`DESIGN-OPTION3.v2.md`), next near-end rerun plan (`NEAR-END-RERUN-PLAN.md`).
+- round27: CI run 43725014890 @ `58a08cd` (`ci/`); near-end re-test on c7i.large us-east-1 (`RESULTS.md`, `results/`, `aws/`): base `3aa8581` 25/25, cand `58a08cd` 25/25 with driver v2; two earlier base attempts were harness faults (residue grep matched itself; coordinate click did not open the SegmentAdjuster), kept; cost ~US$0.045; all resources deleted, real bucket unchanged.
 - round25: near-end re-test on a t3.medium in us-east-1 (all resources deleted; `RESULTS.md`): 26 MB direct download ~1 s; G-27 25 items 19 pass on both baseline `3aa8581` and the thumbnail de-dup candidate (uncommitted), O6-T2 compile timed out and 5 items did not run; the instance was CPU-credit throttled to 20 %, so the run does not isolate the app. Option 3 design in `DESIGN-OPTION3.md`.
 
 ## Next steps for a new session
@@ -100,7 +103,9 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 3. S3: round23 done (`<evidence>/round23-s3/RESULTS.md`): G-21 and G-24 S3 passed; G-27 owner flows did not pass in S3 mode. What is known now:
    - local evidence supports the de-dup behaviour (`58a08cd`: 5 concurrent requests -> 1 original download instead of 5; failures retried; per process only);
    - round25 near-end (us-east-1) had fast downloads (~1 s for 26 MB) but ran on a CPU-credit-throttled t3 (20 %) with a leftover ffmpeg from the base run at the start of the cand run, so it cannot show whether G-27 passes with sufficient CPU; 19/25 on both versions, O6-T2 failed, O7-T2, O8-T2, O9, O10, O11 never ran;
-   - next rerun: `<evidence>/round26-dedup-commit-design/NEAR-END-RERUN-PLAN.md` (non-burstable CPU, residue checks; needs an instance-type / watchdog / budget decision);
-   - option 3 (timeouts, cancellation): design v2 only, not implemented; proposed env variable names and defaults await approval.
+   - round27 near-end (c7i.large, Node 20.18.1, same driver/media/300 s waits for both): 25/25 on base and cand; the driver flow has no concurrent same-original thumbnail requests, so it does not evaluate de-dup (20 S3 downloads on both);
+   - open decision: whether G-27 S3 is accepted, judged against the full original acceptance requirements;
+   - option 3 (timeouts, cancellation): the six env names and defaults of design v2 are adopted ("0 = off"), **not implemented**. Constraints for the future implementation: shared thumbnail task not cancelled when a waiter disconnects; the two direct download routes cancel on client disconnect; accepted background tasks not cancelled; no bare `Promise.race`; isolate late results of sharp/save if they cannot be aborted; AbortError not retried and post-timeout cleanup + successful re-request must be proven by tests against the locked SDK;
+   - Node 18 vs 20 (locked SDK declares `node >=20`) is a separate open question.
 4. Production: host and running SHA unconfirmed. The last successful auto-deploy record is `f071202` (2026-04-22); a manual deploy cannot be excluded. The `keycloak` instance (uses `travel-album-key` / `travel-album-sg`) answered 502 on port 80; this is not attributed to the album service. Needs: host identity, read-only SSH approval, a deploy decision for the fixed code, production test accounts. Do not log into unconfirmed instances.
 5. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
