@@ -22,6 +22,7 @@ import { signToken } from '../services/authService';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { getStorageProvider } from '../storage/factory';
 import mediaServingRouter from './mediaServing';
+import { globalErrorHandler } from '../middleware/errorHandler';
 
 // The app mounts the router exactly as index.ts does: no app-level auth. A
 // pre-set `Vary: Origin` proves the route merges rather than overwrites Vary.
@@ -528,6 +529,104 @@ describe('Media Serving API (G-21)', () => {
       expect(exists).not.toHaveBeenCalled();
       expect(download).not.toHaveBeenCalled();
       expect(getUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // AC 21: the 500 branches carry the same headers as every other response.
+  // The failures are forced in real dependencies the routes call (the thumbnail
+  // generator, and the fs.stat that express's res.sendFile uses). Requests go
+  // through the real router mounted as in index.ts, followed by the app's real
+  // globalErrorHandler, which writes the 500 for errors passed to next(err).
+  // -------------------------------------------------------------------------
+  describe('AC 21: 500 responses keep private, no-store and the merged Vary', () => {
+    const errApp = express();
+    errApp.use(express.json());
+    errApp.use((_req, res, next) => { res.vary('Origin'); next(); });
+    errApp.use('/api/media', mediaServingRouter);
+    errApp.use(globalErrorHandler);
+
+    async function get(url: string, headers: Record<string, string> = {}) {
+      const server = http.createServer(errApp);
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => resolve());
+      });
+      openServers.add(server);
+      const r = request(server).get(url);
+      for (const [k, v] of Object.entries(headers)) r.set(k, v);
+      return r;
+    }
+
+    /** Callers that pass the access decision for a public active image. */
+    const allowedAuth = (): Array<[string, Record<string, string>]> => [
+      ['anonymous', {}],
+      ...privilegedAuth(),
+    ];
+    const INTERNAL = { error: { code: 'INTERNAL_SERVER_ERROR', message: '服务器内部错误' } };
+
+    /** Make fs.stat fail with EIO for one absolute path; every other path is untouched. */
+    function failStatFor(absPath: string): void {
+      const realStat = fs.stat;
+      vi.spyOn(fs, 'stat').mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+        const cb = rest[rest.length - 1] as (err: NodeJS.ErrnoException | null, st?: fs.Stats) => void;
+        if (path.resolve(String(p)) === absPath) {
+          const err: NodeJS.ErrnoException = Object.assign(new Error('EIO: forced by test'), { code: 'EIO' });
+          process.nextTick(() => cb(err));
+          return;
+        }
+        return (realStat as unknown as (...a: unknown[]) => void)(p, ...rest);
+      }) as unknown as typeof fs.stat);
+    }
+
+    it('/thumbnail: generation failure returns 500 THUMBNAIL_FAILED with the headers, and writes nothing', async () => {
+      for (const [, h] of allowedAuth()) {
+        vi.mocked(generateThumbnail).mockRejectedValueOnce(new Error('forced by test'));
+        const res = await get(`/api/media/${imageId}/thumbnail`, h);
+        expect(res.status).toBe(500);
+        expect(res.body).toEqual({ error: { code: 'THUMBNAIL_FAILED', message: '缩略图生成失败' } });
+        expectNoStore(res);
+      }
+      expect(generateThumbnail).toHaveBeenCalledTimes(allowedAuth().length);
+      const r = getDb().prepare('SELECT thumbnail_path FROM media_items WHERE id = ?').get(imageId) as { thumbnail_path: string | null };
+      expect(r.thumbnail_path).toBeNull();
+    });
+
+    it('/original, /raw and /thumbnail: a file-serving failure returns 500 with the headers', async () => {
+      const original = path.resolve(tripDir, 'originals', `${imageId}.jpg`);
+      const withThumb = insertMedia({ mediaType: 'image', ext: 'jpg', bytes: await createTestImage(20, 20), thumbnail: thumbWebp });
+      const thumbFile = path.resolve(tripDir, 'thumbnails', `${withThumb}_thumb.webp`);
+      failStatFor(original);
+      try {
+        for (const [, h] of allowedAuth()) {
+          const res = await get(`/api/media/${imageId}/original`, h);
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual(INTERNAL);
+          expectNoStore(res);
+        }
+        for (const [, h] of privilegedAuth()) {
+          const res = await get(`/api/media/${imageId}/raw`, h);
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual(INTERNAL);
+          expectNoStore(res);
+        }
+      } finally {
+        vi.mocked(fs.stat).mockRestore();
+      }
+      failStatFor(thumbFile);
+      try {
+        for (const [, h] of allowedAuth()) {
+          const res = await get(`/api/media/${withThumb}/thumbnail`, h);
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual(INTERNAL);
+          expectNoStore(res);
+        }
+      } finally {
+        vi.mocked(fs.stat).mockRestore();
+      }
+      // The same requests succeed again once the forced failure is gone.
+      expect((await get(`/api/media/${imageId}/original`)).status).toBe(200);
+      expect((await get(`/api/media/${withThumb}/thumbnail`)).status).toBe(200);
     });
   });
 });
