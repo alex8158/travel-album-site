@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 24
 
       # The real-ffmpeg C2 test must run and never be skipped, so
       # ALLOW_MISSING_FFMPEG is deliberately not set anywhere in this job.
@@ -95,7 +95,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Record versions
         run: |
