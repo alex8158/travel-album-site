@@ -18,7 +18,20 @@ export interface VideoPlayerProps {
   authorized?: boolean;
 }
 
-const VIDEO_STYLE = { width: '100%', maxHeight: '60vh', display: 'block', borderRadius: '4px' } as const;
+// The frame reserves the player's box before the file arrives, so the layout
+// below the player does not move when the video gets its size (an authorized
+// player downloads the whole file first). 16:9, capped at 60vh; the video is
+// letterboxed inside it (contain), never cropped, and its native controls stay
+// inside the frame.
+const FRAME_STYLE = {
+  width: '100%',
+  aspectRatio: '16 / 9',
+  maxHeight: '60vh',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+} as const;
+const VIDEO_STYLE = { width: '100%', height: '100%', objectFit: 'contain', display: 'block', borderRadius: '4px' } as const;
 
 export default function VideoPlayer({ videoUrl, mimeType, onClose, authorized = false }: VideoPlayerProps) {
   const auth = useContext(AuthContext);
@@ -61,6 +74,7 @@ export default function VideoPlayer({ videoUrl, mimeType, onClose, authorized = 
           ×
         </button>
       )}
+      <div data-testid="video-frame" style={FRAME_STYLE}>
       {authorized ? (
         // key: remount (abort + revoke) when the signed-in identity changes.
         <AuthorizedVideo
@@ -90,6 +104,7 @@ export default function VideoPlayer({ videoUrl, mimeType, onClose, authorized = 
           您的浏览器不支持视频播放。
         </video>
       )}
+      </div>
     </div>
   );
 }
