@@ -442,6 +442,17 @@ Whether a thumbnail shown to non-owners must come only from the compiled file th
 * **Pitfall for future code:** any new statement that writes `compiled_path` must include `CLEAR_COMPILED_THUMBNAIL_SQL`. Any new thumbnail writer must not point a non-owner-visible video at an original-derived file.
 * **Still open:** `/uploads` serves a public compiled video's original upload and preview proxy to non-owners who know the path. That is a separate decision (G-21/G-22 difference table), not part of 12g.
 
+### 2026-11-18 update (round32): version stamps; `/uploads` ruled
+
+* **Re-edit race fixed in `1c49cd8`:** the round31 key derived from `compiled_path` could not tell two versions at the same path apart. The key is now a version stamp in `thumbnail_path`: `{trip}/thumbnails/{id}_cver_{16 hex}.webp`.
+  * Each `compiled_path` writer sets a fresh stamp in the same UPDATE (`NEW_COMPILED_VERSION_SQL`).
+  * Rows without a stamp get one by compare-and-set.
+  * The image goes only into the stamped key, and the pointer is never written after generation.
+  * The route re-checks the stamp before serving.
+* **Pitfall (replaces the round31 one):** any new statement that writes `compiled_path` must include `NEW_COMPILED_VERSION_SQL`. Never write `thumbnail_path` from a thumbnail job that read the compiled file, since that is how an older job restored a stale pointer.
+* **`/uploads` (the open item above):** user ruling 2026-11-18, AC 18 applies to `/uploads` too. It was fixed in `ef73874`: for ordinary videos a non-owner gets only the compiled file and its current stamped thumbnail.
+* Evidence: `travel-album-acceptance/g21/20261102T023422Z/round32-uploads-ac18-thumb-version/RESULTS.md`.
+
 ## 13. What Agents Should Update Here
 
 Agents should update this file when they discover:

@@ -538,6 +538,10 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 **2026-11-18 缩略图来源 12g（第 31 轮，已裁定并修复）**：用户 2026-11-17 裁定：非所有者能看到的普通视频缩略图必须遵守 AC 18 对可公开画面的限制，剪辑已删除的画面不能通过缩略图重新暴露；身份例外沿用 AC 5。修复前在 `f161bc4` 上用真实 ffmpeg 复现：原片开头红色、剪辑只保留蓝色，非所有者拿到的是红色缩略图，且 `/uploads` 也向非所有者提供原片缩略图。修复（提交 `8945c56`）：有可用剪辑文件时缩略图从剪辑文件生成，存放在由 `compiled_path` 派生的键下，只有 `thumbnail_path` 指向该键时才复用；非所有者在 `/api/media/:id/thumbnail` 和 `/uploads` 上都拿不到原片派生的缩略图；剪辑不可用或生成失败时返回 404，不回退原片；所有写 `compiled_path` 的语句同时清除该指针，同一路径重新剪辑后不会用旧图；不改写已存储的文件。首次生成、已有原片缩略图、同一路径两次重新剪辑、剪辑不可用、权限规则五种情况由 `mediaServing.thumbnailSource.ffmpeg.test.ts` 按图片实际颜色验证。CI run 44223270585（`7666ba83d540cc9b9a594b6831669f62d7fc0d1b`，Node 24）三次服务端运行均 1618/1618。仍开放：`/uploads` 仍向知道路径的非所有者提供公开剪辑视频的原始上传与预览代理，属于上方差异表待裁定的事项，不在 12g 范围内。G-21 整体仍为已实施、未验收，线上复核仍为 PENDING。证据 `travel-album-acceptance/g21/20261102T023422Z/round31-12g-g24-500-narrow/RESULTS.md` §2。
 
+**2026-11-18 裁定：AC 18 同样适用于 `/uploads`（第 32 轮，已修复）**：用户裁定，对普通视频，匿名访客和已登录的普通非所有者只能看到现有发布规则允许的剪辑内容；即使相册是公开或未列出的，直接访问原始上传文件或由原片生成的预览代理也统一返回 404，剪辑结果缺失时同样适用；所有者、管理员、照片及合辑下载沿用各自原有权限。本段取代上方「是否把 AC 18 推广到 `/uploads` 需另行裁定」及差异表中「非所有者取原始上传：允许」一格（原文保留）。修复（提交 `ef73874`）：`/uploads` 对普通视频的非所有者只开放剪辑文件本身（处理状态不为 `uploading`/`cancelled`）和当前剪辑派生缩略图。修复前隔离环境的真实浏览器中，匿名和非所有者对原片、预览代理的 GET/HEAD/Range 为 200/200/206；修复后均为 404，剪辑文件仍为 200/200/206，所有者和管理员不变。公开相册的列表和播放器只用 `/api/media/:id/thumbnail` 与 `/api/media/:id/original`（非所有者即剪辑文件），不用 `/uploads`，播放与拖动正常。公开画廊响应里仍带原片相对路径 `filePath`，文件本身已关闭，字段未改。
+
+**2026-11-18 12g 重新剪辑竞态（第 32 轮，已修复）**：同一剪辑路径可以先后保存两个版本，第 31 轮按路径派生的缩略图键无法区分版本。修复前用同步点复现：旧任务取得蓝色版本后暂停，同一路径发布绿色版本，新访客请求被并入旧任务，放行后两个访客都拿到蓝色，指针停在旧键，`/uploads` 也返回蓝色旧图。修复（提交 `1c49cd8`）：项目没有发布版本列，改用写在 `thumbnail_path` 里的版本戳：每条写 `compiled_path` 的语句在同一条 UPDATE 中写入新的随机版本键；没有版本键的行按比较后写入补上；图片只写入该版本键，生成后不再写指针；返回前重新核对版本键仍是当前指针，否则改用新版本。修复后新访客在旧任务放行前完成并拿到绿色，旧任务放行后也返回绿色，指针和图片保持绿色，旧键在 `/uploads` 上为 404；去掉复核或去掉版本戳的变异都会使测试失败。CI run 44240975427（`1c49cd85a84b4a8e3dae57b52d8165a864e85375`，Node 24）三次服务端运行均 1622/1622。真实 S3 本轮未运行。G-21 整体仍为已实施、未验收，线上复核仍为 PENDING。证据 `travel-album-acceptance/g21/20261102T023422Z/round32-uploads-ac18-thumb-version/RESULTS.md`。
+
 **G-22 `/uploads` 静态路由无任何 access control，可按路径读取上传目录下的全部文件（安全缺陷，2026-10-06 登记，未修）**
 
 `server/src/index.ts` 中 `app.use('/uploads', express.static(uploadsBase))` 把 `server/uploads/` 整个目录对外提供，不经过 `authMiddleware`，也不查任何 visibility 或 status。该目录包含原图（`${tripId}/originals/${mediaId}${ext}`）、tier slideshow 视频（`${tripId}/tier-slideshow/...`）等全部本地存储文件；`storage/localProvider.ts` 的 `getUrl()` 也生成 `/uploads/...` 形式的路径。
@@ -572,6 +576,8 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 
 本条不关闭 G-21：`/api/media/:id/*` 仍按 id 匿名提供任意 media，媒体文件仍可经该路由读取。（2026-10-29：G-21 已实施、未验收，见 G-21 条目；两条出口的规则差异见该条目表格。）
 
+（2026-11-18 交叉引用：用户裁定 AC 18 同样适用于本路由。对普通视频，非所有者只能取到剪辑文件及其当前剪辑派生缩略图，原始上传和预览代理返回 404，已在提交 `ef73874` 实施。见 G-21 条目「2026-11-18 裁定：AC 18 同样适用于 `/uploads`」。）
+
 **G-24 两条下载路由仅要求登录，不校验所有权（P0，安全缺陷，2026-10-29 登记，未修）**
 
 - `GET /api/media/:mediaId/download-compiled`（`routes/clips.ts`）
@@ -589,6 +595,7 @@ tier slideshow 视频由 `highlightTierSelector.triggerTierSlideshow()` 自动�
 - [x] S3（2026-11-14，第 23 轮隔离环境，代码 `3aa8581`）：两条路由在 S3 模式下由服务端从 S3 取回后返回。匿名 401 `TOKEN_INVALID`，非所有者 404 且 body 逐字节一致，所有者与管理员 200 且字节一致，Range 206，未剪辑返回 `NO_COMPILED` / `NOT_COMPILED`，所有响应 `private, no-store` + `Vary: Authorization`；浏览器经剪辑标签页下载的内容哈希一致。另见第 23 轮性能记录：同一环境下服务端 S3 传输在并发时明显变慢，有一次该下载超过 60 秒。证据 `travel-album-acceptance/g21/20261102T023422Z/round23-s3/`。
 - [x] 当前代码的 CI（2026-11-17，第 29 轮核对）：run 43725014890（`58a08cd`）三次服务端运行中 `compiledDownload.test.ts` 均 17/17，覆盖 AC 24 各分支（401、逐字节一致的 404、所有者与管理员 200 与 206、deleted 与 trip 缺失对所有人 404、通过判定后才返回 `NO_COMPILED`/`NOT_COMPILED`、被拒请求不触及存储、含 401 在内的响应头）；run 42746181669、43151750642 结果相同。当前 HEAD 的代码目录树与 `58a08cd` 相同。证据 `travel-album-acceptance/g21/20261102T023422Z/round29-node24-ci-click/RESULTS.md` §1。
 - [x] 错误分支响应头（2026-11-18，第 31 轮，提交 `a30f1b6`）：经真实路由和全局错误处理，以所有者和管理员身份：`download-compiled` 在存储失败时返回 500 `DOWNLOAD_ERROR`，在发送文件失败时返回 500 `INTERNAL_SERVER_ERROR`，均带 `Cache-Control: private, no-store` 与合并后的 `Vary`（含 Authorization 和原有值）；`compile/download` 没有 500 分支，同样的失败返回 404 `FILE_NOT_FOUND`，响应头相同。恢复模拟后同一请求返回 200；变异检查：去掉 500 时的响应头，两例 500 测试失败。CI run 44223270585 三次均 20/20。证据 `travel-album-acceptance/g21/20261102T023422Z/round31-12g-g24-500-narrow/RESULTS.md` §3。
+- [ ] 待修（2026-11-18 登记）：`download-compiled` 在 `res.sendFile` 失败时，全局错误处理返回的 500 JSON 仍带路由事先设置的 `Content-Type: video/mp4` 与 `Content-Disposition: attachment`。修复时保留两条下载路由现有的状态码。见第 31 轮测试 `compiledDownload.test.ts` 中的记录。
 - [ ] 验收、线上部署：未进行。
 
 实施时的契约细节：`download-compiled` 对不存在媒体原先返回 `媒体项不存在`，现改为与越权相同的 `媒体文件不存在`，以保证两者逐字节一致；`compile/download` 原本就是这条文案。
