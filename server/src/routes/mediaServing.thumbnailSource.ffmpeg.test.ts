@@ -220,7 +220,11 @@ describe.skipIf(!FFMPEG && allowMissing)('12g: non-owner video thumbnails come o
       expect(r.status).toBe(404);
       expect(r.body).toContain('THUMBNAIL_FAILED');
     }
-    expect(row(broken).thumbnail_path).toBeNull();
+    // The pointer may hold the version stamp minted for this compiled file (round32), but no image exists
+    // behind it and nothing was derived from the original.
+    const brokenPtr = row(broken).thumbnail_path;
+    expect(brokenPtr === null || /_cver_[0-9a-f]{16}\.webp$/.test(brokenPtr)).toBe(true);
+    if (brokenPtr) expect(fs.existsSync(path.join(UPLOADS, brokenPtr))).toBe(false);
 
     // owner and admin keep the AC 5 exception (served from what is available)
     for (const t of [owner.token, admin.token]) expect((await thumbColour(missing, { Authorization: `Bearer ${t}` })).status).toBe(200);

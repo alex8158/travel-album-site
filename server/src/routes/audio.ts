@@ -17,7 +17,7 @@ import { getStorageProvider } from '../storage/factory';
 import { getDb } from '../database';
 import { getTempDir } from '../helpers/tempDir';
 import type { MediaItemRow } from '../helpers/mediaItemRow';
-import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../helpers/compiledThumbnail';
+import { NEW_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 
 const router = Router();
 
@@ -283,7 +283,7 @@ applyAudioRouter.post('/media/:id/apply-audio', authMiddleware, requireAuth, asy
 
     // 9. Update media_items record
     db.prepare(
-      `UPDATE media_items SET audio_track_id = ?, audio_trim_start = ?, audio_trim_end = ?, compiled_path = ?, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`
+      `UPDATE media_items SET audio_track_id = ?, audio_trim_start = ?, audio_trim_end = ?, compiled_path = ?, ${NEW_COMPILED_VERSION_SQL} WHERE id = ?`
     ).run(
       audioTrackId,
       trimStart != null ? Number(trimStart) : null,

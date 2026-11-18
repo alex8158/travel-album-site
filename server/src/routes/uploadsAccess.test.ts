@@ -24,7 +24,6 @@ import { getDb, closeDb } from '../database';
 import { signToken } from '../services/authService';
 import { authMiddleware } from '../middleware/auth';
 import { createUploadsAccessHandler, parseUploadsPath } from './uploadsAccess';
-import { compiledThumbnailKey } from '../helpers/compiledThumbnail';
 
 const uploadsBase = path.resolve(__dirname, '..', '..', 'uploads');
 
@@ -202,7 +201,8 @@ function seedTrip(ownerId: string, visibility: string): TripFixture {
   // original (proxyGenerator), which may show footage the edit cut; non-owners get it no longer.
   add('video-thumbnail', `${tripId}/thumbnails/${vid}.jpg`, false, true);
 
-  // Public compiled video whose thumbnail is the compiled-derived one of its current compiled file.
+  // Public compiled video whose thumbnail_path is the version stamp of its current compiled file
+  // (helpers/compiledThumbnail.ts: `{trip}/thumbnails/{id}_cver_{16 hex}.webp`).
   const ctag = uuidv4();
   const cvidCompiled = `${tripId}/compiled/${ctag}_compiled.mp4`;
   const cvid = createMedia({
@@ -210,7 +210,7 @@ function seedTrip(ownerId: string, visibility: string): TripFixture {
     filePath: `${tripId}/originals/${ctag}.mp4`,
     compiledPath: cvidCompiled,
   });
-  const cvidThumb = compiledThumbnailKey(tripId, cvid, cvidCompiled);
+  const cvidThumb = `${tripId}/thumbnails/${cvid}_cver_0123456789abcdef.webp`;
   getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(cvidThumb, cvid);
   add('video-compiled-thumbnail', cvidThumb, true, true);
 

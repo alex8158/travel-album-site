@@ -5,7 +5,7 @@ import { getDb } from '../database';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { getStorageProvider } from '../storage/factory';
 import { authMiddleware } from '../middleware/auth';
-import { compiledThumbnailKey, isCurrentCompiledThumbnail } from '../helpers/compiledThumbnail';
+import { compiledVersionKey, MINT_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 import {
   classifyMediaFileEntry,
   decideMediaFileAccess,
@@ -156,23 +156,22 @@ async function compiledFileAvailable(row: MediaFileAccessRow): Promise<boolean> 
 const inflightVideoThumbnails = new Map<string, Promise<string>>();
 
 /**
- * Generate a video thumbnail once per (trip, media, source). Without `compiled`, the
- * source is the original upload and the result goes to the default thumbnail key (owner
- * and admin only, AC 5). With `compiled`, the source is the compiled file and the result
- * goes to the compiled-derived key (12g); the pointer is only recorded while the row still
- * has that compiled path.
+ * Generate a video thumbnail once per (trip, media, source, output). Without `compiled`,
+ * the source is the original upload, the result goes to the default thumbnail key and
+ * becomes the pointer (owner and admin only, AC 5). With `compiled`, the source is the
+ * compiled file and the result is written to the version key the row pointed at when the
+ * request started (12g); the pointer is never written here, so a generation that started
+ * on an earlier version cannot restore it or touch the current version's image.
  */
 function generateVideoThumbnailOnce(row: MediaFileAccessRow, compiled?: { path: string; key: string }): Promise<string> {
   const source = compiled ? compiled.path : row.file_path;
-  const key = `${row.trip_id}\u0000${row.id}\u0000${source}`;
+  const key = `${row.trip_id}\u0000${row.id}\u0000${source}\u0000${compiled ? compiled.key : ''}`;
   const existing = inflightVideoThumbnails.get(key);
   if (existing) return existing;
   const job = (async () => {
     const sourceLocalPath = await getStorageProvider().downloadToTemp(source);
     const thumbRelPath = await generateVideoThumbnail(sourceLocalPath, row.trip_id, row.id, compiled?.key);
-    if (compiled) {
-      getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ? AND compiled_path = ?').run(thumbRelPath, row.id, compiled.path);
-    } else {
+    if (!compiled) {
       getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
     }
     return thumbRelPath;
@@ -201,29 +200,53 @@ router.get('/:id/thumbnail', authMiddleware, async (req: Request, res: Response)
 
   // 12g: an ordinary video with an available compiled file gets its thumbnail only from
   // that compiled file, for every requester, so the stored thumbnail is one a non-owner
-  // may see. A stored thumbnail is reused only when the row points at the key derived
-  // from the current compiled_path; anything else is regenerated from the compiled file.
-  // A failure never falls back to the original upload.
+  // may see. The key is the version stamp in thumbnail_path (helpers/compiledThumbnail.ts):
+  // set by whoever published the current compiled file, or minted here by compare-and-set.
+  // The image is generated into that key, and it is served only after re-checking that the
+  // key is still the row's pointer; if a newer version was published meanwhile, the request
+  // starts over on the new key. A failure never falls back to the original upload.
   // Owner/admin (AC 5) fall back to the previous behaviour below when this fails; that
   // path may write an original-derived pointer, which non-owners never reuse.
   if (row.media_type === 'video' && row.compiled_path && (decision.compiledOnly || (await compiledFileAvailable(row)))) {
-    const compiled = { path: row.compiled_path, key: compiledThumbnailKey(row.trip_id, row.id, row.compiled_path) };
-    let compiledThumbLocal: string | null = null;
+    const readRow = () => db.prepare('SELECT compiled_path, thumbnail_path FROM media_items WHERE id = ?').get(row.id) as
+      { compiled_path: string | null; thumbnail_path: string | null } | undefined;
+    let current: MediaFileAccessRow = row;
+    let served: { local: string | null; key: string } | null = null;
     try {
-      if (!(isCurrentCompiledThumbnail(row) && (await storageProvider.exists(compiled.key)))) {
-        await generateVideoThumbnailOnce(row, compiled);
+      for (let attempt = 0; attempt < 3 && !served; attempt++) {
+        let key = compiledVersionKey(current);
+        if (!key && current.compiled_path) {
+          db.prepare(MINT_COMPILED_VERSION_SQL).run(current.id, current.compiled_path, current.thumbnail_path);
+          const r = readRow();
+          if (!r) break;
+          current = { ...current, ...r };
+          key = compiledVersionKey(current);
+        }
+        if (!key || !current.compiled_path) break;
+        if (!(await storageProvider.exists(key))) {
+          await generateVideoThumbnailOnce(current, { path: current.compiled_path, key });
+        }
+        const local = usePresignedUrls ? null : await storageProvider.downloadToTemp(key);
+        const now = readRow();
+        if (now && now.thumbnail_path === current.thumbnail_path && now.compiled_path === current.compiled_path) {
+          served = { local, key };
+        } else if (now) {
+          current = { ...current, ...now }; // a newer version was published: start over on its key
+        } else {
+          break;
+        }
       }
-      if (usePresignedUrls) {
-        return res.redirect(302, await storageProvider.getUrl(compiled.key));
+      if (served && usePresignedUrls) {
+        return res.redirect(302, await storageProvider.getUrl(served.key));
       }
-      compiledThumbLocal = await storageProvider.downloadToTemp(compiled.key);
     } catch (err) {
       console.error(`[MediaServing] Compiled-derived thumbnail failed for ${row.id}:`, err);
-      if (decision.compiledOnly) {
-        return res.status(404).json({ error: { code: 'THUMBNAIL_FAILED', message: '视频缩略图生成失败' } });
-      }
+      served = null;
     }
-    if (compiledThumbLocal) return res.sendFile(compiledThumbLocal, { cacheControl: false });
+    if (served && served.local) return res.sendFile(served.local, { cacheControl: false });
+    if (decision.compiledOnly) {
+      return res.status(404).json({ error: { code: 'THUMBNAIL_FAILED', message: '视频缩略图生成失败' } });
+    }
   }
 
   let thumbLocalPath: string | null = null;

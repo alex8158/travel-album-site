@@ -18,7 +18,7 @@ import { selectSegments, calculateTargetDuration } from './segmentSelector';
 import { compileSegments } from './ffmpegCompiler';
 import type { SegmentCandidate } from './segmentSelector';
 import type { SegmentInput } from './ffmpegCompiler';
-import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../helpers/compiledThumbnail';
+import { NEW_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -224,7 +224,7 @@ export class CompilationEngine {
       await storageProvider.save(storagePath, fs.createReadStream(compileResult.outputPath));
 
       // Update compiled_path in media_items
-      db.prepare(`UPDATE media_items SET compiled_path = ?, processing_error = NULL, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`)
+      db.prepare(`UPDATE media_items SET compiled_path = ?, processing_error = NULL, ${NEW_COMPILED_VERSION_SQL} WHERE id = ?`)
         .run(storagePath, mediaId);
 
       // Mark job completed
@@ -354,7 +354,7 @@ export class CompilationEngine {
       await storageProvider.save(storagePath, fs.createReadStream(compileResult.outputPath));
 
       // Replace compiled_path with new version (Requirements: 5.6)
-      db.prepare(`UPDATE media_items SET compiled_path = ?, processing_error = NULL, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`)
+      db.prepare(`UPDATE media_items SET compiled_path = ?, processing_error = NULL, ${NEW_COMPILED_VERSION_SQL} WHERE id = ?`)
         .run(storagePath, mediaId);
 
       // Mark job completed

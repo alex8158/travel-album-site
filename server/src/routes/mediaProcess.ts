@@ -8,7 +8,7 @@ import { analyzeVideo } from '../services/videoAnalyzer';
 import { editVideo } from '../services/videoEditor';
 import { generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { saveSegments } from '../helpers/videoSegmentStore';
-import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../helpers/compiledThumbnail';
+import { NEW_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 
 const router = Router();
 
@@ -37,7 +37,7 @@ router.post('/:id/process', authMiddleware, requireAuth, async (req: Request, re
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: '无权操作此资源' } });
   }
 
-  const updateCompiledStmt = db.prepare(`UPDATE media_items SET compiled_path = ?, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`);
+  const updateCompiledStmt = db.prepare(`UPDATE media_items SET compiled_path = ?, ${NEW_COMPILED_VERSION_SQL} WHERE id = ?`);
   const updateThumbnailStmt = db.prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?');
   const updateErrorStmt = db.prepare('UPDATE media_items SET processing_error = ? WHERE id = ?');
 

@@ -8,7 +8,7 @@ import { analyzeVideo } from './videoAnalyzer';
 import { editVideo } from './videoEditor';
 import { generateVideoThumbnail } from './thumbnailGenerator';
 import { saveSegments } from '../helpers/videoSegmentStore';
-import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../helpers/compiledThumbnail';
+import { NEW_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 
 interface VideoMetadata {
   duration: number;
@@ -171,7 +171,7 @@ async function processVideoAfterProxy(videoPath: string, mediaId: string, tripId
     const editResult = await editVideo(videoPath, analysis, tripId, mediaId);
 
     if (editResult.compiledPath) {
-      db.prepare(`UPDATE media_items SET compiled_path = ?, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`).run(editResult.compiledPath, mediaId);
+      db.prepare(`UPDATE media_items SET compiled_path = ?, ${NEW_COMPILED_VERSION_SQL} WHERE id = ?`).run(editResult.compiledPath, mediaId);
       console.log(`[proxyGenerator] Auto video processing completed for ${mediaId}: compiled=${editResult.compiledPath}`);
     } else if (editResult.error) {
       console.warn(`[proxyGenerator] Auto video editing returned error for ${mediaId}: ${editResult.error}`);
