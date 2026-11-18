@@ -192,9 +192,12 @@ function seedTrip(ownerId: string, visibility: string): TripFixture {
     previewProxyPath: `${tripId}/proxies/${vid}_preview.mp4`,
     thumbnailPath: `${tripId}/thumbnails/${vid}.jpg`,
   });
-  add('video-original', `${tripId}/originals/${vid}.mp4`, true, true);
+  // 需求 9 AC 18 applies to /uploads too (user ruling 2026-11-18): for an ordinary video a
+  // non-owner may read only the publishable compiled file, never the original upload or the
+  // preview proxy generated from it.
+  add('video-original', `${tripId}/originals/${vid}.mp4`, false, true);
   add('video-compiled', `${tripId}/compiled/${vid}_compiled.mp4`, true, true);
-  add('video-proxy', `${tripId}/proxies/${vid}_preview.mp4`, true, true);
+  add('video-proxy', `${tripId}/proxies/${vid}_preview.mp4`, false, true);
   // known-issues 12g (ruled 2026-11-17): this thumbnail is the upload pipeline's frame of the
   // original (proxyGenerator), which may show footage the edit cut; non-owners get it no longer.
   add('video-thumbnail', `${tripId}/thumbnails/${vid}.jpg`, false, true);
@@ -219,6 +222,34 @@ function seedTrip(ownerId: string, visibility: string): TripFixture {
     compiledPath: `${tripId}/compiled/${privVid}_compiled.mp4`,
   });
   add('private-video-compiled', `${tripId}/compiled/${privVid}_compiled.mp4`, false, true);
+  // Trashed compiled video.
+  const trashedVid = uuidv4();
+  createMedia({
+    tripId, mediaType: 'video', status: 'trashed', visibility: 'public',
+    filePath: `${tripId}/originals/${trashedVid}.mp4`,
+    compiledPath: `${tripId}/compiled/${trashedVid}_compiled.mp4`,
+  });
+  add('trashed-video-original', `${tripId}/originals/${trashedVid}.mp4`, false, true);
+  add('trashed-video-compiled', `${tripId}/compiled/${trashedVid}_compiled.mp4`, false, true);
+  // Public video whose compiled file is missing: the original and the proxy stay closed.
+  const lostVid = uuidv4();
+  createMedia({
+    tripId, mediaType: 'video', status: 'active', visibility: 'public',
+    filePath: `${tripId}/originals/${lostVid}.mp4`,
+    compiledPath: `${tripId}/compiled/${lostVid}_compiled.mp4`, // never written
+    previewProxyPath: `${tripId}/proxies/${lostVid}_preview.mp4`,
+  });
+  add('compiled-missing-video-original', `${tripId}/originals/${lostVid}.mp4`, false, true);
+  add('compiled-missing-video-proxy', `${tripId}/proxies/${lostVid}_preview.mp4`, false, true);
+  // Public compiled video still uploading (AC 18: processing incomplete).
+  const upVid = uuidv4();
+  const upId = createMedia({
+    tripId, mediaType: 'video', status: 'active', visibility: 'public',
+    filePath: `${tripId}/originals/${upVid}.mp4`,
+    compiledPath: `${tripId}/compiled/${upVid}_compiled.mp4`,
+  });
+  getDb().prepare("UPDATE media_items SET processing_status = 'uploading' WHERE id = ?").run(upId);
+  add('uploading-video-compiled', `${tripId}/compiled/${upVid}_compiled.mp4`, false, true);
 
   // Public uncompiled video: not part of the public gallery (需求 9 AC 6).
   const rawVid = uuidv4();
@@ -504,6 +535,60 @@ describe('G-22 /uploads HTTP semantics', () => {
     for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
       const res = await rawRequest(urlOf(pub().rel), { method });
       expectDenied({ status: res.status, body: null, text: res.body }, allContents());
+    }
+  });
+});
+
+describe('需求 9 AC 18 on /uploads: ordinary video files (ruling 2026-11-18)', () => {
+  const file = (label: string) => trips.public.files.find((f) => f.label === label)!;
+  const closed = ['video-original', 'video-proxy', 'video-thumbnail', 'compiled-missing-video-original', 'compiled-missing-video-proxy'];
+  const visitors = ['anonymous', 'non-owner'] as const;
+  const auth = (r: string): Record<string, string> => { const t = tokenOf(r as never); return t ? { Authorization: `Bearer ${t}` } : {}; };
+
+  it('anonymous and non-owner: GET, HEAD and Range on the original, its proxy and an original-derived thumbnail are the 404 JSON', async () => {
+    for (const r of visitors) {
+      for (const label of closed) {
+        const f = file(label);
+        const get = await rawRequest(urlOf(f.rel), { headers: auth(r) });
+        expect({ r, label, status: get.status }).toEqual({ r, label, status: 404 });
+        expectDenied({ status: get.status, body: null, text: get.body }, allContents());
+        const head = await rawRequest(urlOf(f.rel), { method: 'HEAD', headers: auth(r) });
+        expect({ r, label, status: head.status, body: head.body }).toEqual({ r, label, status: 404, body: '' });
+        const part = await rawRequest(urlOf(f.rel), { headers: { ...auth(r), Range: 'bytes=0-5' } });
+        expect({ r, label, status: part.status }).toEqual({ r, label, status: 404 });
+        expectDenied({ status: part.status, body: null, text: part.body }, allContents());
+        expect(part.headers['content-range']).toBeUndefined();
+      }
+    }
+  });
+
+  it('anonymous and non-owner still get the published compiled file: GET 200, HEAD 200, Range 206', async () => {
+    const f = file('video-compiled');
+    for (const r of visitors) {
+      const get = await rawRequest(urlOf(f.rel), { headers: auth(r) });
+      expect(get.status).toBe(200);
+      expect(get.body).toBe(f.content);
+      const head = await rawRequest(urlOf(f.rel), { method: 'HEAD', headers: auth(r) });
+      expect(head.status).toBe(200);
+      expect(head.body).toBe('');
+      const part = await rawRequest(urlOf(f.rel), { headers: { ...auth(r), Range: 'bytes=2-9' } });
+      expect(part.status).toBe(206);
+      expect(part.body).toBe(f.content.slice(2, 10));
+    }
+  });
+
+  it('owner and admin keep the original and the proxy: GET 200, HEAD 200, Range 206', async () => {
+    for (const r of ['owner', 'admin']) {
+      for (const label of ['video-original', 'video-proxy', 'compiled-missing-video-original']) {
+        const f = file(label);
+        const get = await rawRequest(urlOf(f.rel), { headers: auth(r) });
+        expect({ r, label, status: get.status }).toEqual({ r, label, status: 200 });
+        expect(get.body).toBe(f.content);
+        expect((await rawRequest(urlOf(f.rel), { method: 'HEAD', headers: auth(r) })).status).toBe(200);
+        const part = await rawRequest(urlOf(f.rel), { headers: { ...auth(r), Range: 'bytes=0-4' } });
+        expect(part.status).toBe(206);
+        expect(part.body).toBe(f.content.slice(0, 5));
+      }
     }
   });
 });

@@ -13,9 +13,12 @@
  *   only when it has a compiled version (需求 9 AC 6), and the trip's
  *   visibility is one of the two values AC 7 allows (`public` / `unlisted`;
  *   any other value grants nothing, cf. AC 15).
- *   For a video, its `thumbnail_path` file counts only when it is the
- *   compiled-derived thumbnail of the current compiled file (known-issues 12g:
- *   footage cut by the edit must not come back through a thumbnail).
+ *   For an ordinary video, 需求 9 AC 18 applies here as on `/api/media/*`
+ *   (user ruling 2026-11-18): the only exposable files are the compiled file
+ *   itself (processing not `uploading`/`cancelled`) and its compiled-derived
+ *   thumbnail (known-issues 12g). The original upload, the preview proxy made
+ *   from it and any other thumbnail are 404, also when the compiled file is
+ *   missing.
  *
  * Tier slideshow (`<trip>/tier-slideshow/**`) and photo slideshow
  * (`<trip>/slideshow/**`) outputs are never served here, to anyone: they have
@@ -39,6 +42,14 @@ const NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: '文件不存在' 
 /** Directories under `<tripId>/` holding Derived_Artifacts with no media row. */
 const DERIVED_ARTIFACT_DIRS = new Set(['tier-slideshow', 'slideshow']);
 
+/** 需求 9 AC 18: a video still uploading or cancelled exposes nothing to non-owners. */
+const INCOMPLETE_VIDEO_PROCESSING = new Set(['uploading', 'cancelled']);
+
+/** Stored paths may carry a legacy `uploads/` prefix (see findMatchingRows). */
+function samePath(stored: string | null, relPath: string): boolean {
+  return stored != null && stored !== '' && (stored === relPath || stored === `uploads/${relPath}`);
+}
+
 /** Trip visibility values that may grant exposure (需求 9 AC 7). */
 const EXPOSABLE_TRIP_VISIBILITY = new Set(['public', 'unlisted']);
 
@@ -51,6 +62,7 @@ interface MatchedRow {
   media_source: string | null;
   compiled_path: string | null;
   thumbnail_path: string | null;
+  processing_status: string | null;
   trip_row_id: string | null;
   trip_user_id: string | null;
   trip_visibility: string | null;
@@ -105,7 +117,7 @@ function findMatchingRows(relPath: string): MatchedRow[] {
   return getDb()
     .prepare(
       `SELECT m.id, m.trip_id, m.media_type, m.status, m.visibility, m.media_source,
-              m.compiled_path, m.thumbnail_path,
+              m.compiled_path, m.thumbnail_path, m.processing_status,
               t.id AS trip_row_id, t.user_id AS trip_user_id, t.visibility AS trip_visibility
          FROM media_items m
          LEFT JOIN trips t ON t.id = m.trip_id
@@ -122,9 +134,13 @@ function isExposableToNonOwner(row: MatchedRow, relPath: string): boolean {
   if (row.status !== 'active') return false;
   if (row.visibility !== 'public') return false;
   if ((row.media_source ?? 'upload') === 'merged') return false;
-  if (row.media_type === 'video' && !row.compiled_path) return false;
-  if (row.media_type === 'video' && (row.thumbnail_path === relPath || row.thumbnail_path === `uploads/${relPath}`)
-      && !isCurrentCompiledThumbnail(row)) return false;
+  if (row.media_type === 'video') {
+    if (!row.compiled_path) return false;
+    if (row.processing_status != null && INCOMPLETE_VIDEO_PROCESSING.has(row.processing_status)) return false;
+    const isCompiledFile = samePath(row.compiled_path, relPath);
+    const isCompiledThumbnail = samePath(row.thumbnail_path, relPath) && isCurrentCompiledThumbnail(row);
+    if (!isCompiledFile && !isCompiledThumbnail) return false;
+  }
   return row.trip_visibility != null && EXPOSABLE_TRIP_VISIBILITY.has(row.trip_visibility);
 }
 
