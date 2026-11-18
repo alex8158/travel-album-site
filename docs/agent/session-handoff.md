@@ -1,6 +1,6 @@
 # Session Handoff
 
-Last updated: 2026-11-17 (round29). Update this file as work lands.
+Last updated: 2026-11-17 (round30). Update this file as work lands.
 
 ## Code baseline
 
@@ -9,7 +9,8 @@ Last updated: 2026-11-17 (round29). Update this file as work lands.
 - CI acceptance branches (tests only, never moved after the run):
   - `origin/acceptance/g29-20261110` = `687903c` (run 42746181669, all success; history);
   - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`);
-  - `origin/acceptance/dedup-58a08cd-20261115` = `58a08cd692523f7742cf9daa98427f388e9b0895` (run 43725014890, all success; round27).
+  - `origin/acceptance/dedup-58a08cd-20261115` = `58a08cd692523f7742cf9daa98427f388e9b0895` (run 43725014890, all success; round27);
+  - `origin/acceptance/node24-4693af0-20261117` = `b4fdaf9f25b6c47c2846594edbaea7944b8a24a9` (Node 24 acceptance runs: 44078879196 @ `caf8c1a`, 44126066201 @ `b4fdaf9`, both all success; round30).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -36,7 +37,11 @@ Last updated: 2026-11-17 (round29). Update this file as work lands.
 | `ee67690` | round26 handoff | docs only |
 | `656c76e` | round27 handoff | docs only |
 | `e8f4e55` | round28: G-27 S3 part recorded as passed; production read-only check; handoff | docs only |
-| round29 docs commit | G-21/G-24 CI items closed; SegmentAdjuster click finding; Node 24 result; this handoff | docs only |
+| `4693af0` | round29: G-21/G-24 CI items closed; click finding; Node 24 local result; handoff | docs only |
+| `caf8c1a` | acceptance.yml server and client jobs on Node 24 (verification only; deploy.yml and release.yml still 18) | CI run 44078879196 success (Ubuntu 26.04.1 x64, node v24.22.2, 3× 1608/1608, client 289/289) |
+| `adffa3b` | VideoPlayer reserves a 16:9 box (max 60vh, contain) before the file arrives: fixes the regenerate-button layout shift | probe before 0/8 with 300-400 ms video delay, after 24/24 (landscape and portrait); round20 driver 25/25 |
+| `b4fdaf9` | AC 21 headers on the 500 branches of /thumbnail, /original, /raw (2 tests, real router + globalErrorHandler, mutation-checked) | **CI run 44126066201 success on Node 24** (3× 1610/1610, client 289/289) |
+| round30 docs commit | status and this handoff | docs only |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -97,6 +102,7 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round24: S3 timeout diagnosis (`FINDINGS.md`, `ROUND23-CORRECTION.md`, `analysis/`, `bench/`): direct Node/SDK path from this machine ~13-21 KB/s per stream vs 2-8 MB/s through the macOS system proxy that the AWS CLI uses; thumbnail-generation download amplification in round23 (attributed by temp-file time and size).
 - round26: de-dup review and commit `58a08cd` (`REVIEW-DEDUP.md`, `verify/`), option 3 design v2 (`DESIGN-OPTION3.v2.md`), next near-end rerun plan (`NEAR-END-RERUN-PLAN.md`).
 - round27: CI run 43725014890 @ `58a08cd` (`ci/`); near-end re-test on c7i.large us-east-1 (`RESULTS.md`, `results/`, `aws/`): base `3aa8581` 25/25, cand `58a08cd` 25/25 with driver v2; two earlier base attempts were harness faults (residue grep matched itself; coordinate click did not open the SegmentAdjuster), kept; cost ~US$0.045; all resources deleted, real bucket unchanged.
+- round30: `round30-node24-ci-layout-500/RESULTS.md`: Node 24 CI runs (`ci1-caf8c1a/`, `ci2-b4fdaf9/`), layout fix before/after probe (`probe/SUMMARY.txt`), AC 21 500 tests and mutation log, 12g facts and recommendation (§4).
 - round29: `round29-node24-ci-click/RESULTS.md`: G-21/G-24 CI clause mapping (closed); SegmentAdjuster pointer-click probe (`probe/`, cause: layout shift when the owner video arrives); Node 24.22.3 isolated run (`node24/`, `logs/`, `browser-r20-node24/`); migration proposal `node24-migration-proposal.patch` (not applied).
 - round28: `S3-RULING.md` (original AC → 25 items → candidate logs/screenshots; S3 part passed), `PROD-READONLY.md` (production domain, host, SHA, Node and storage all unconfirmed), `NODE-RUNTIME-PLAN.md` (Node 24 check; better-sqlite3 11.10.0 has no Node 24 prebuild). Note: round27 `remote/drivers/*-vs-round23.diff` are round25 leftovers; correct diffs are in round28 `s3-ruling/`.
 - round25: near-end re-test on a t3.medium in us-east-1 (all resources deleted; `RESULTS.md`): 26 MB direct download ~1 s; G-27 25 items 19 pass on both baseline `3aa8581` and the thumbnail de-dup candidate (uncommitted), O6-T2 compile timed out and 5 items did not run; the instance was CPU-credit throttled to 20 %, so the run does not isolate the app. Option 3 design in `DESIGN-OPTION3.md`.
@@ -110,10 +116,12 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
    - round25 near-end (us-east-1) had fast downloads (~1 s for 26 MB) but ran on a CPU-credit-throttled t3 (20 %) with a leftover ffmpeg from the base run at the start of the cand run, so it cannot show whether G-27 passes with sufficient CPU; 19/25 on both versions, O6-T2 failed, O7-T2, O8-T2, O9, O10, O11 never ran;
    - round27 near-end (c7i.large, Node 20.18.1, same driver/media/300 s waits for both): 25/25 on base and cand; the driver flow has no concurrent same-original thumbnail requests, so it does not evaluate de-dup (20 S3 downloads on both);
    - round28: G-27 S3 part recorded as passed after the item-by-item check (no gap; limitation noted: SegmentAdjuster clicks use `element.click()`, which skips hit-testing; the coordinate-click miss on the instance was not root-caused);
-   - round29: cause of that miss located locally: the regenerate button sits under the owner `<video>`, which has no reserved height until its file arrives; when it arrives (~0.3-0.4 s later in the probe, as on the instance in S3 mode) the button moves ~215 px down and a pointer click aimed at the old position hits the video (0/4 with 300-400 ms video delay, 9/9 at local speed). UI layout shift, not access control; S3 ruling unchanged. Minimal fix idea (not implemented, needs approval): reserve a 16:9 box for the player;
+   - round29: cause of that miss located locally: the regenerate button sits under the owner `<video>`, which has no reserved height until its file arrives; when it arrives (~0.3-0.4 s later in the probe, as on the instance in S3 mode) the button moves ~215 px down and a pointer click aimed at the old position hits the video (0/4 with 300-400 ms video delay, 9/9 at local speed). UI layout shift, not access control; S3 ruling unchanged;
+   - round30: fixed in `adffa3b` (16:9 frame); verified with the same pointer-click steps (after: 24/24 incl. portrait, button position unchanged when the video arrives);
    - option 3 (timeouts, cancellation): the six env names and defaults of design v2 are adopted ("0 = off"), **not implemented**. Constraints for the future implementation: shared thumbnail task not cancelled when a waiter disconnects; the two direct download routes cancel on client disconnect; accepted background tasks not cancelled; no bare `Promise.race`; isolate late results of sharp/save if they cannot be aborted; AbortError not retried and post-timeout cleanup + successful re-request must be proven by tests against the locked SDK;
-   - Node 18 vs 20 (locked SDK declares `node >=20`, CI still runs 18) is a separate open question. Node 20 is EOL since 2026-04-30; 20.18.1 stays recorded as the round27 environment.
+   - Node 18 vs 20 (locked SDK declares `node >=20`; deploy.yml and release.yml still run 18, acceptance.yml runs 24 since `caf8c1a`) is a separate open question. Node 20 is EOL since 2026-04-30; 20.18.1 stays recorded as the round27 environment.
    - Node 24 (round28 read-only): pins in 3 workflows, `deploy/setup.sh`, `Dockerfile`; better-sqlite3 11.10.0 has no Node 24 prebuild (source build needed; first prebuild in 12.1.0, a dependency change). Plan and verification steps: `round28-s3-ruling-prod-readonly/NODE-RUNTIME-PLAN.md`. Not upgraded.
-   - Node 24 (round29 isolated, macOS arm64, local storage): v24.22.3 / npm 11.19.1, locked `npm ci`; better-sqlite3 compiled from source (node-gyp ok), bcrypt and sharp used prebuilds; server tsc/build ok, tests 1608/1608 (per file = CI); client tsc/build ok, 289/289; round20 browser driver 25/25. Not proven: Linux x64, S3, Docker, CI, production. Next: CI on an acceptance branch with only `acceptance.yml` changed (needs approval); proposed 5-file diff in `round29-node24-ci-click/node24-migration-proposal.patch`.
+   - Node 24 (round29 isolated, macOS arm64, local storage): v24.22.3 / npm 11.19.1, locked `npm ci`; better-sqlite3 compiled from source (node-gyp ok), bcrypt and sharp used prebuilds; server tsc/build ok, tests 1608/1608 (per file = CI); client tsc/build ok, 289/289; round20 browser driver 25/25. Not proven locally: Linux x64, S3, Docker, CI, production.
+   - Node 24 (round30 CI, Linux): acceptance runs 44078879196 and 44126066201 on Ubuntu 26.04.1 x64, node v24.22.2 / npm 11.19.1, all success; install step 50-78 s vs 5-8 s on Node 18 (consistent with the better-sqlite3 source build). Still not proven: S3 mode on Linux, Docker, production. The rest of `node24-migration-proposal.patch` (deploy.yml, release.yml, setup.sh, Dockerfile) is not applied.
 4. Production (round28 read-only, `PROD-READONLY.md`): domain, host, running SHA, Node version and storage mode all **unconfirmed**. No album domain in the repo or Route 53; no running instance attributable to the album. The stopped `ai-agent-test` (`i-08306352b9f6f54c4`, created 2026-03-31 with `travel-album-key`, user-data = `deploy/setup.sh` at `ec0fed6`, last started 2026-07-14, the day of the real bucket's last write) is the likely original host, not proven. `keycloak` is not treated as the album host (502). `EC2_HOST` was updated 2026-05-15, after the last successful deploy (`f071202`, 2026-04-22). Needs: user confirmation of the host/domain, approval to start or inspect it, a deploy decision (outline in `PROD-READONLY.md`), production test accounts. Do not log into unconfirmed instances.
-5. Decisions needed before code: 12g thumbnail source; G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
+5. Decisions needed before code: 12g thumbnail source (round30 recommendation: non-owner thumbnails from the compiled file; facts in `round30-node24-ci-layout-500/RESULTS.md` §4); G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
