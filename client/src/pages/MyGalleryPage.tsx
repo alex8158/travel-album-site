@@ -2029,12 +2029,15 @@ export default function MyGalleryPage() {
           data-testid="video-player-modal"
           onClick={(e) => { if (e.target === e.currentTarget) setSelectedVideoId(null); }}
           style={{
+            // Taller-than-viewport content must stay scrollable to its top: align-items:center
+            // would push it above the scroll origin, so the inner box centres with auto margins
+            // (which collapse to 0 when the content overflows).
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000,
             overflowY: 'auto', padding: '24px 0',
           }}
         >
-          <div style={{ width: '90%', maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ width: '90%', maxWidth: '900px', margin: 'auto 0' }} onClick={(e) => e.stopPropagation()}>
             <VideoPlayer
               authorized
               videoUrl={`/api/media/${selectedVideoId}/original`}
