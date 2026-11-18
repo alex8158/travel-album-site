@@ -53,13 +53,16 @@ export async function generateThumbnail(
 export async function generateVideoThumbnail(
   videoPath: string,
   tripId: string,
-  mediaId: string
+  mediaId: string,
+  /** Storage key to write instead of `{tripId}/thumbnails/{mediaId}_thumb.webp` (12g compiled-derived key). */
+  outputKey?: string
 ): Promise<string> {
-  const thumbFilename = `${mediaId}_thumb.webp`;
-  const thumbRelativePath = `${tripId}/thumbnails/${thumbFilename}`;
+  const thumbFilename = outputKey ? path.basename(outputKey) : `${mediaId}_thumb.webp`;
+  const thumbRelativePath = outputKey ?? `${tripId}/thumbnails/${thumbFilename}`;
 
   // Extract first frame to a temp JPEG file
-  const tempFramePath = path.join(getTempDir(), `${mediaId}_frame.jpg`);
+  // Temp names follow the output name, so generations for different keys of one media do not collide.
+  const tempFramePath = path.join(getTempDir(), `${path.parse(thumbFilename).name}_frame.jpg`);
   const tempThumbPath = path.join(getTempDir(), thumbFilename);
 
   try {

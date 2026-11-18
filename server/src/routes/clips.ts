@@ -13,6 +13,7 @@ import { mergeSegments } from '../services/mergeEngine';
 import { saveSegments } from '../helpers/videoSegmentStore';
 import { getStorageProvider } from '../storage/factory';
 import { JobProgressReporter } from '../services/jobProgressReporter';
+import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../helpers/compiledThumbnail';
 
 const router = Router();
 
@@ -379,7 +380,7 @@ router.post(
 
       if (result.success) {
         // Update compiled_path on media_items
-        db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?').run(result.mergedPath, mediaId);
+        db.prepare(`UPDATE media_items SET compiled_path = ?, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`).run(result.mergedPath, mediaId);
         reporter.markCompleted(JSON.stringify(result));
       } else {
         reporter.markFailed(result.error ?? '重新编辑失败');

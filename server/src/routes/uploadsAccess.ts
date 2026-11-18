@@ -13,6 +13,9 @@
  *   only when it has a compiled version (需求 9 AC 6), and the trip's
  *   visibility is one of the two values AC 7 allows (`public` / `unlisted`;
  *   any other value grants nothing, cf. AC 15).
+ *   For a video, its `thumbnail_path` file counts only when it is the
+ *   compiled-derived thumbnail of the current compiled file (known-issues 12g:
+ *   footage cut by the edit must not come back through a thumbnail).
  *
  * Tier slideshow (`<trip>/tier-slideshow/**`) and photo slideshow
  * (`<trip>/slideshow/**`) outputs are never served here, to anyone: they have
@@ -29,6 +32,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { getDb } from '../database';
+import { isCurrentCompiledThumbnail } from '../helpers/compiledThumbnail';
 
 const NOT_FOUND_BODY = { error: { code: 'NOT_FOUND', message: '文件不存在' } };
 
@@ -46,6 +50,7 @@ interface MatchedRow {
   visibility: string;
   media_source: string | null;
   compiled_path: string | null;
+  thumbnail_path: string | null;
   trip_row_id: string | null;
   trip_user_id: string | null;
   trip_visibility: string | null;
@@ -100,7 +105,7 @@ function findMatchingRows(relPath: string): MatchedRow[] {
   return getDb()
     .prepare(
       `SELECT m.id, m.trip_id, m.media_type, m.status, m.visibility, m.media_source,
-              m.compiled_path,
+              m.compiled_path, m.thumbnail_path,
               t.id AS trip_row_id, t.user_id AS trip_user_id, t.visibility AS trip_visibility
          FROM media_items m
          LEFT JOIN trips t ON t.id = m.trip_id
@@ -113,11 +118,13 @@ function findMatchingRows(relPath: string): MatchedRow[] {
     .all(...params) as MatchedRow[];
 }
 
-function isExposableToNonOwner(row: MatchedRow): boolean {
+function isExposableToNonOwner(row: MatchedRow, relPath: string): boolean {
   if (row.status !== 'active') return false;
   if (row.visibility !== 'public') return false;
   if ((row.media_source ?? 'upload') === 'merged') return false;
   if (row.media_type === 'video' && !row.compiled_path) return false;
+  if (row.media_type === 'video' && (row.thumbnail_path === relPath || row.thumbnail_path === `uploads/${relPath}`)
+      && !isCurrentCompiledThumbnail(row)) return false;
   return row.trip_visibility != null && EXPOSABLE_TRIP_VISIBILITY.has(row.trip_visibility);
 }
 
@@ -125,7 +132,8 @@ function isExposableToNonOwner(row: MatchedRow): boolean {
 function isAllowed(req: Request, segments: string[]): boolean {
   if (DERIVED_ARTIFACT_DIRS.has(segments[1].toLowerCase())) return false;
 
-  const rows = findMatchingRows(segments.join('/'));
+  const relPath = segments.join('/');
+  const rows = findMatchingRows(relPath);
   if (rows.length === 0) return false;
 
   const urlTripId = segments[0];
@@ -138,7 +146,7 @@ function isAllowed(req: Request, segments: string[]): boolean {
     user != null && (user.role === 'admin' || user.userId === rows[0].trip_user_id);
   if (isOwnerOrAdmin) return true;
 
-  return rows.every(isExposableToNonOwner);
+  return rows.every((row) => isExposableToNonOwner(row, relPath));
 }
 
 /**

@@ -49,6 +49,7 @@ import {
   recordVLMSkippedStage,
 } from './types';
 import type { MediaItemRow } from '../../helpers/mediaItemRow';
+import { CLEAR_COMPILED_THUMBNAIL_SQL } from '../../helpers/compiledThumbnail';
 
 // ---------------------------------------------------------------------------
 // DB row type for collectInputs query
@@ -864,7 +865,7 @@ export async function runTripProcessingPipeline(
     const alreadyProcessedCount = totalVideos - unprocessedVideos.length;
     let compiledCount = alreadyProcessedCount;
 
-    const updateCompiledStmt = db.prepare('UPDATE media_items SET compiled_path = ? WHERE id = ?');
+    const updateCompiledStmt = db.prepare(`UPDATE media_items SET compiled_path = ?, ${CLEAR_COMPILED_THUMBNAIL_SQL} WHERE id = ?`);
     const updateErrorStmt = db.prepare(
       `UPDATE media_items
        SET processing_error = CASE

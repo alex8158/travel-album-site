@@ -5,6 +5,7 @@ import { getDb } from '../database';
 import { generateThumbnail, generateVideoThumbnail } from '../services/thumbnailGenerator';
 import { getStorageProvider } from '../storage/factory';
 import { authMiddleware } from '../middleware/auth';
+import { compiledThumbnailKey, isCurrentCompiledThumbnail } from '../helpers/compiledThumbnail';
 import {
   classifyMediaFileEntry,
   decideMediaFileAccess,
@@ -154,14 +155,26 @@ async function compiledFileAvailable(row: MediaFileAccessRow): Promise<boolean> 
 // ---------------------------------------------------------------------------
 const inflightVideoThumbnails = new Map<string, Promise<string>>();
 
-function generateVideoThumbnailOnce(row: MediaFileAccessRow): Promise<string> {
-  const key = `${row.trip_id}\u0000${row.id}\u0000${row.file_path}`;
+/**
+ * Generate a video thumbnail once per (trip, media, source). Without `compiled`, the
+ * source is the original upload and the result goes to the default thumbnail key (owner
+ * and admin only, AC 5). With `compiled`, the source is the compiled file and the result
+ * goes to the compiled-derived key (12g); the pointer is only recorded while the row still
+ * has that compiled path.
+ */
+function generateVideoThumbnailOnce(row: MediaFileAccessRow, compiled?: { path: string; key: string }): Promise<string> {
+  const source = compiled ? compiled.path : row.file_path;
+  const key = `${row.trip_id}\u0000${row.id}\u0000${source}`;
   const existing = inflightVideoThumbnails.get(key);
   if (existing) return existing;
   const job = (async () => {
-    const originalLocalPath = await getStorageProvider().downloadToTemp(row.file_path);
-    const thumbRelPath = await generateVideoThumbnail(originalLocalPath, row.trip_id, row.id);
-    getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
+    const sourceLocalPath = await getStorageProvider().downloadToTemp(source);
+    const thumbRelPath = await generateVideoThumbnail(sourceLocalPath, row.trip_id, row.id, compiled?.key);
+    if (compiled) {
+      getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ? AND compiled_path = ?').run(thumbRelPath, row.id, compiled.path);
+    } else {
+      getDb().prepare('UPDATE media_items SET thumbnail_path = ? WHERE id = ?').run(thumbRelPath, row.id);
+    }
     return thumbRelPath;
   })();
   inflightVideoThumbnails.set(key, job);
@@ -185,6 +198,34 @@ router.get('/:id/thumbnail', authMiddleware, async (req: Request, res: Response)
 
   const db = getDb();
   const storageProvider = getStorageProvider();
+
+  // 12g: an ordinary video with an available compiled file gets its thumbnail only from
+  // that compiled file, for every requester, so the stored thumbnail is one a non-owner
+  // may see. A stored thumbnail is reused only when the row points at the key derived
+  // from the current compiled_path; anything else is regenerated from the compiled file.
+  // A failure never falls back to the original upload.
+  // Owner/admin (AC 5) fall back to the previous behaviour below when this fails; that
+  // path may write an original-derived pointer, which non-owners never reuse.
+  if (row.media_type === 'video' && row.compiled_path && (decision.compiledOnly || (await compiledFileAvailable(row)))) {
+    const compiled = { path: row.compiled_path, key: compiledThumbnailKey(row.trip_id, row.id, row.compiled_path) };
+    let compiledThumbLocal: string | null = null;
+    try {
+      if (!(isCurrentCompiledThumbnail(row) && (await storageProvider.exists(compiled.key)))) {
+        await generateVideoThumbnailOnce(row, compiled);
+      }
+      if (usePresignedUrls) {
+        return res.redirect(302, await storageProvider.getUrl(compiled.key));
+      }
+      compiledThumbLocal = await storageProvider.downloadToTemp(compiled.key);
+    } catch (err) {
+      console.error(`[MediaServing] Compiled-derived thumbnail failed for ${row.id}:`, err);
+      if (decision.compiledOnly) {
+        return res.status(404).json({ error: { code: 'THUMBNAIL_FAILED', message: '视频缩略图生成失败' } });
+      }
+    }
+    if (compiledThumbLocal) return res.sendFile(compiledThumbLocal, { cacheControl: false });
+  }
+
   let thumbLocalPath: string | null = null;
 
   // If thumbnail already exists in storage, use it
