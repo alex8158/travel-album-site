@@ -1,6 +1,6 @@
 # Session Handoff
 
-Last updated: 2026-11-17 (round30). Update this file as work lands.
+Last updated: 2026-11-18 (round31). Update this file as work lands.
 
 ## Code baseline
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-17 (round30). Update this file as work lands.
   - `origin/acceptance/g29-20261110` = `687903c` (run 42746181669, all success; history);
   - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`);
   - `origin/acceptance/dedup-58a08cd-20261115` = `58a08cd692523f7742cf9daa98427f388e9b0895` (run 43725014890, all success; round27);
-  - `origin/acceptance/node24-4693af0-20261117` = `b4fdaf9f25b6c47c2846594edbaea7944b8a24a9` (Node 24 acceptance runs: 44078879196 @ `caf8c1a`, 44126066201 @ `b4fdaf9`, both all success; round30).
+  - `origin/acceptance/node24-4693af0-20261117` = `7666ba83d540cc9b9a594b6831669f62d7fc0d1b` (Node 24 acceptance runs: 44078879196 @ `caf8c1a`, 44126066201 @ `b4fdaf9` (round30), 44223270585 @ `7666ba8` (round31), all success; fast-forward only).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -41,7 +41,11 @@ Last updated: 2026-11-17 (round30). Update this file as work lands.
 | `caf8c1a` | acceptance.yml server and client jobs on Node 24 (verification only; deploy.yml and release.yml still 18) | CI run 44078879196 success (Ubuntu 26.04.1 x64, node v24.22.2, 3× 1608/1608, client 289/289) |
 | `adffa3b` | VideoPlayer reserves a 16:9 box (max 60vh, contain) before the file arrives: fixes the regenerate-button layout shift | probe before 0/8 with 300-400 ms video delay, after 24/24 (landscape and portrait); round20 driver 25/25 |
 | `b4fdaf9` | AC 21 headers on the 500 branches of /thumbnail, /original, /raw (2 tests, real router + globalErrorHandler, mutation-checked) | **CI run 44126066201 success on Node 24** (3× 1610/1610, client 289/289) |
-| round30 docs commit | status and this handoff | docs only |
+| `f161bc4` | round30 status and handoff | docs only |
+| `8945c56` | 12g: non-owner video thumbnails only from the current compiled file (`/api/media` thumbnail and `/uploads`); every compiled_path writer clears the pointer; real-ffmpeg colour test | reproduced on `f161bc4` (4/5 fail: red), after fix 5/5; mutation (no pointer clear) -> stale |
+| `a30f1b6` | AC 24 error-branch headers: download-compiled 500 ×2, compile/download 404 (it has no 500 branch) | mutation-checked |
+| `7666ba8` | owner video modal scrolls to its top when taller than the screen (narrow-screen finding) | **CI run 44223270585 success on Node 24** (3× 1618/1618, client 289/289) |
+| round31 docs commit | status, known-issues 12g, this handoff | docs only |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -77,7 +81,7 @@ Avoid: `git add .`, force push, rewriting reviewed commits, pushing to `main`/`v
 
 | Item | Done, with evidence | Still missing |
 | --- | --- | --- |
-| G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation); isolated S3 on `3aa8581` passed (round23: direct matrix, cross-origin fetch after 302, playback, revocation) | production check; 12g thumbnail source is pending a decision and is not counted as passed. (CI item closed in round29 on run 43725014890 @ `58a08cd`, per-clause mapping in `round29-node24-ci-click/RESULTS.md` §1) |
+| G-21 | server tests; local-storage browser matrix on `4ddab02` (51/51 no-cache; 50/51 normal-cache plus R2 accepted limitation); isolated S3 on `3aa8581` passed (round23: direct matrix, cross-origin fetch after 302, playback, revocation) | production check; 12g thumbnail source ruled and fixed in round31 (`8945c56`); `/uploads` exposure of originals/proxies is a separate open decision. (CI item closed in round29 on run 43725014890 @ `58a08cd`, per-clause mapping in `round29-node24-ci-click/RESULTS.md` §1) |
 | G-24 | server tests (17/17), local-storage browser (round3); isolated S3 on `3aa8581` passed (round23); CI item closed in round29 (`compiledDownload` 17/17 in run 43725014890 @ `58a08cd`) | production |
 | G-27 | POST routes: server tests 31/31; GET routes: server tests 11/11 (round17; both in CI run 42746181669 @ `687903c`); local browser acceptance of owner editing flows: round19 on `4ac669a` 23/25 with O7-T1/T2 blocked by G-26; round20 on `fc37c4e` (G-26 fixed) 25/25; post-fix CI: run 43151750642 @ `3aa8581` (3× server 1604/1604, client 289/289, typecheck and build; round21); S3: round23 isolated run **not passed** (22/25, then 15/21 + blocked; timeouts waiting for server-side S3 transfers); round25 t3 near-end 19/25 (CPU-credit throttled, inconclusive); round27 near-end on c7i.large: 25/25 on both `3aa8581` and `58a08cd` (isolated bucket, us-east-1); **S3 part passed** (round28 item-by-item check against the original requirements, `round28-s3-ruling-prod-readonly/S3-RULING.md`) | production (G-27 overall still implemented, not accepted) |
 | G-29 | **accepted 2026-11-10**: reproduction (round6), process probe (round7), 18 concurrent bursts (round9), regression + cleanup (round10), full 1604/1604 (round17), CI run 42746181669 @ `687903c` (3× server 1604/1604, client 289/289; round18) | nothing for its scope; items listed as out of scope in the G-29 entry stay open |
@@ -102,6 +106,7 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round24: S3 timeout diagnosis (`FINDINGS.md`, `ROUND23-CORRECTION.md`, `analysis/`, `bench/`): direct Node/SDK path from this machine ~13-21 KB/s per stream vs 2-8 MB/s through the macOS system proxy that the AWS CLI uses; thumbnail-generation download amplification in round23 (attributed by temp-file time and size).
 - round26: de-dup review and commit `58a08cd` (`REVIEW-DEDUP.md`, `verify/`), option 3 design v2 (`DESIGN-OPTION3.v2.md`), next near-end rerun plan (`NEAR-END-RERUN-PLAN.md`).
 - round27: CI run 43725014890 @ `58a08cd` (`ci/`); near-end re-test on c7i.large us-east-1 (`RESULTS.md`, `results/`, `aws/`): base `3aa8581` 25/25, cand `58a08cd` 25/25 with driver v2; two earlier base attempts were harness faults (residue grep matched itself; coordinate click did not open the SegmentAdjuster), kept; cost ~US$0.045; all resources deleted, real bucket unchanged.
+- round31: `round31-12g-g24-500-narrow/RESULTS.md`: 12g write-path inventory, reproduction and fix evidence (§2), G-24 error-branch tests (§3), narrow-screen probe incl. the modal-scroll fix (§4, `probe/`), CI `ci-7666ba8/`.
 - round30: `round30-node24-ci-layout-500/RESULTS.md`: Node 24 CI runs (`ci1-caf8c1a/`, `ci2-b4fdaf9/`), layout fix before/after probe (`probe/SUMMARY.txt`), AC 21 500 tests and mutation log, 12g facts and recommendation (§4).
 - round29: `round29-node24-ci-click/RESULTS.md`: G-21/G-24 CI clause mapping (closed); SegmentAdjuster pointer-click probe (`probe/`, cause: layout shift when the owner video arrives); Node 24.22.3 isolated run (`node24/`, `logs/`, `browser-r20-node24/`); migration proposal `node24-migration-proposal.patch` (not applied).
 - round28: `S3-RULING.md` (original AC → 25 items → candidate logs/screenshots; S3 part passed), `PROD-READONLY.md` (production domain, host, SHA, Node and storage all unconfirmed), `NODE-RUNTIME-PLAN.md` (Node 24 check; better-sqlite3 11.10.0 has no Node 24 prebuild). Note: round27 `remote/drivers/*-vs-round23.diff` are round25 leftovers; correct diffs are in round28 `s3-ruling/`.
@@ -109,7 +114,7 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 
 ## Next steps for a new session
 
-1. G-27: the post-fix CI condition is met by run 43151750642 @ `3aa8581` (and run 43725014890 @ `58a08cd`); the S3 part passed in round28; production remains. G-21/G-24: S3 passed in round23, CI items closed in round29; production still blocks acceptance (and 12g for G-21).
+1. G-27: the post-fix CI condition is met by run 43151750642 @ `3aa8581` (and run 43725014890 @ `58a08cd`); the S3 part passed in round28; production remains. G-21/G-24: S3 passed in round23, CI items closed in round29; production still blocks acceptance (12g fixed in round31).
 2. G-26 was confirmed in the browser (round19 O7: no token, 401) and fixed in `fc37c4e` (approved 2026-11-12; round20 O7 25/25). Its registration was updated and committed in round21 (status: fixed, local browser re-check passed; full acceptance still follows the original conditions).
 3. S3: round23 done (`<evidence>/round23-s3/RESULTS.md`): G-21 and G-24 S3 passed; G-27 owner flows did not pass in S3 mode. What is known now:
    - local evidence supports the de-dup behaviour (`58a08cd`: 5 concurrent requests -> 1 original download instead of 5; failures retried; per process only);
@@ -122,6 +127,6 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
    - Node 18 vs 20 (locked SDK declares `node >=20`; deploy.yml and release.yml still run 18, acceptance.yml runs 24 since `caf8c1a`) is a separate open question. Node 20 is EOL since 2026-04-30; 20.18.1 stays recorded as the round27 environment.
    - Node 24 (round28 read-only): pins in 3 workflows, `deploy/setup.sh`, `Dockerfile`; better-sqlite3 11.10.0 has no Node 24 prebuild (source build needed; first prebuild in 12.1.0, a dependency change). Plan and verification steps: `round28-s3-ruling-prod-readonly/NODE-RUNTIME-PLAN.md`. Not upgraded.
    - Node 24 (round29 isolated, macOS arm64, local storage): v24.22.3 / npm 11.19.1, locked `npm ci`; better-sqlite3 compiled from source (node-gyp ok), bcrypt and sharp used prebuilds; server tsc/build ok, tests 1608/1608 (per file = CI); client tsc/build ok, 289/289; round20 browser driver 25/25. Not proven locally: Linux x64, S3, Docker, CI, production.
-   - Node 24 (round30 CI, Linux): acceptance runs 44078879196 and 44126066201 on Ubuntu 26.04.1 x64, node v24.22.2 / npm 11.19.1, all success; install step 50-78 s vs 5-8 s on Node 18 (consistent with the better-sqlite3 source build). Still not proven: S3 mode on Linux, Docker, production. The rest of `node24-migration-proposal.patch` (deploy.yml, release.yml, setup.sh, Dockerfile) is not applied.
+   - Node 24 (round30 CI, Linux): acceptance runs 44078879196 and 44126066201 on Ubuntu 26.04.1 x64, node v24.22.2 / npm 11.19.1, all success; corrected in round31: install duration is not evidence of how better-sqlite3 was built; the log prints no build output, so the build method on CI is **unconfirmed** (only install + tests succeeding is confirmed). Round31 run 44223270585 @ `7666ba8` also success. Still not proven: S3 mode on Linux, Docker, production. The rest of `node24-migration-proposal.patch` (deploy.yml, release.yml, setup.sh, Dockerfile) is not applied.
 4. Production (round28 read-only, `PROD-READONLY.md`): domain, host, running SHA, Node version and storage mode all **unconfirmed**. No album domain in the repo or Route 53; no running instance attributable to the album. The stopped `ai-agent-test` (`i-08306352b9f6f54c4`, created 2026-03-31 with `travel-album-key`, user-data = `deploy/setup.sh` at `ec0fed6`, last started 2026-07-14, the day of the real bucket's last write) is the likely original host, not proven. `keycloak` is not treated as the album host (502). `EC2_HOST` was updated 2026-05-15, after the last successful deploy (`f071202`, 2026-04-22). Needs: user confirmation of the host/domain, approval to start or inspect it, a deploy decision (outline in `PROD-READONLY.md`), production test accounts. Do not log into unconfirmed instances.
-5. Decisions needed before code: 12g thumbnail source (round30 recommendation: non-owner thumbnails from the compiled file; facts in `round30-node24-ci-layout-500/RESULTS.md` §4); G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).
+5. Decisions needed before code: whether AC 18 also applies to `/uploads` (it still serves a public compiled video's original upload and preview proxy to non-owners who know the path; 12g itself was ruled and fixed in round31); G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b, still open).

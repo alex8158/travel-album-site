@@ -429,6 +429,19 @@ A frame that was cut from the compiled video could appear in the public thumbnai
 
 Whether a thumbnail shown to non-owners must come only from the compiled file that may be made public. AC 18 (需求 9) gates the thumbnail on the compiled file being available, but does not say where the thumbnail comes from.
 
+### 2026-11-18 update: ruled and fixed (the text above is kept as registered)
+
+* **Ruling (user, 2026-11-17):** a thumbnail a non-owner can see for an ordinary video must keep to AC 18's limit on publishable footage; footage the edit removed must not come back through the thumbnail. Owner/admin keep AC 5.
+* **Reproduced** on `f161bc4` with real ffmpeg: non-owners got the red first frame of the original, although the compiled file kept only blue.
+* **Fixed in `8945c56`:**
+  * With an available compiled file, the thumbnail is generated from that file. It is stored under a key derived from `compiled_path` (`helpers/compiledThumbnail.ts`) and reused only while `thumbnail_path` points at that key.
+  * Non-owners never get an original-derived thumbnail, on `/api/media/:id/thumbnail` or on `/uploads`. Failures are 404 with no fallback.
+  * Every `compiled_path` writer clears the pointer, so a re-edit to the same path is not served stale.
+  * No stored file is rewritten.
+* Evidence: `travel-album-acceptance/g21/20261102T023422Z/round31-12g-g24-500-narrow/RESULTS.md` §2.
+* **Pitfall for future code:** any new statement that writes `compiled_path` must include `CLEAR_COMPILED_THUMBNAIL_SQL`. Any new thumbnail writer must not point a non-owner-visible video at an original-derived file.
+* **Still open:** `/uploads` serves a public compiled video's original upload and preview proxy to non-owners who know the path. That is a separate decision (G-21/G-22 difference table), not part of 12g.
+
 ## 13. What Agents Should Update Here
 
 Agents should update this file when they discover:
