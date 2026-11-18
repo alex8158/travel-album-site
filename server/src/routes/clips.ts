@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import fs from 'fs';
 import { getDb } from '../database';
 import { authMiddleware, requireAuth } from '../middleware/auth';
@@ -16,6 +16,12 @@ import { JobProgressReporter } from '../services/jobProgressReporter';
 import { NEW_COMPILED_VERSION_SQL } from '../helpers/compiledThumbnail';
 
 const router = Router();
+
+/** Headers of a video download that must not survive on an error response sent instead of the file. */
+const VIDEO_DOWNLOAD_HEADERS = ['Content-Type', 'Content-Disposition', 'Content-Length', 'Content-Range', 'Accept-Ranges', 'ETag', 'Last-Modified'];
+function clearVideoDownloadHeaders(res: Response): void {
+  for (const h of VIDEO_DOWNLOAD_HEADERS) res.removeHeader(h);
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/media/:mediaId/segments — return segments from DB
@@ -242,7 +248,7 @@ router.get(
   authMiddleware,
   privateNoStore,
   requireAuth,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     const mediaId = req.params.mediaId as string;
     if (!authorizeOwnerFileDownload(req, mediaId)) {
       return res.status(404).json(OWNER_FILE_NOT_FOUND_BODY);
@@ -273,9 +279,23 @@ router.get(
       const filename = `${media.original_filename?.replace(/\.[^.]+$/, '') || mediaId}_compiled.mp4`;
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
       res.setHeader('Content-Type', 'video/mp4');
-      return res.sendFile(localPath);
+      return res.sendFile(localPath, (err?: Error & { code?: string; syscall?: string }) => {
+        if (!err) return;
+        // As express does without a callback: a client abort or a failed socket write is not an error response.
+        if (err.code === 'ECONNABORTED' || err.syscall === 'write') return;
+        if (res.headersSent) {
+          // The video has started: never append JSON to it; end the connection (express/finalhandler do the same).
+          res.destroy(err);
+          return;
+        }
+        // Nothing sent yet: the 500 JSON must not carry the video download headers (G-24, registered 2026-11-18).
+        // Cache-Control and the merged Vary from privateNoStore stay.
+        clearVideoDownloadHeaders(res);
+        next(err);
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      clearVideoDownloadHeaders(res);
       return res.status(500).json({ error: { code: 'DOWNLOAD_ERROR', message } });
     }
   },

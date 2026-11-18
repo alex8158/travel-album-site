@@ -18,6 +18,8 @@ import { getStorageProvider } from '../storage/factory';
 import clipsRouter from './clips';
 import compileRouter from './compile';
 import { globalErrorHandler } from '../middleware/errorHandler';
+import { Readable } from 'stream';
+import type { AddressInfo } from 'net';
 
 // Mounted as in index.ts. A pre-set `Vary: Origin` proves Vary is merged.
 const app = express();
@@ -310,15 +312,74 @@ describe('G-24 compiled-video downloads are owner/admin only', () => {
         for (const t of allowed()) {
           const res = await getErr(`/api/media/${id}/download-compiled`, auth(t), true);
           expect(res.status).toBe(500);
-          // The route set Content-Type video/mp4 before sendFile failed; res.json keeps it (recorded, unchanged).
-          expect(res.headers['content-type']).toMatch(/^video\/mp4/);
-          expect(JSON.parse((res.body as Buffer).toString())).toEqual({ error: { code: 'INTERNAL_SERVER_ERROR', message: '服务器内部错误' } });
+          // G-24 to-fix (round32) fixed in round33: the 500 JSON carries no video download headers.
+          const text = (res.body as Buffer).toString();
+          expect(res.headers['content-type']).toMatch(/^application\/json/);
+          expect(res.headers['content-disposition']).toBeUndefined();
+          expect(res.headers['content-range']).toBeUndefined();
+          expect(res.headers['accept-ranges']).toBeUndefined();
+          expect(res.headers['content-length']).toBe(String(Buffer.byteLength(text)));
+          expect(JSON.parse(text)).toEqual({ error: { code: 'INTERNAL_SERVER_ERROR', message: '服务器内部错误' } });
           expectNoStore(res);
         }
       } finally {
         stat.mockRestore();
       }
-      for (const t of allowed()) expect((await getErr(`/api/media/${id}/download-compiled`, auth(t))).status).toBe(200);
+      for (const t of allowed()) {
+        const ok = await getErr(`/api/media/${id}/download-compiled`, auth(t), true);
+        expect(ok.status).toBe(200);
+        expect(ok.headers['content-type']).toMatch(/^video\/mp4/);
+        expect(ok.headers['content-disposition']).toBe(`attachment; filename="${encodeURIComponent('clip_compiled.mp4')}"`);
+        expect(Buffer.compare(ok.body as Buffer, COMPILED)).toBe(0);
+        expectNoStore(ok);
+      }
+    });
+
+    it('download-compiled: a storage failure before any header is a 500 JSON without video headers', async () => {
+      const id = insert();
+      const download = vi.spyOn(getStorageProvider(), 'downloadToTemp').mockRejectedValueOnce(new Error('forced by test'));
+      const res = await getErr(`/api/media/${id}/download-compiled`, auth(owner.token), true);
+      download.mockRestore();
+      expect(res.status).toBe(500);
+      expect(res.headers['content-type']).toMatch(/^application\/json/);
+      expect(res.headers['content-disposition']).toBeUndefined();
+      expectNoStore(res);
+    });
+
+    it('download-compiled: a stream failure after the video started ends the connection, never appends JSON', async () => {
+      const id = insert();
+      const compiledAbs = path.resolve(uploadsBase, tripId, 'compiled', `${id}.mp4`);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const realCreate = fs.createReadStream;
+      const create = vi.spyOn(fs, 'createReadStream').mockImplementation(((p: fs.PathLike, opts?: unknown) => {
+        if (path.resolve(String(p)) !== compiledAbs) return (realCreate as unknown as (...a: unknown[]) => fs.ReadStream)(p, opts);
+        // First 64 bytes of the real file, then an I/O error.
+        const r = new Readable({ read() {} });
+        r.push(COMPILED.subarray(0, 64));
+        setImmediate(() => r.destroy(Object.assign(new Error('EIO: forced mid-stream'), { code: 'EIO' })));
+        return r as unknown as fs.ReadStream;
+      }) as unknown as typeof fs.createReadStream);
+      const server = http.createServer(errApp);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+      openServers.add(server);
+      const { port } = server.address() as AddressInfo;
+      const got = await new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer; aborted: boolean }>((resolve, reject) => {
+        const rq = http.get({ host: '127.0.0.1', port, path: `/api/media/${id}/download-compiled`, headers: auth(owner.token), agent: false }, (r) => {
+          const chunks: Buffer[] = []; let aborted = false;
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('aborted', () => { aborted = true; });
+          r.on('error', () => { aborted = true; });
+          r.on('close', () => resolve({ status: r.statusCode ?? 0, headers: r.headers, body: Buffer.concat(chunks), aborted }));
+        });
+        rq.on('error', reject);
+      });
+      create.mockRestore();
+      expect(got.status).toBe(200); // headers were already sent as the video
+      expect(got.headers['content-type']).toMatch(/^video\/mp4/);
+      expect(got.aborted).toBe(true);
+      expect(got.body.length).toBeLessThan(COMPILED.length);
+      expect(got.body.toString('latin1')).not.toContain('"error"');
+      expect(Buffer.compare(got.body, COMPILED.subarray(0, got.body.length))).toBe(0);
     });
 
     it('compile/download has no 500 branch: a storage failure is 404 FILE_NOT_FOUND, with the headers, then succeeds again', async () => {
