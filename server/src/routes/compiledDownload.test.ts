@@ -17,6 +17,7 @@ import { signToken } from '../services/authService';
 import { getStorageProvider } from '../storage/factory';
 import clipsRouter from './clips';
 import compileRouter from './compile';
+import { globalErrorHandler } from '../middleware/errorHandler';
 
 // Mounted as in index.ts. A pre-set `Vary: Origin` proves Vary is merged.
 const app = express();
@@ -249,5 +250,90 @@ describe('G-24 compiled-video downloads are owner/admin only', () => {
     const b = await get(`/api/media/${id}/compile/download`, auth(owner.token));
     expect(b.headers['content-disposition']).toBe(`inline; filename="compiled_${id}.mp4"`);
     expect(b.headers['accept-ranges']).toBe('bytes');
+  });
+
+  // -------------------------------------------------------------------------
+  // AC 24: error branches keep private, no-store and the merged Vary.
+  // Failures are forced in real dependencies (the storage provider's
+  // downloadToTemp; the fs.stat that express's res.sendFile uses). Requests go
+  // through the real routers mounted as in index.ts, followed by the app's real
+  // globalErrorHandler. Allowed callers per AC 24: owner and admin.
+  // -------------------------------------------------------------------------
+  describe('AC 24: error responses keep private, no-store and the merged Vary', () => {
+    const errApp = express();
+    errApp.use(express.json());
+    errApp.use((_req, res, next) => { res.vary('Origin'); next(); });
+    errApp.use('/api/media', clipsRouter);
+    errApp.use('/api/media', compileRouter);
+    errApp.use(globalErrorHandler);
+    /** `raw`: keep the body as bytes (the route may have set a non-JSON Content-Type before failing). */
+    async function getErr(url: string, headers: Record<string, string>, raw = false) {
+      const server = http.createServer(errApp);
+      await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
+      openServers.add(server);
+      const r = request(server).get(url);
+      if (raw) r.buffer(true).parse((resp, cb) => { const c: Buffer[] = []; resp.on('data', (d: Buffer) => c.push(d)); resp.on('end', () => cb(null, Buffer.concat(c))); });
+      for (const [k, v] of Object.entries(headers)) r.set(k, v);
+      return r;
+    }
+    const allowed = () => [owner.token, admin.token];
+
+    it('download-compiled: a storage failure returns 500 DOWNLOAD_ERROR with the headers, then succeeds again', async () => {
+      const id = insert();
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const download = vi.spyOn(getStorageProvider(), 'downloadToTemp');
+      for (const t of allowed()) {
+        download.mockRejectedValueOnce(new Error('forced by test'));
+        const res = await getErr(`/api/media/${id}/download-compiled`, auth(t));
+        expect(res.status).toBe(500);
+        expect(res.body).toEqual({ error: { code: 'DOWNLOAD_ERROR', message: 'forced by test' } });
+        expectNoStore(res);
+      }
+      download.mockRestore();
+      for (const t of allowed()) expect((await getErr(`/api/media/${id}/download-compiled`, auth(t))).status).toBe(200);
+    });
+
+    it('download-compiled: a file-serving failure reaches globalErrorHandler as 500 with the headers, then succeeds again', async () => {
+      const id = insert();
+      const compiledAbs = path.resolve(uploadsBase, tripId, 'compiled', `${id}.mp4`);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const realStat = fs.stat;
+      const stat = vi.spyOn(fs, 'stat').mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+        const cb = rest[rest.length - 1] as (err: NodeJS.ErrnoException | null) => void;
+        if (path.resolve(String(p)) === compiledAbs) {
+          process.nextTick(() => cb(Object.assign(new Error('EIO: forced by test'), { code: 'EIO' })));
+          return;
+        }
+        return (realStat as unknown as (...a: unknown[]) => void)(p, ...rest);
+      }) as unknown as typeof fs.stat);
+      try {
+        for (const t of allowed()) {
+          const res = await getErr(`/api/media/${id}/download-compiled`, auth(t), true);
+          expect(res.status).toBe(500);
+          // The route set Content-Type video/mp4 before sendFile failed; res.json keeps it (recorded, unchanged).
+          expect(res.headers['content-type']).toMatch(/^video\/mp4/);
+          expect(JSON.parse((res.body as Buffer).toString())).toEqual({ error: { code: 'INTERNAL_SERVER_ERROR', message: '服务器内部错误' } });
+          expectNoStore(res);
+        }
+      } finally {
+        stat.mockRestore();
+      }
+      for (const t of allowed()) expect((await getErr(`/api/media/${id}/download-compiled`, auth(t))).status).toBe(200);
+    });
+
+    it('compile/download has no 500 branch: a storage failure is 404 FILE_NOT_FOUND, with the headers, then succeeds again', async () => {
+      const id = insert();
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const download = vi.spyOn(getStorageProvider(), 'downloadToTemp');
+      for (const t of allowed()) {
+        download.mockRejectedValueOnce(new Error('forced by test'));
+        const res = await getErr(`/api/media/${id}/compile/download`, auth(t));
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ error: { code: 'FILE_NOT_FOUND', message: '编译文件不存在或无法访问' } });
+        expectNoStore(res);
+      }
+      download.mockRestore();
+      for (const t of allowed()) expect((await getErr(`/api/media/${id}/compile/download`, auth(t))).status).toBe(200);
+    });
   });
 });
