@@ -453,6 +453,17 @@ Whether a thumbnail shown to non-owners must come only from the compiled file th
 * **`/uploads` (the open item above):** user ruling 2026-11-18, AC 18 applies to `/uploads` too. It was fixed in `ef73874`: for ordinary videos a non-owner gets only the compiled file and its current stamped thumbnail.
 * Evidence: `travel-album-acceptance/g21/20261102T023422Z/round32-uploads-ac18-thumb-version/RESULTS.md`.
 
+## 12h. The repository Dockerfile does not build (any Node version)
+
+Registered 2026-11-18 (round33). **Not changed in the repository.**
+
+* `RUN cd server && npm ci --omit=dev` leaves out `typescript`, which is a devDependency. The next step, `RUN cd server && npx tsc`, then downloads the unrelated npm package `tsc@2.0.4` and fails ("This is not the tsc command you are looking for").
+* Reproduced with the unchanged Dockerfile on `node:18-alpine` and with only `FROM node:24-alpine` changed.
+* A tested variant builds and runs on linux/arm64 and linux/amd64 with Node 24.22.3. Its changes: Node 24, `apk add python3 make g++`, full `npm ci`, then `npx tsc && npm prune --omit=dev`.
+  * Diff: `travel-album-acceptance/g21/20261102T023422Z/round33-g24-headers-node24-docker/docker/dockerfile-tested.diff`.
+  * better-sqlite3 11.10.0 was compiled from source in the image (build log: no prebuilt for Node 24 musl, then `gyp info ok`).
+* Do not describe the Docker image as a working deployment path until the fix is approved and applied.
+
 ## 13. What Agents Should Update Here
 
 Agents should update this file when they discover:

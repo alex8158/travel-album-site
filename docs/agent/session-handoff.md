@@ -1,6 +1,6 @@
 # Session Handoff
 
-Last updated: 2026-11-18 (round32). Update this file as work lands.
+Last updated: 2026-11-18 (round33). Update this file as work lands.
 
 ## Code baseline
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-18 (round32). Update this file as work lands.
   - `origin/acceptance/g29-20261110` = `687903c` (run 42746181669, all success; history);
   - `origin/acceptance/final-3aa8581-20261112` = `3aa8581a98d505d521acf65fbef1b1129344d9db` (run 43151750642, all success; contains the G-26 fix `fc37c4e`);
   - `origin/acceptance/dedup-58a08cd-20261115` = `58a08cd692523f7742cf9daa98427f388e9b0895` (run 43725014890, all success; round27);
-  - `origin/acceptance/node24-4693af0-20261117` = `7666ba83d540cc9b9a594b6831669f62d7fc0d1b` (Node 24 acceptance runs: 44078879196 @ `caf8c1a`, 44126066201 @ `b4fdaf9` (round30), 44223270585 @ `7666ba8` (round31), 44240975427 @ `1c49cd8` (round32), all success; fast-forward only; tip `1c49cd85a84b4a8e3dae57b52d8165a864e85375`).
+  - `origin/acceptance/node24-4693af0-20261117` = `7666ba83d540cc9b9a594b6831669f62d7fc0d1b` (Node 24 acceptance runs: 44078879196 @ `caf8c1a`, 44126066201 @ `b4fdaf9` (round30), 44223270585 @ `7666ba8` (round31), 44240975427 @ `1c49cd8` (round32), 44344418995 @ `4393ff4` (round33), all success; fast-forward only; tip `4393ff47c7d7c6e3dc86dc87f73af1330a1b1c11`).
 - Offline backup: `/Users/huang/Documents/kiro/travel-backups/v2-smart-media-6c823dd.bundle`, a git bundle of `origin/v2-smart-media..6c823dd`.
 - Last verified code: the commits below, verified in isolated copies (evidence round16/round17). The docs commit on top is the current HEAD (`git log -1`).
 
@@ -48,7 +48,9 @@ Last updated: 2026-11-18 (round32). Update this file as work lands.
 | `6ccbc37` | round31 status, known-issues 12g, handoff | docs only |
 | `ef73874` | `/uploads` follows AC 18 for ordinary videos (ruling 2026-11-18): non-owners get only the compiled file and its stamped thumbnail; original and preview proxy 404 | browser before: anon/non-owner original+proxy 200/200/206; after 404; compiled 200/200/206; owner/admin unchanged |
 | `1c49cd8` | compiled thumbnails version-stamped in `thumbnail_path` (`_cver_`), set by every compiled_path writer; route re-checks before serving | race test with sync points: before both visitors blue, after green; **CI run 44240975427 success** (3× 1622/1622, client 289/289) |
-| round32 docs commit | status (G-21 ruling, G-22 cross-ref, G-24 to-fix), known-issues, this handoff | docs only |
+| `3c15d46` | round32 status (G-21 ruling, G-22 cross-ref, G-24 to-fix), known-issues, handoff | docs only |
+| `4393ff4` | G-24: download-compiled 500 JSON without video download headers; mid-stream failure ends the connection | reproduced on `3c15d46`; mutation-checked; **CI run 44344418995 success** (3× 1624/1624, client 289/289) |
+| round33 docs commit | status, known-issues 12h (Dockerfile), this handoff | docs only |
 
 ## Working-tree changes that must stay uncommitted
 
@@ -109,6 +111,7 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
 - round24: S3 timeout diagnosis (`FINDINGS.md`, `ROUND23-CORRECTION.md`, `analysis/`, `bench/`): direct Node/SDK path from this machine ~13-21 KB/s per stream vs 2-8 MB/s through the macOS system proxy that the AWS CLI uses; thumbnail-generation download amplification in round23 (attributed by temp-file time and size).
 - round26: de-dup review and commit `58a08cd` (`REVIEW-DEDUP.md`, `verify/`), option 3 design v2 (`DESIGN-OPTION3.v2.md`), next near-end rerun plan (`NEAR-END-RERUN-PLAN.md`).
 - round27: CI run 43725014890 @ `58a08cd` (`ci/`); near-end re-test on c7i.large us-east-1 (`RESULTS.md`, `results/`, `aws/`): base `3aa8581` 25/25, cand `58a08cd` 25/25 with driver v2; two earlier base attempts were harness faults (residue grep matched itself; coordinate click did not open the SegmentAdjuster), kept; cost ~US$0.045; all resources deleted, real bucket unchanged.
+- round33: `round33-g24-headers-node24-docker/RESULTS.md`: G-24 header fix (§2), Node 24 Docker image built and run on linux/arm64 and linux/amd64 with better-sqlite3 compiled from source (§3, `docker/dockerfile-tested.diff`), real S3 not run (§4, `S3-TEST-PLAN.md` for one approval), `ROLLBACK-INPUTS.md` (full f071202→4393ff4 diff facts); CI `ci-4393ff4/` (logs only, artifacts blocked by GitHub egress limit).
 - round32: `round32-uploads-ac18-thumb-version/RESULTS.md`: `/uploads` AC 18 before/after in a real browser (`browser/`), race reproduction and fix with mutation logs (`logs/`), CI `ci-1c49cd8/`; evidence split local / simulated S3 / real S3 (none).
 - round31: `round31-12g-g24-500-narrow/RESULTS.md`: 12g write-path inventory, reproduction and fix evidence (§2), G-24 error-branch tests (§3), narrow-screen probe incl. the modal-scroll fix (§4, `probe/`), CI `ci-7666ba8/`.
 - round30: `round30-node24-ci-layout-500/RESULTS.md`: Node 24 CI runs (`ci1-caf8c1a/`, `ci2-b4fdaf9/`), layout fix before/after probe (`probe/SUMMARY.txt`), AC 21 500 tests and mutation log, 12g facts and recommendation (§4).
@@ -133,8 +136,8 @@ Root: `/Users/huang/Documents/kiro/travel-album-acceptance/g21/20261102T023422Z/
    - Node 24 (round29 isolated, macOS arm64, local storage): v24.22.3 / npm 11.19.1, locked `npm ci`; better-sqlite3 compiled from source (node-gyp ok), bcrypt and sharp used prebuilds; server tsc/build ok, tests 1608/1608 (per file = CI); client tsc/build ok, 289/289; round20 browser driver 25/25. Not proven locally: Linux x64, S3, Docker, CI, production.
    - Node 24 (round30 CI, Linux): acceptance runs 44078879196 and 44126066201 on Ubuntu 26.04.1 x64, node v24.22.2 / npm 11.19.1, all success; corrected in round31: install duration is not evidence of how better-sqlite3 was built; the log prints no build output, so the build method on CI is **unconfirmed** (only install + tests succeeding is confirmed). Round31 run 44223270585 @ `7666ba8` also success. Still not proven: S3 mode on Linux, Docker, production. The rest of `node24-migration-proposal.patch` (deploy.yml, release.yml, setup.sh, Dockerfile) is not applied.
 4. Production (round28 read-only, `PROD-READONLY.md`): domain, host, running SHA, Node version and storage mode all **unconfirmed**. No album domain in the repo or Route 53; no running instance attributable to the album. The stopped `ai-agent-test` (`i-08306352b9f6f54c4`, created 2026-03-31 with `travel-album-key`, user-data = `deploy/setup.sh` at `ec0fed6`, last started 2026-07-14, the day of the real bucket's last write) is the likely original host, not proven. `keycloak` is not treated as the album host (502). `EC2_HOST` was updated 2026-05-15, after the last successful deploy (`f071202`, 2026-04-22). Needs: user confirmation of the host/domain, approval to start or inspect it, a deploy decision (outline in `PROD-READONLY.md`), production test accounts. Do not log into unconfirmed instances.
-5. Decisions still needed before code: G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b). G-24 to-fix: 500 JSON of download-compiled keeps the video download headers (registered round32, status codes to stay). `/uploads` AC 18 was ruled and fixed in round32.
-6. Node 24: CI on Linux x64 passed four times; next, a separate round for Linux + S3 and Docker verification, then decide `deploy.yml`, `release.yml`, `setup.sh`, `Dockerfile` (proposal: `round29-node24-ci-click/node24-migration-proposal.patch`) and when to ship.
+5. Decisions still needed before code: G-23, G-25, G-26, G-28, G-30; the test uploads directory (12b). G-24 to-fix fixed in round33 (`4393ff4`). Still registered: public gallery JSON includes `filePath` (original's relative path; file closed on `/uploads`); multi-process thumbnail behaviour untested; repository Dockerfile does not build (known-issues 12h). `/uploads` AC 18 was ruled and fixed in round32.
+6. Node 24: CI on Linux x64 passed five times; Docker image verified locally (round33, tested Dockerfile not applied); real S3 PENDING (needs approval of `round33-g24-headers-node24-docker/S3-TEST-PLAN.md`); then then decide `deploy.yml`, `release.yml`, `setup.sh`, `Dockerfile` (proposal: `round29-node24-ci-click/node24-migration-proposal.patch`) and when to ship.
 
 ## What the user needs to provide for production (minimum)
 
@@ -144,5 +147,5 @@ Production stays PENDING until these are given (facts so far: `round28-s3-ruling
 2. If it is the stopped `ai-agent-test` (`i-08306352b9f6f54c4`): yes/no to starting it (its public IP changes; on start the app seeds default audio and may auto-migrate storage).
 3. Read-only access route and approval: SSH with `deploy/travel-album-key.pem` or SSM, for the round22 §3.2 command list (SHA, `dist` time, `.storage-type`, `STORAGE_TYPE`/`S3_BUCKET` values only, pm2, nginx, health).
 4. Release plan to confirm: target SHA (currently `1c49cd8` code), path (merge into `main` and fix the failing auto-deploy, or manual `deploy/update.sh` on the host), Node version on the host (18 now; 24 needs `gcc-c++ make` there), maintenance window.
-5. Rollback plan to confirm: backup of the production DB, `server/.env`, `dist/`, `public/` before deploying; restore `dist/` + `public/` and `pm2 restart travel-album`; no schema change in the pending code.
+5. Rollback plan: to be written from the **full** diff between the confirmed deployed SHA and the candidate. Preliminary facts for `f071202 → 4393ff4` (`round33-g24-headers-node24-docker/ROLLBACK-INPUTS.md`): additive, forward-only schema (18 tables, 9 columns, 32 indexes, 7 triggers that can reject old-code writes), so rollback means restoring the pre-deploy DB backup; new startup write `seedDefaultAudioTracks`; + `@anthropic-ai/sdk`; 31 new env names, none removed. Back up DB, `server/.env`, `data/.storage-type`, `dist/`, `public/`, `node_modules` or lockfile.
 6. Production test accounts (owner, other user, admin) and a test album that may be created and removed, for acceptance items P1-P8 (round22 §3.4).
